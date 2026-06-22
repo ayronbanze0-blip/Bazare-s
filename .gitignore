@@ -1,0 +1,13 @@
+node_modules/
+.env
+.env.local
+uploads/temp/*
+!uploads/temp/.gitkeep
+logs/*.log
+dist/
+.DS_Store
+*.log
+npm-debug.log*
+.vscode/
+.idea/
+prisma/migrations/dev.db
