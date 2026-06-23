@@ -8,7 +8,7 @@ let transporter;
 
 const getTransporter = () => {
   if (transporter) return transporter;
-  if (process.env.NODE_ENV === 'test' || !process.env.SMTP_USER) {
+  if (process.env.NODE_ENV === 'test' || !process.env.EMAIL_USER)  {
     // Use Ethereal (fake SMTP) in dev/test
     transporter = nodemailer.createTransport({
       host: 'smtp.ethereal.email',
@@ -22,8 +22,8 @@ const getTransporter = () => {
       port: parseInt(process.env.SMTP_PORT) || 587,
       secure: false,
       auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS
       }
     });
   }
