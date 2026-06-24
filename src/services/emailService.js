@@ -70,16 +70,24 @@ const baseTemplate = (content) => `
 // ─── Email Sender ────────────────────────────────────────────────
 const sendEmail = async ({ to, subject, html }) => {
   try {
-    const info = await getTransporter().sendMail({
-      from: process.env.SMTP_USER || '"Bazares" <bazares03@gmail.com>',
+    const transporter = getTransporter();
+    
+    // Adicionei este log para verificarmos o FROM antes do envio
+    const fromEmail = process.env.SMTP_USER || 'bazares03@gmail.com';
+    logger.info(`[Email] Preparando envio de ${fromEmail} para ${to}`);
+
+    const info = await transporter.sendMail({
+      from: `"Bazares" <${fromEmail}>`,
       to,
       subject,
       html
     });
-    logger.info(`[Email] Sent to ${to} — ${subject} (${info.messageId})`);
+
+    logger.info(`[Email] Sucesso: Enviado para ${to} (ID: ${info.messageId})`);
     return { ok: true, messageId: info.messageId };
   } catch (err) {
-    logger.error(`[Email] Failed to send to ${to}: ${err.message}`);
+    // Logamos o código do erro (se existir)
+    logger.error(`[Email] FALHA com o endereço ${to}. Detalhes: ${err.message}. Código: ${err.code || 'N/A'}`);
     return { ok: false, error: err.message };
   }
 };
