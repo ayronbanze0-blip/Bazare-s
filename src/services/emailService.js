@@ -12,7 +12,7 @@ const getTransporter = () => {
     // Use Ethereal (fake SMTP) in dev/test
     transporter = nodemailer.createTransport({
       host: 'smtp.ethereal.email',
-      port: 587,
+      port: 465,
       auth: { user: 'ethereal_user', pass: 'ethereal_pass' }
     });
     logger.warn('[Email] Using mock SMTP (Ethereal). Set SMTP_USER to use real email.');
@@ -71,7 +71,7 @@ const baseTemplate = (content) => `
 const sendEmail = async ({ to, subject, html }) => {
   try {
     const info = await getTransporter().sendMail({
-      from: process.env.EMAIL_FROM || '"Bazares" <bazares09@gmail.com>',
+      from: process.env.SMTP_USER || '"Bazares" <bazares03@gmail.com>',
       to,
       subject,
       html
@@ -155,7 +155,7 @@ const sendAccountSuspendedEmail = (to, name, reason) =>
       <p>Olá <strong>${name}</strong>, a sua conta no Bazares foi temporariamente suspensa.</p>
       ${reason ? `<div class="warning">Motivo: ${reason}</div>` : ''}
       <p>Para mais informações ou para contestar esta decisão, contacte o suporte:</p>
-      <p>📧 bazares09@gmail.com<br>📞 +258 84 676 1897</p>
+      <p>📧 bazares03@gmail.com<br>📞 +258 84 676 1897</p>
     `)
   });
 
@@ -171,7 +171,7 @@ const sendFeeAlertEmail = (to, sellerName, amount) =>
       Nome: José Jeque<br>
       Número: 84 676 1897<br>
       Método: M-Pesa</p>
-      <p style="font-size:13px;color:#6B7F96">Após o pagamento, envie o comprovativo para bazares09@gmail.com</p>
+      <p style="font-size:13px;color:#6B7F96">Após o pagamento, envie o comprovativo para bazares03@gmail.com</p>
     `)
   });
 
