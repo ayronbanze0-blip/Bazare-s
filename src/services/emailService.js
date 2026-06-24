@@ -72,22 +72,22 @@ const sendEmail = async ({ to, subject, html }) => {
   try {
     const transporter = getTransporter();
     
-    // Adicionei este log para verificarmos o FROM antes do envio
-    const fromEmail = process.env.SMTP_USER || 'bazares03@gmail.com';
-    logger.info(`[Email] Preparando envio de ${fromEmail} para ${to}`);
+    // Adicionei um log de "A tentar enviar..."
+    logger.info(`[Email] A enviar para ${to}...`);
 
     const info = await transporter.sendMail({
-      from: `"Bazares" <${fromEmail}>`,
+      from: `"Bazares" <bazares03@gmail.com>`,
       to,
       subject,
       html
     });
 
-    logger.info(`[Email] Sucesso: Enviado para ${to} (ID: ${info.messageId})`);
+    // Esta linha SÓ é atingida se o Mailtrap responder com sucesso
+    logger.info(`[Email] Sucesso! ID do Mailtrap: ${info.messageId}`);
     return { ok: true, messageId: info.messageId };
+    
   } catch (err) {
-    // Logamos o código do erro (se existir)
-    logger.error(`[Email] FALHA com o endereço ${to}. Detalhes: ${err.message}. Código: ${err.code || 'N/A'}`);
+    logger.error(`[Email] ERRO CRÍTICO: ${err.message}`);
     return { ok: false, error: err.message };
   }
 };
