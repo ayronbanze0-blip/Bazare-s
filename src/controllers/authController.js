@@ -54,6 +54,16 @@ const setRefreshCookie = (res, token) => {
 
 // ─── REGISTER ────────────────────────────────────────────────────
 const register = async (req, res) => {
+  console.log('REGISTER RECEBIDO');
+  console.log(req.body);
+
+  const errors = validationResult(req);
+
+  if (!errors.isEmpty()) {
+    console.log(errors.array());
+    return validationError(res, errors.array());
+  }
+const register = async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return validationError(res, errors.array());
 
