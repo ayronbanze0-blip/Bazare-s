@@ -108,14 +108,20 @@ emailVerifiedAt: new Date(),
     logger.info(`[Auth] New user registered: ${user.email} (${user.role})`);
 
     return created(res, {
-  user: {
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    role: user.role,
-    verified: true
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        verified: true
+      }
+    }, 'Conta criada com sucesso.');
+
+  } catch (err) {
+    logger.error(`[Register] ${err.message}`);
+    return serverError(res, err.message);
   }
-}, 'Conta criada com sucesso.');
+};
 
 // ─── VERIFY EMAIL ────────────────────────────────────────────────
 const verifyEmail = async (req, res) => {
