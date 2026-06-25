@@ -93,7 +93,7 @@ const register = async (req, res) => {
         passwordHash,
         role: role.toUpperCase(),
         inviteId,
-        revendedorId
+        revendedorId,
         verified: true,
 emailVerifiedAt: new Date(),
       }
