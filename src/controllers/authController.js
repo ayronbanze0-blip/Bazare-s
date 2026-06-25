@@ -9,6 +9,9 @@ const { ok, created, badRequest, unauthorized, conflict, serverError, validation
 const { genCode, genToken, expiresAt } = require('../utils/helpers');
 const emailSvc = require('../services/emailService');
 const logger = require('../utils/logger');
+// NOTE: emailSvc e genCode/expiresAt continuam a ser usados em
+// forgotPassword/resetPassword (recuperação de password). A verificação
+// de email no REGISTO foi removida — a conta fica "verified: true" logo.
 
 const prisma = new PrismaClient();
 
@@ -85,7 +88,7 @@ const register = async (req, res) => {
     // Hash password
     const passwordHash = await bcrypt.hash(password, parseInt(process.env.BCRYPT_ROUNDS) || 12);
 
-    // Create user
+    // Create user — já fica verificado, sem fluxo de verificação por email
     const user = await prisma.user.create({
       data: {
         name: name.trim(),
@@ -95,10 +98,9 @@ const register = async (req, res) => {
         inviteId,
         revendedorId,
         verified: true,
-emailVerifiedAt: new Date(),
+        emailVerifiedAt: new Date()
       }
     });
-
 
     // Log registration
     await prisma.auditLog.create({
@@ -108,87 +110,11 @@ emailVerifiedAt: new Date(),
     logger.info(`[Auth] New user registered: ${user.email} (${user.role})`);
 
     return created(res, {
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        verified: true
-      }
-    }, 'Conta criada com sucesso.');
-
+      user: { id: user.id, name: user.name, email: user.email, role: user.role, verified: true }
+    }, 'Conta criada com sucesso. Faça login para continuar.');
   } catch (err) {
     logger.error(`[Register] ${err.message}`);
     return serverError(res, err.message);
-  }
-};
-
-// ─── VERIFY EMAIL ────────────────────────────────────────────────
-const verifyEmail = async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) return validationError(res, errors.array());
-
-  const { email, code } = req.body;
-
-  try {
-    const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
-    if (!user) return badRequest(res, 'Utilizador não encontrado.');
-    if (user.verified) return badRequest(res, 'Email já verificado.');
-
-    const record = await prisma.verificationCode.findFirst({
-      where: { userId: user.id, purpose: 'EMAIL_VERIFY', usedAt: null },
-      orderBy: { createdAt: 'desc' }
-    });
-
-    if (!record || record.code !== code) return badRequest(res, 'Código inválido.');
-    if (new Date() > record.expiresAt) return badRequest(res, 'Código expirado. Solicite um novo.');
-
-    // Mark verified
-    await prisma.$transaction([
-      prisma.user.update({
-        where: { id: user.id },
-        data: { verified: true, emailVerifiedAt: new Date() }
-      }),
-      prisma.verificationCode.update({
-        where: { id: record.id },
-        data: { usedAt: new Date() }
-      })
-    ]);
-
-    // Issue tokens
-    const accessToken = signAccess({ ...user, verified: true });
-    const refreshToken = await createRefreshToken(user.id, req);
-    setRefreshCookie(res, refreshToken);
-
-    logger.info(`[Auth] Email verified: ${user.email}`);
-    return ok(res, { accessToken, user: { id: user.id, name: user.name, email: user.email, role: user.role } }, 'Email verificado com sucesso.');
-  } catch (err) {
-    logger.error(`[VerifyEmail] ${err.message}`);
-    return serverError(res);
-  }
-};
-
-// ─── RESEND VERIFICATION ─────────────────────────────────────────
-const resendVerification = async (req, res) => {
-  const { email } = req.body;
-  if (!email) return badRequest(res, 'Email obrigatório.');
-
-  try {
-    const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
-    if (!user) return ok(res, {}, 'Se o email existir, receberá um código.');
-    if (user.verified) return badRequest(res, 'Email já verificado.');
-
-    // Invalidate old codes
-    await prisma.verificationCode.updateMany({
-      where: { userId: user.id, purpose: 'EMAIL_VERIFY', usedAt: null },
-      data: { usedAt: new Date() }
-    });
-
-
-    return ok(res, {}, 'Novo código enviado para o seu email.');
-  } catch (err) {
-    logger.error(`[ResendVerify] ${err.message}`);
-    return serverError(res);
   }
 };
 
@@ -242,7 +168,6 @@ const login = async (req, res) => {
       await logAttempt(false);
       return unauthorized(res, 'Credenciais incorrectas.');
     }
-
 
     // Issue tokens
     const accessToken = signAccess(user);
@@ -429,7 +354,7 @@ const me = async (req, res) => {
 };
 
 module.exports = {
-  register, verifyEmail, resendVerification,
+  register,
   login, refresh, logout, logoutAll,
   forgotPassword, resetPassword, me
 };
