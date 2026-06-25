@@ -83,4 +83,95 @@ router.get('/:id', async (req, res) => {
   }
 });
 
+// ─── Delete account (irreversible — wipes all user data) ──────────
+router.delete('/me', authenticate, async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) return badRequest(res, 'Utilizador não encontrado.');
+
+    // Block deletion for ADMIN accounts to avoid orphaning the platform.
+    if (user.role === 'ADMIN') {
+      return badRequest(res, 'Contas de administrador não podem ser eliminadas por aqui.');
+    }
+
+    const bazar = await prisma.bazar.findUnique({ where: { sellerId: userId } });
+    const productIds = bazar
+      ? (await prisma.product.findMany({ where: { bazarId: bazar.id }, select: { id: true } })).map(p => p.id)
+      : [];
+    const orderIds = (await prisma.order.findMany({
+      where: { OR: [{ buyerId: userId }, { sellerId: userId }] },
+      select: { id: true }
+    })).map(o => o.id);
+
+    await prisma.$transaction(async (tx) => {
+      // ── Chat & messages (both as sender and as chat participant) ──
+      const chats = await tx.chat.findMany({
+        where: { OR: [{ userAId: userId }, { userBId: userId }] },
+        select: { id: true }
+      });
+      const chatIds = chats.map(c => c.id);
+      if (chatIds.length) await tx.message.deleteMany({ where: { chatId: { in: chatIds } } });
+      await tx.message.deleteMany({ where: { senderId: userId } });
+      if (chatIds.length) await tx.chat.deleteMany({ where: { id: { in: chatIds } } });
+
+      // ── Notifications, favorites, cart, tokens, codes, login attempts ──
+      await tx.notification.deleteMany({ where: { userId } });
+      await tx.favorite.deleteMany({ where: { userId } });
+      await tx.cartItem.deleteMany({ where: { userId } });
+      await tx.refreshToken.deleteMany({ where: { userId } });
+      await tx.verificationCode.deleteMany({ where: { userId } });
+      await tx.loginAttempt.updateMany({ where: { userId }, data: { userId: null } });
+
+      // ── Reports made by or against this user ──
+      await tx.report.deleteMany({ where: { OR: [{ reporterId: userId }, { targetUserId: userId }] } });
+
+      // ── Orders (as buyer or seller) and everything chained to them ──
+      if (orderIds.length) {
+        await tx.review.deleteMany({ where: { orderId: { in: orderIds } } });
+        await tx.transaction.deleteMany({ where: { orderId: { in: orderIds } } });
+        await tx.orderItem.deleteMany({ where: { orderId: { in: orderIds } } });
+        await tx.order.deleteMany({ where: { id: { in: orderIds } } });
+      }
+      // Reviews where this user is the seller being reviewed (not tied to their own orders)
+      await tx.review.deleteMany({ where: { sellerId: userId } });
+
+      // ── Bazar + products (as seller) ──
+      if (productIds.length) {
+        await tx.report.deleteMany({ where: { targetProductId: { in: productIds } } });
+        await tx.review.deleteMany({ where: { productId: { in: productIds } } });
+        await tx.favorite.deleteMany({ where: { productId: { in: productIds } } });
+        await tx.cartItem.deleteMany({ where: { productId: { in: productIds } } });
+        await tx.orderItem.deleteMany({ where: { productId: { in: productIds } } });
+        await tx.productImage.deleteMany({ where: { productId: { in: productIds } } });
+        await tx.product.deleteMany({ where: { id: { in: productIds } } });
+      }
+      if (bazar) {
+        await tx.transaction.deleteMany({ where: { bazarId: bazar.id } });
+        await tx.bazar.delete({ where: { id: bazar.id } });
+      }
+
+      // ── Revendedor relationships ──
+      await tx.revendedorInvite.deleteMany({ where: { createdById: userId } });
+      await tx.user.updateMany({ where: { revendedorId: userId }, data: { revendedorId: null } });
+
+      // ── Finally, the user record itself ──
+      await tx.user.delete({ where: { id: userId } });
+    });
+
+    logger.info(`[Account] Deleted by self: ${user.email} (${user.role})`);
+
+    res.clearCookie('refreshToken', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'
+    });
+
+    return ok(res, {}, 'Conta eliminada com sucesso.');
+  } catch (err) {
+    logger.error(`[Profile.deleteAccount] ${err.message}`);
+    return serverError(res, 'Não foi possível eliminar a conta. Tente novamente.');
+  }
+});
+
 module.exports = router;
