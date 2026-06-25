@@ -99,16 +99,6 @@ emailVerifiedAt: new Date(),
       }
     });
 
-    // Generate verification code
-    const code = genCode();
-    await prisma.verificationCode.create({
-      data: {
-        userId: user.id,
-        code,
-        purpose: 'EMAIL_VERIFY',
-        expiresAt: expiresAt(15)
-      }
-    });
 
     // Send verification email (non-blocking)
     emailSvc.sendVerificationEmail(user.email, user.name, code).catch(e =>
@@ -256,14 +246,6 @@ const login = async (req, res) => {
       return unauthorized(res, 'Credenciais incorrectas.');
     }
 
-    if (!user.verified) {
-      await logAttempt(false);
-      return res.status(403).json({
-        success: false,
-        code: 'EMAIL_NOT_VERIFIED',
-        message: 'Email não verificado. Verifique a sua caixa de entrada.'
-      });
-    }
 
     // Issue tokens
     const accessToken = signAccess(user);
