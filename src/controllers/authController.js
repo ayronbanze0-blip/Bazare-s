@@ -185,7 +185,6 @@ const resendVerification = async (req, res) => {
     });
 
 
-    emailSvc.sendVerificationEmail(user.email, user.name, code).catch(() => {});
     return ok(res, {}, 'Novo código enviado para o seu email.');
   } catch (err) {
     logger.error(`[ResendVerify] ${err.message}`);
