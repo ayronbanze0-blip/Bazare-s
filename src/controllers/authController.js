@@ -100,11 +100,6 @@ emailVerifiedAt: new Date(),
     });
 
 
-    // Send verification email (non-blocking)
-    emailSvc.sendVerificationEmail(user.email, user.name, code).catch(e =>
-      logger.error(`[Register] Email send failed: ${e.message}`)
-    );
-
     // Log registration
     await prisma.auditLog.create({
       data: { userId: user.id, action: 'REGISTER', entity: 'User', ipAddress: req.ip }
