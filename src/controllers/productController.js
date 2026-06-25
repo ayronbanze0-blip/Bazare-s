@@ -251,6 +251,36 @@ const toggle = async (req, res) => {
   }
 };
 
+// ─── SELLER: Mark product as out of stock / available again ─────
+// Stays visible in the store either way; only the "esgotado" badge
+// and purchasability change, controlled via `stock`.
+const toggleStock = async (req, res) => {
+  try {
+    const product = await prisma.product.findUnique({ where: { id: req.params.id } });
+    if (!product) return notFound(res);
+    if (product.sellerId !== req.user.id && req.user.role !== 'ADMIN') return forbidden(res);
+
+    const isOutOfStock = product.stock <= 0;
+    let updated;
+    if (isOutOfStock) {
+      // Coming back into stock — restore a sane quantity if one was provided,
+      // otherwise default to 1 so the product becomes purchasable again.
+      const restoreQty = Math.max(1, parseInt(req.body?.stock) || 1);
+      updated = await prisma.product.update({ where: { id: product.id }, data: { stock: restoreQty } });
+    } else {
+      // Remember the previous quantity isn't needed — going to 0 is enough
+      // to mark it "esgotado" while keeping the listing visible.
+      updated = await prisma.product.update({ where: { id: product.id }, data: { stock: 0 } });
+    }
+
+    return ok(res, { stock: updated.stock, outOfStock: updated.stock <= 0 },
+      updated.stock <= 0 ? 'Produto marcado como esgotado.' : 'Produto marcado como disponível.');
+  } catch (err) {
+    logger.error(`[Products.toggleStock] ${err.message}`);
+    return serverError(res);
+  }
+};
+
 // ─── SELLER: My products ─────────────────────────────────────────
 const myProducts = async (req, res) => {
   try {
@@ -314,4 +344,41 @@ const myFavorites = async (req, res) => {
   }
 };
 
-module.exports = { list, getOne, create, update, deleteImage, toggle, myProducts, toggleFavorite, myFavorites };
+// ─── SELLER: Delete product ──────────────────────────────────────
+const remove = async (req, res) => {
+  try {
+    const product = await prisma.product.findUnique({ where: { id: req.params.id } });
+    if (!product) return notFound(res, 'Produto não encontrado.');
+    if (product.sellerId !== req.user.id && req.user.role !== 'ADMIN') return forbidden(res);
+
+    const orderItemCount = await prisma.orderItem.count({ where: { productId: product.id } });
+    if (orderItemCount > 0) {
+      // Product has order history — keep the row for buyers' order records,
+      // just hide it from listings instead of a hard delete.
+      await prisma.product.update({ where: { id: product.id }, data: { active: false } });
+      return ok(res, { hardDeleted: false }, 'Este produto já tem encomendas associadas, por isso foi apenas ocultado (não eliminado) para preservar o histórico de pedidos.');
+    }
+
+    // Clean up images (Cloudinary) before removing the row
+    const images = await prisma.productImage.findMany({ where: { productId: product.id } });
+    for (const img of images) {
+      if (img.publicId) await uploadSvc.deleteFromCloud(img.publicId).catch(() => {});
+    }
+
+    await prisma.$transaction([
+      prisma.favorite.deleteMany({ where: { productId: product.id } }),
+      prisma.cartItem.deleteMany({ where: { productId: product.id } }),
+      prisma.report.deleteMany({ where: { targetProductId: product.id } }),
+      prisma.productImage.deleteMany({ where: { productId: product.id } }),
+      prisma.product.delete({ where: { id: product.id } })
+    ]);
+
+    logger.info(`[Products] Deleted: ${product.name} by ${req.user.email}`);
+    return ok(res, { hardDeleted: true }, 'Produto eliminado com sucesso.');
+  } catch (err) {
+    logger.error(`[Products.remove] ${err.message}`);
+    return serverError(res);
+  }
+};
+
+module.exports = { list, getOne, create, update, deleteImage, toggle, toggleStock, remove, myProducts, toggleFavorite, myFavorites };
