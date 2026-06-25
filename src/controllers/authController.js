@@ -94,6 +94,8 @@ const register = async (req, res) => {
         role: role.toUpperCase(),
         inviteId,
         revendedorId
+        verified: true,
+emailVerifiedAt: new Date(),
       }
     });
 
