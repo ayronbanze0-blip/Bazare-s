@@ -25,8 +25,6 @@ const resetPasswordValidation = [
 ];
 
 router.post('/register', authLimiter, registerValidation, ctrl.register);
-router.post('/verify-email', authLimiter, ctrl.verifyEmail);
-router.post('/resend-verification', emailLimiter, ctrl.resendVerification);
 router.post('/login', authLimiter, loginValidation, ctrl.login);
 router.post('/refresh', ctrl.refresh);
 router.post('/logout', ctrl.logout);
