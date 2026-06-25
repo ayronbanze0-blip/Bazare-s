@@ -60,7 +60,7 @@ const register = async (req, res) => {
   const errors = validationResult(req);
 
   if (!errors.isEmpty()) {
-    console.log(errors.array());
+    (console.log(errors.array());
     return validationError(res, errors.array());
   }
 const register = async (req, res) => {
