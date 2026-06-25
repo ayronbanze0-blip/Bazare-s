@@ -16,17 +16,23 @@ const productValidation = [
 
 // Public
 router.get('/', optionalAuth, ctrl.list);
-router.get('/:id', optionalAuth, ctrl.getOne);
 
-// Seller
-router.get('/me/list', authenticate, isSeller, ctrl.myProducts);
+// Seller (must come before the generic /:id route below, otherwise
+// Express would match '/mine' as getOne with id='mine')
+router.get('/mine', authenticate, isSeller, ctrl.myProducts);
 router.post('/', authenticate, isSeller, uploadLimiter, upload.array('images', 20), productValidation, ctrl.create);
 router.put('/:id', authenticate, isSeller, uploadLimiter, upload.array('images', 20), ctrl.update);
 router.patch('/:id/toggle', authenticate, isSeller, ctrl.toggle);
+router.patch('/:id/stock', authenticate, isSeller, ctrl.toggleStock);
+router.delete('/:id', authenticate, isSeller, ctrl.remove);
 router.delete('/images/:imageId', authenticate, isSeller, ctrl.deleteImage);
 
-// Buyer
+// Buyer (also before /:id for the same reason as /mine above)
+router.get('/favorites', authenticate, ctrl.myFavorites);
 router.post('/:productId/favorite', authenticate, ctrl.toggleFavorite);
-router.get('/me/favorites', authenticate, ctrl.myFavorites);
+
+// Public — generic single-product lookup, must be registered last so it
+// doesn't shadow the more specific routes above ('/mine', '/favorites', etc.)
+router.get('/:id', optionalAuth, ctrl.getOne);
 
 module.exports = router;
