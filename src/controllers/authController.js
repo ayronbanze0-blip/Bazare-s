@@ -108,13 +108,14 @@ emailVerifiedAt: new Date(),
     logger.info(`[Auth] New user registered: ${user.email} (${user.role})`);
 
     return created(res, {
-      user: { id: user.id, name: user.name, email: user.email, role: user.role, verified: false }
-    }, 'Conta criada. Verifique o seu email.');
-  } catch (err) {
-    logger.error(`[Register] ${err.message}`);
-    return serverError(res, err.message);
+  user: {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    verified: true
   }
-};
+}, 'Conta criada com sucesso.');
 
 // ─── VERIFY EMAIL ────────────────────────────────────────────────
 const verifyEmail = async (req, res) => {
@@ -177,10 +178,6 @@ const resendVerification = async (req, res) => {
       data: { usedAt: new Date() }
     });
 
-    const code = genCode();
-    await prisma.verificationCode.create({
-      data: { userId: user.id, code, purpose: 'EMAIL_VERIFY', expiresAt: expiresAt(15) }
-    });
 
     emailSvc.sendVerificationEmail(user.email, user.name, code).catch(() => {});
     return ok(res, {}, 'Novo código enviado para o seu email.');
