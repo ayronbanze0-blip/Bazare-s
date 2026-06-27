@@ -1,14 +1,13 @@
 'use strict';
 
-
+const { PrismaClient } = require('@prisma/client');
 const { ok, created, badRequest, forbidden, notFound, serverError } = require('../utils/response');
 const { sanitize } = require('../utils/helpers');
 const notifSvc = require('../services/notificationService');
 const logger = require('../utils/logger');
 
-const prisma = require('../config/database');
+const prisma = new PrismaClient();
 
-// ─── Get or create chat between two users ────────────────────────
 const getOrCreateChat = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -17,7 +16,6 @@ const getOrCreateChat = async (req, res) => {
     const otherUser = await prisma.user.findUnique({ where: { id: userId } });
     if (!otherUser) return notFound(res, 'Utilizador não encontrado.');
 
-    // Normalize order to avoid duplicate chats (a,b) vs (b,a)
     const [userAId, userBId] = [req.user.id, userId].sort();
 
     let chat = await prisma.chat.findUnique({
@@ -45,7 +43,6 @@ const getOrCreateChat = async (req, res) => {
   }
 };
 
-// ─── List my chats ────────────────────────────────────────────────
 const myChats = async (req, res) => {
   try {
     const chats = await prisma.chat.findMany({
@@ -63,16 +60,16 @@ const myChats = async (req, res) => {
       }
     });
 
-    const formatted = chats.map(c => {
-      const other = c.userAId === req.user.id ? c.userB : c.userA;
-      return {
-        id: c.id,
-        other,
-        lastMessage: c.messages[0] || null,
-        unreadCount: c._count.messages,
-        updatedAt: c.updatedAt
-      };
-    });
+    const formatted = chats.map(c => ({
+      id: c.id,
+      userAId: c.userAId,
+      userBId: c.userBId,
+      userA: c.userA,
+      userB: c.userB,
+      lastMessage: c.messages[0] || null,
+      unreadCount: c._count.messages,
+      updatedAt: c.updatedAt
+    }));
 
     return ok(res, { chats: formatted });
   } catch (err) {
@@ -81,7 +78,6 @@ const myChats = async (req, res) => {
   }
 };
 
-// ─── Get messages in a chat ───────────────────────────────────────
 const getMessages = async (req, res) => {
   try {
     const { chatId } = req.params;
@@ -101,7 +97,6 @@ const getMessages = async (req, res) => {
       include: { sender: { select: { id: true, name: true, avatarUrl: true } } }
     });
 
-    // Mark messages as read
     await prisma.message.updateMany({
       where: { chatId, senderId: { not: req.user.id }, read: false },
       data: { read: true, readAt: new Date() }
@@ -114,22 +109,18 @@ const getMessages = async (req, res) => {
   }
 };
 
-// ─── Send message (REST fallback; Socket.IO is primary path) ────
 const sendMessage = async (req, res) => {
   try {
     const { chatId } = req.params;
-    // Aceita 'text', 'message', 'content' ou 'body' — compatível com vários frontends
-    const text = req.body?.text || req.body?.message || req.body?.content || req.body?.body;
-    if (!text || !String(text).trim()) return badRequest(res, 'Mensagem vazia.');
+    const { text } = req.body;
+    if (!text || !text.trim()) return badRequest(res, 'Mensagem vazia.');
 
     const chat = await prisma.chat.findUnique({ where: { id: chatId } });
     if (!chat) return notFound(res, 'Conversa não encontrada.');
     if (chat.userAId !== req.user.id && chat.userBId !== req.user.id) return forbidden(res);
 
-    const cleanText = sanitize(String(text).trim());
-    if (!cleanText) return badRequest(res, 'Mensagem inválida após sanitização.');
     const message = await prisma.message.create({
-      data: { chatId, senderId: req.user.id, text: cleanText },
+      data: { chatId, senderId: req.user.id, text: sanitize(text) },
       include: { sender: { select: { id: true, name: true, avatarUrl: true } } }
     });
 
@@ -138,7 +129,6 @@ const sendMessage = async (req, res) => {
     const recipientId = chat.userAId === req.user.id ? chat.userBId : chat.userAId;
     notifSvc.newMessage(recipientId, req.user.name, text);
 
-    // Emit via Socket.IO if available (attached to app)
     const io = req.app.get('io');
     if (io) {
       io.to(`chat:${chatId}`).emit('message:new', message);
@@ -152,7 +142,6 @@ const sendMessage = async (req, res) => {
   }
 };
 
-// ─── Get total unread count ───────────────────────────────────────
 const unreadCount = async (req, res) => {
   try {
     const count = await prisma.message.count({
