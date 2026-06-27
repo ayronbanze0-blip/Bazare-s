@@ -8,11 +8,9 @@ const notifSvc = require('../services/notificationService');
 
 const prisma = new PrismaClient();
 
-// Track online users in-memory: userId -> Set of socket ids
 const onlineUsers = new Map();
 
 const setupSocket = (io) => {
-  // ─── Auth middleware for sockets ───────────────────────────────
   io.use((socket, next) => {
     try {
       const token = socket.handshake.auth?.token || socket.handshake.query?.token;
@@ -29,15 +27,12 @@ const setupSocket = (io) => {
     const userId = socket.user.id;
     logger.info(`[Socket] Connected: ${socket.user.name} (${userId})`);
 
-    // Join personal room for direct notifications
     socket.join(`user:${userId}`);
 
-    // Track online status
     if (!onlineUsers.has(userId)) onlineUsers.set(userId, new Set());
     onlineUsers.get(userId).add(socket.id);
     io.emit('presence:online', { userId });
 
-    // ─── Join a specific chat room ─────────────────────────────
     socket.on('chat:join', async ({ chatId }) => {
       try {
         const chat = await prisma.chat.findUnique({ where: { id: chatId } });
@@ -55,7 +50,6 @@ const setupSocket = (io) => {
       socket.leave(`chat:${chatId}`);
     });
 
-    // ─── Send message ────────────────────────────────────────────
     socket.on('message:send', async ({ chatId, text }) => {
       try {
         if (!text || !text.trim()) return;
@@ -71,10 +65,8 @@ const setupSocket = (io) => {
 
         await prisma.chat.update({ where: { id: chatId }, data: { updatedAt: new Date() } });
 
-        // Emit to everyone in the chat room (including sender for confirmation)
         io.to(`chat:${chatId}`).emit('message:new', message);
 
-        // Notify recipient if not in the room
         const recipientId = chat.userAId === userId ? chat.userBId : chat.userAId;
         io.to(`user:${recipientId}`).emit('chat:unread', { chatId, message });
 
@@ -85,7 +77,6 @@ const setupSocket = (io) => {
       }
     });
 
-    // ─── Typing indicator ───────────────────────────────────────
     socket.on('typing:start', ({ chatId }) => {
       socket.to(`chat:${chatId}`).emit('typing:start', { userId, chatId });
     });
@@ -93,7 +84,6 @@ const setupSocket = (io) => {
       socket.to(`chat:${chatId}`).emit('typing:stop', { userId, chatId });
     });
 
-    // ─── Mark messages as read ────────────────────────────────────
     socket.on('messages:read', async ({ chatId }) => {
       try {
         await prisma.message.updateMany({
@@ -106,13 +96,11 @@ const setupSocket = (io) => {
       }
     });
 
-    // ─── Check presence ────────────────────────────────────────────
     socket.on('presence:check', ({ userId: targetId }, callback) => {
       const isOnline = onlineUsers.has(targetId) && onlineUsers.get(targetId).size > 0;
       if (typeof callback === 'function') callback({ online: isOnline });
     });
 
-    // ─── Disconnect ─────────────────────────────────────────────
     socket.on('disconnect', () => {
       logger.info(`[Socket] Disconnected: ${socket.user.name} (${userId})`);
       const sockets = onlineUsers.get(userId);
