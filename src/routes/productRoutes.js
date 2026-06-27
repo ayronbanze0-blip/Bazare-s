@@ -14,11 +14,11 @@ const productValidation = [
   body('category').notEmpty().withMessage('Categoria obrigatória.')
 ];
 
-// Public
+// ─── Public ───────────────────────────────────────────────────────
 router.get('/', optionalAuth, ctrl.list);
+router.get('/featured', ctrl.featured);
 
-// Seller (must come before the generic /:id route below, otherwise
-// Express would match '/mine' as getOne with id='mine')
+// ─── Seller (antes de /:id para não ser capturado) ───────────────
 router.get('/mine', authenticate, isSeller, ctrl.myProducts);
 router.post('/', authenticate, isSeller, uploadLimiter, upload.array('images', 20), productValidation, ctrl.create);
 router.put('/:id', authenticate, isSeller, uploadLimiter, upload.array('images', 20), ctrl.update);
@@ -28,12 +28,13 @@ router.patch('/:id/images/reorder', authenticate, isSeller, ctrl.reorderImages);
 router.delete('/:id', authenticate, isSeller, ctrl.remove);
 router.delete('/images/:imageId', authenticate, isSeller, ctrl.deleteImage);
 
-// Buyer (also before /:id for the same reason as /mine above)
+// ─── Buyer (antes de /:id pelo mesmo motivo) ─────────────────────
 router.get('/favorites', authenticate, ctrl.myFavorites);
 router.post('/:productId/favorite', authenticate, ctrl.toggleFavorite);
 
-// Public — generic single-product lookup, must be registered last so it
-// doesn't shadow the more specific routes above ('/mine', '/favorites', etc.)
+// ─── Public — lookup genérico (deve ser o último) ────────────────
 router.get('/:id', optionalAuth, ctrl.getOne);
+router.get('/:id/related', ctrl.related);
+router.post('/:id/viewed', ctrl.trackView);   // fire-and-forget, sem auth
 
 module.exports = router;
