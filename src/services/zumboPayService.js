@@ -58,24 +58,18 @@ const detectMethod = (msisdnRaw) => {
 };
 
 const walletIdForMethod = (method) => {
+  // NOTA: a documentação técnica da ZumboPay mostra exemplos de wallet_id
+  // em formato UUID, mas o próprio painel ZumboPay → Carteiras exibe o
+  // identificador da carteira como o código de 6 dígitos (ex: "Wallet
+  // ID: 397476"). Confirmado por captura de ecrã do painel — é esse
+  // valor que deve ser enviado em wallet_id, não um UUID. Por isso,
+  // enviamos o valor configurado tal como está, sem validar formato.
   const raw = method === 'MPESA'
     ? process.env.ZUMBOPAY_WALLET_MPESA
     : method === 'EMOLA'
       ? process.env.ZUMBOPAY_WALLET_EMOLA
       : null;
-  if (!raw) return null;
-
-  // Protecção: o painel ZumboPay às vezes refere-se ao "wallet_code"
-  // (6 dígitos, só visual) como "wallet_id" na sua própria UI — mas a
-  // API exige mesmo o UUID. Se o valor configurado não tiver formato de
-  // UUID, ignoramo-lo (o campo é opcional desde 2026-06-22 e a ZumboPay
-  // resolve a carteira automaticamente pelo canal/msisdn).
-  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw.trim());
-  if (!isUuid) {
-    logger.warn(`[ZumboPay] ZUMBOPAY_WALLET_${method} não parece ser um UUID válido ("${raw}") — a omitir wallet_id e deixar a ZumboPay resolver automaticamente.`);
-    return null;
-  }
-  return raw.trim();
+  return raw ? raw.trim() : null;
 };
 
 const apiFetch = async (path, { method = 'GET', body = null, idempotencyKey = null } = {}) => {
@@ -127,7 +121,7 @@ const initiateCharge = async ({ amount, msisdn, customerName, sourceId }) => {
     customer_name: customerName || undefined,
     source_id: sourceId
   };
-  if (walletId) body.wallet_id = walletId; // opcional desde 2026-06-22, mas enviado quando disponível
+  if (walletId) body.wallet_id = walletId;
 
   const { httpStatus, data } = await apiFetch('/charges', {
     method: 'POST',
@@ -164,6 +158,8 @@ const initiateCharge = async ({ amount, msisdn, customerName, sourceId }) => {
   // 400/401/403/404/429/5xx — erro de pedido/infra
   const message = data?.error?.message || `Erro inesperado da ZumboPay (HTTP ${httpStatus}).`;
   logger.error(`[ZumboPay] charge failed: HTTP ${httpStatus} — ${message}`);
+  logger.error(`[ZumboPay] resposta completa: ${JSON.stringify(data)}`);
+  logger.error(`[ZumboPay] payload enviado: ${JSON.stringify({ ...body, msisdn: '***' })}`);
   throw new Error(message);
 };
 
