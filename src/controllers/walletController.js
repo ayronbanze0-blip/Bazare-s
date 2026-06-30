@@ -10,6 +10,16 @@ const zumboPay = require('../services/zumboPayService');
 
 const prisma = require('../config/database');
 
+// Lançado quando, dentro da transacção, o `pendingFees` do bazar já não
+// corresponde ao valor esperado — sinal de que outro pedido de pagamento
+// (em paralelo / duplo clique) já reclamou esta contribuição primeiro.
+class CommissionClaimError extends Error {
+  constructor(message = 'Esta contribuição já foi paga ou está a ser processada.') {
+    super(message);
+    this.name = 'CommissionClaimError';
+  }
+}
+
 // ─── ME: My wallet balance + recent statement ─────────────────────
 const myWallet = async (req, res) => {
   try {
@@ -204,6 +214,17 @@ const payCommission = async (req, res) => {
     // ── Caminho 1: pagar com saldo interno da wallet (instantâneo) ──
     if (method === 'WALLET') {
       await prisma.$transaction(async (tx) => {
+        // Reclama a contribuição pendente de forma atómica: só prossegue
+        // se `pendingFees` ainda corresponder ao valor lido acima. Se um
+        // pedido concorrente (ex: duplo clique) já a tiver reclamado
+        // primeiro, isto falha e nada é debitado/creditado — evita pagar
+        // a mesma comissão duas vezes.
+        const claim = await tx.bazar.updateMany({
+          where: { id: bazar.id, pendingFees: amount },
+          data: { paidFees: { increment: amount }, pendingFees: 0 }
+        });
+        if (claim.count === 0) throw new CommissionClaimError();
+
         await walletService.debit(tx, {
           userId: req.user.id,
           amount,
@@ -219,10 +240,6 @@ const payCommission = async (req, res) => {
           description: `Contribuição recebida de ${req.user.name} (${bazar.name})`,
           referenceType: 'COMMISSION',
           referenceId: bazar.id
-        });
-        await tx.bazar.update({
-          where: { id: bazar.id },
-          data: { paidFees: { increment: amount }, pendingFees: 0 }
         });
         await tx.commissionPayment.create({
           data: {
@@ -246,6 +263,17 @@ const payCommission = async (req, res) => {
       return badRequest(res, 'Pagamento automático via M-Pesa/e-Mola ainda não está disponível. Tente pagar com saldo da wallet, ou contacte o suporte.');
     }
     if (!msisdn) return badRequest(res, 'Indique o número de telefone para o STK push.');
+
+    // Evita disparar dois STK push em paralelo para a mesma contribuição
+    // (ex: duplo clique, ou retry antes do primeiro pedido responder) —
+    // sem isto, ambos os pagamentos poderiam ser confirmados pelo
+    // webhook e a comissão seria creditada duas vezes ao admin.
+    const inFlight = await prisma.commissionPayment.findFirst({
+      where: { bazarId: bazar.id, method: 'ZUMBOPAY', status: 'PROCESSANDO' }
+    });
+    if (inFlight) {
+      return badRequest(res, 'Já existe um pagamento em processamento para esta contribuição. Aguarde a confirmação ou verifique o estado do pagamento anterior.');
+    }
 
     const sourceId = `commission-${bazar.id}-${Date.now()}`;
     const pending = await prisma.commissionPayment.create({
@@ -283,6 +311,8 @@ const payCommission = async (req, res) => {
       throw gatewayErr;
     }
   } catch (err) {
+    if (err instanceof CommissionClaimError) return badRequest(res, err.message);
+    if (err instanceof walletService.InsufficientFundsError) return badRequest(res, err.message);
     logger.error(`[Wallet.payCommission] ${err.message}`);
     return serverError(res, err.message || 'Erro ao processar pagamento.');
   }
