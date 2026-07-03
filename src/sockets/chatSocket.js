@@ -1,12 +1,12 @@
 'use strict';
 
 const jwt = require('jsonwebtoken');
-const { PrismaClient } = require('@prisma/client');
 const logger = require('../utils/logger');
 const { sanitize } = require('../utils/helpers');
 const notifSvc = require('../services/notificationService');
 
-const prisma = new PrismaClient();
+// Singleton partilhado — ver nota em controllers/chatController.js
+const prisma = require('../config/database');
 
 const onlineUsers = new Map();
 
