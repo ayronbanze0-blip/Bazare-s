@@ -9,6 +9,13 @@ const zumboPay = require('../services/zumboPayService');
 
 const prisma = require('../config/database');
 
+// Depois deste tempo sem confirmação (nem sucesso nem falha reportados pela
+// ZumboPay), um pagamento STK "PROCESSANDO" é considerado abandonado — o
+// utilizador não completou o PIN, fechou a app, ou o webhook nunca chegou.
+// Sem isto, o "inFlight guard" ficaria a bloquear novas tentativas para
+// sempre. Configurável via env, default 6 minutos.
+const STK_INFLIGHT_EXPIRY_MS = (parseInt(process.env.STK_INFLIGHT_EXPIRY_MIN) || 6) * 60 * 1000;
+
 // Lançado quando, dentro da transacção, o `pendingFees` do bazar já não
 // corresponde ao valor esperado — sinal de que outro pedido de pagamento
 // (em paralelo / duplo clique) já reclamou esta contribuição primeiro.
@@ -109,7 +116,22 @@ const payCommission = async (req, res) => {
       where: { bazarId: bazar.id, method: 'ZUMBOPAY', status: 'PROCESSANDO' }
     });
     if (inFlight) {
-      return badRequest(res, 'Já existe um pagamento em processamento para esta contribuição. Aguarde a confirmação ou verifique o estado do pagamento anterior.');
+      const ageMs = Date.now() - new Date(inFlight.createdAt).getTime();
+      if (ageMs < STK_INFLIGHT_EXPIRY_MS) {
+        return badRequest(
+          res,
+          'Já existe um pagamento em processamento para esta contribuição. Aguarde a confirmação, verifique o estado do pagamento anterior, ou cancele-o para tentar de novo.',
+          { pendingPaymentId: inFlight.id }
+        );
+      }
+      // O pedido anterior ultrapassou o tempo limite sem confirmação —
+      // trata-se como abandonado e liberta o guard para uma nova tentativa,
+      // em vez de deixar o utilizador bloqueado indefinidamente.
+      await prisma.commissionPayment.update({
+        where: { id: inFlight.id },
+        data: { status: 'FALHADA', failReason: 'Expirado — sem confirmação do operador dentro do tempo limite.' }
+      });
+      logger.warn(`[Wallet.payCommission] STK push ${inFlight.id} expirado automaticamente (${Math.round(ageMs / 60000)} min sem resposta).`);
     }
 
     const sourceId = `commission-${bazar.id}-${Date.now()}`;
@@ -170,6 +192,29 @@ const commissionStatus = async (req, res) => {
     return ok(res, { payment });
   } catch (err) {
     logger.error(`[Wallet.commissionStatus] ${err.message}`);
+    return serverError(res);
+  }
+};
+
+// ─── SELLER: Cancel a stuck/in-flight STK push manually ───────────
+// Permite ao vendedor destravar o "inFlight guard" sem esperar o
+// timeout automático — útil quando ele sabe que já desistiu do PIN
+// (fechou o popup, número errado, etc) e quer tentar de novo já.
+const cancelCommissionPayment = async (req, res) => {
+  try {
+    const payment = await prisma.commissionPayment.findUnique({ where: { id: req.params.id } });
+    if (!payment) return notFound(res);
+    if (payment.sellerId !== req.user.id && req.user.role !== 'ADMIN') return forbidden(res);
+    if (payment.status !== 'PROCESSANDO') {
+      return badRequest(res, 'Este pagamento já não está em processamento.');
+    }
+    const updated = await prisma.commissionPayment.update({
+      where: { id: payment.id },
+      data: { status: 'FALHADA', failReason: 'Cancelado manualmente pelo utilizador.' }
+    });
+    return ok(res, { payment: updated }, 'Pagamento cancelado. Já pode tentar novamente.');
+  } catch (err) {
+    logger.error(`[Wallet.cancelCommissionPayment] ${err.message}`);
     return serverError(res);
   }
 };
@@ -297,7 +342,7 @@ const zumboPayWebhook = async (req, res) => {
 };
 
 module.exports = {
-  myWallet, payCommission, commissionStatus,
+  myWallet, payCommission, commissionStatus, cancelCommissionPayment,
   adminListCommissionPayments, adminValidateGateway,
   zumboPayWebhook
 };
