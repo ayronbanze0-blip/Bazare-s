@@ -6,12 +6,12 @@
 // This route just re-invokes that same controller with the orderId from the body.
 
 const router = require('express').Router();
-const { PrismaClient } = require('@prisma/client');
 const { authenticate } = require('../middleware/auth');
 const { ok, badRequest, forbidden, notFound, serverError, validationError } = require('../utils/response');
 const logger = require('../utils/logger');
 
-const prisma = new PrismaClient();
+// Singleton partilhado — ver nota em controllers/chatController.js
+const prisma = require('../config/database');
 
 router.post('/', authenticate, async (req, res) => {
   try {
