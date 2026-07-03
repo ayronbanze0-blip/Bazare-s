@@ -139,13 +139,19 @@ const payCommission = async (req, res) => {
         return badRequest(res, chargeResult.failReason || 'Pagamento recusado pelo operador.');
       }
 
-      return ok(res, { reference: chargeResult.reference }, 'Pedido de pagamento enviado para o seu telemóvel. Introduza o seu PIN para confirmar.');
+      return ok(res, { reference: chargeResult.reference, id: pending.id }, 'Pedido de pagamento enviado para o seu telemóvel. Introduza o seu PIN para confirmar.');
     } catch (gatewayErr) {
       await prisma.commissionPayment.update({
         where: { id: pending.id },
         data: { status: 'FALHADA', failReason: gatewayErr.message }
       });
-      throw gatewayErr;
+      // Timeout/indisponibilidade da operadora é uma condição esperada,
+      // não um bug do servidor — devolvemos 400 com a mensagem amigável
+      // já preparada em zumboPayService, e a marcação como FALHADA acima
+      // liberta logo o "inFlight guard" para o utilizador poder tentar
+      // de novo, em vez de ficar bloqueado à espera de um pedido que já
+      // sabemos que não vai completar.
+      return badRequest(res, gatewayErr.message || 'Não foi possível processar o pagamento. Tente novamente.');
     }
   } catch (err) {
     if (err instanceof CommissionClaimError) return badRequest(res, err.message);
@@ -234,30 +240,38 @@ const zumboPayWebhook = async (req, res) => {
     if (payment && type === 'payment.succeeded' && payment.status !== 'PAGA') {
       const platformAdmin = await walletService.getPlatformAdmin(prisma);
 
-      await prisma.$transaction(async (tx) => {
-        await walletService.credit(tx, {
-          userId: platformAdmin.id,
-          amount: payment.amount,
-          type: 'CREDITO_COMISSAO',
-          description: `Contribuição recebida via ZumboPay (${payment.gatewayChannel || 'mobile money'}) — ref ${reference}`,
-          referenceType: 'COMMISSION',
-          referenceId: payment.bazarId
-        });
-        await tx.commissionPayment.update({
-          where: { id: payment.id },
-          data: { status: 'PAGA', paidAt: new Date() }
-        });
-        await tx.bazar.update({
-          where: { id: payment.bazarId },
-          data: { paidFees: { increment: payment.amount }, pendingFees: 0 }
-        });
+      // Reclama este pagamento de forma atómica: só prossegue se o status
+      // ainda não for 'PAGA' neste preciso momento. Gateways de pagamento
+      // costumam reenviar o mesmo webhook (garantia "at-least-once") ou
+      // podem chegar duas entregas em paralelo — sem isto, a comissão
+      // seria creditada duas vezes ao admin da plataforma.
+      const claim = await prisma.commissionPayment.updateMany({
+        where: { id: payment.id, status: { not: 'PAGA' } },
+        data: { status: 'PAGA', paidAt: new Date() }
       });
 
-      notifSvc.push(payment.sellerId, {
-        type: 'SUCCESS', title: 'Contribuição paga',
-        message: `Pagamento de ${payment.amount.toLocaleString('pt-MZ')} MT confirmado via M-Pesa/e-Mola.`,
-        link: '/wallet'
-      });
+      if (claim.count > 0) {
+        await prisma.$transaction(async (tx) => {
+          await walletService.credit(tx, {
+            userId: platformAdmin.id,
+            amount: payment.amount,
+            type: 'CREDITO_COMISSAO',
+            description: `Contribuição recebida via ZumboPay (${payment.gatewayChannel || 'mobile money'}) — ref ${reference}`,
+            referenceType: 'COMMISSION',
+            referenceId: payment.bazarId
+          });
+          await tx.bazar.update({
+            where: { id: payment.bazarId },
+            data: { paidFees: { increment: payment.amount }, pendingFees: 0 }
+          });
+        });
+
+        notifSvc.push(payment.sellerId, {
+          type: 'SUCCESS', title: 'Contribuição paga',
+          message: `Pagamento de ${payment.amount.toLocaleString('pt-MZ')} MT confirmado via M-Pesa/e-Mola.`,
+          link: '/wallet'
+        });
+      }
     }
 
     if (payment && type === 'payment.failed' && payment.status !== 'PAGA') {
@@ -287,3 +301,4 @@ module.exports = {
   adminListCommissionPayments, adminValidateGateway,
   zumboPayWebhook
 };
+
