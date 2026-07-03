@@ -75,18 +75,26 @@ const create = async (req, res) => {
     const { name, description, category, phone, location } = req.body;
     const slug = await uniqueSlug(prisma, name, 'bazar');
 
-    const bazar = await prisma.bazar.create({
-      data: {
-        sellerId: req.user.id,
-        name: sanitize(name),
-        slug,
-        description: sanitize(description),
-        category,
-        phone: phone || null,
-        location: location || null,
-        feeRate: parseFloat(process.env.DEFAULT_FEE_RATE) || 2.0
-      }
-    });
+    let bazar;
+    try {
+      bazar = await prisma.bazar.create({
+        data: {
+          sellerId: req.user.id,
+          name: sanitize(name),
+          slug,
+          description: sanitize(description),
+          category,
+          phone: phone || null,
+          location: location || null,
+          feeRate: parseFloat(process.env.DEFAULT_FEE_RATE) || 2.0
+        }
+      });
+    } catch (createErr) {
+      // P2002 em sellerId: um pedido concorrente (duplo clique em "Criar
+      // Bazar") já criou o bazar entre a verificação acima e este create.
+      if (createErr.code === 'P2002') return conflict(res, 'Já possui um Bazar criado.');
+      throw createErr;
+    }
 
     logger.info(`[Bazars] Created: ${bazar.name} by ${req.user.email}`);
     return created(res, { bazar }, 'Bazar criado com sucesso.');
@@ -152,3 +160,4 @@ const myBazar = async (req, res) => {
 };
 
 module.exports = { list, getOne, create, update, myBazar };
+
