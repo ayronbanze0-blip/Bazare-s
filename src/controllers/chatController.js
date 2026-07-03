@@ -1,12 +1,15 @@
 'use strict';
 
-const { PrismaClient } = require('@prisma/client');
 const { ok, created, badRequest, forbidden, notFound, serverError } = require('../utils/response');
 const { sanitize } = require('../utils/helpers');
 const notifSvc = require('../services/notificationService');
 const logger = require('../utils/logger');
 
-const prisma = new PrismaClient();
+// Usa o singleton partilhado — instanciar 'new PrismaClient()' aqui abria
+// um pool de ligações à parte, nunca partilhado com o resto da app, o que
+// esgotava as ligações disponíveis no Postgres sob carga (este ficheiro
+// recebe polling a cada 4s do chat.html, por isso era o pior ofensor).
+const prisma = require('../config/database');
 
 const getOrCreateChat = async (req, res) => {
   try {
@@ -27,13 +30,27 @@ const getOrCreateChat = async (req, res) => {
     });
 
     if (!chat) {
-      chat = await prisma.chat.create({
-        data: { userAId, userBId },
-        include: {
-          userA: { select: { id: true, name: true, avatarUrl: true, role: true } },
-          userB: { select: { id: true, name: true, avatarUrl: true, role: true } }
-        }
-      });
+      try {
+        chat = await prisma.chat.create({
+          data: { userAId, userBId },
+          include: {
+            userA: { select: { id: true, name: true, avatarUrl: true, role: true } },
+            userB: { select: { id: true, name: true, avatarUrl: true, role: true } }
+          }
+        });
+      } catch (createErr) {
+        // P2002: um pedido concorrente (ex: ambos os utilizadores abriram
+        // o chat quase ao mesmo tempo) já criou a mesma conversa — vai
+        // simplesmente buscar a que venceu a corrida.
+        if (createErr.code !== 'P2002') throw createErr;
+        chat = await prisma.chat.findUnique({
+          where: { userAId_userBId: { userAId, userBId } },
+          include: {
+            userA: { select: { id: true, name: true, avatarUrl: true, role: true } },
+            userB: { select: { id: true, name: true, avatarUrl: true, role: true } }
+          }
+        });
+      }
     }
 
     return ok(res, { chat });
