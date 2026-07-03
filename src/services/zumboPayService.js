@@ -1,304 +1,236 @@
 'use strict';
 
-const { ok, badRequest, forbidden, notFound, serverError } = require('../utils/response');
-const { paginate, paginateMeta } = require('../utils/helpers');
-const notifSvc = require('../services/notificationService');
+/**
+ * ZumboPay Service — integração com a API da ZumboPay
+ * (https://zumbopay.com/api/public/v1) para cobrança via STK push
+ * (M-Pesa / e-Mola) e validação de webhooks.
+ *
+ * Variáveis de ambiente necessárias (ver .env.example):
+ *   ZUMBOPAY_API_KEY        — chave da API (zk_live_... ou zk_test_...)
+ *   ZUMBOPAY_MERCHANT_ID    — MCH_XXXXXXXXXX
+ *   ZUMBOPAY_BASE_URL       — por defeito https://zumbopay.com/api/public/v1
+ *   ZUMBOPAY_WALLET_MPESA   — wallet_id (UUID) da carteira M-Pesa no painel ZumboPay
+ *   ZUMBOPAY_WALLET_EMOLA   — wallet_id (UUID) da carteira e-Mola no painel ZumboPay
+ *   ZUMBOPAY_WEBHOOK_SECRET — secret usado para validar a assinatura HMAC do webhook
+ *
+ * Para obter ZUMBOPAY_WALLET_MPESA / ZUMBOPAY_WALLET_EMOLA: chamar
+ * validateMerchant() uma vez (ou GET /wallets) e copiar o "id" de cada
+ * carteira do painel ZumboPay → Carteiras.
+ *
+ * Nota: desde a versão de 2026-06-22 da API, wallet_id passou a ser
+ * opcional em /charges (a ZumboPay resolve automaticamente pela carteira
+ * activa do canal) — por isso só o enviamos quando configurado.
+ */
+
+const crypto = require('crypto');
 const logger = require('../utils/logger');
-const walletService = require('../services/walletService');
-const zumboPay = require('../services/zumboPayService');
 
-const prisma = require('../config/database');
+const BASE_URL = process.env.ZUMBOPAY_BASE_URL || 'https://zumbopay.com/api/public/v1';
+const API_KEY = process.env.ZUMBOPAY_API_KEY;
+const MERCHANT_ID = process.env.ZUMBOPAY_MERCHANT_ID;
+const WEBHOOK_SECRET = process.env.ZUMBOPAY_WEBHOOK_SECRET;
 
-// Lançado quando, dentro da transacção, o `pendingFees` do bazar já não
-// corresponde ao valor esperado — sinal de que outro pedido de pagamento
-// (em paralelo / duplo clique) já reclamou esta contribuição primeiro.
-class CommissionClaimError extends Error {
-  constructor(message = 'Esta contribuição já foi paga ou está a ser processada.') {
-    super(message);
-    this.name = 'CommissionClaimError';
-  }
-}
+const isConfigured = () => Boolean(API_KEY && MERCHANT_ID);
 
-// ─── ME: My wallet balance + recent statement ─────────────────────
-const myWallet = async (req, res) => {
-  try {
-    const { page = 1, limit = 30 } = req.query;
-    const statement = await walletService.getStatement(prisma, req.user.id, { page, limit });
-    return ok(res, statement);
-  } catch (err) {
-    logger.error(`[Wallet.myWallet] ${err.message}`);
-    return serverError(res);
-  }
+/**
+ * Normaliza um número moçambicano para o formato 258XXXXXXXXX exigido
+ * pela ZumboPay (msisdn), e detecta o operador pelo prefixo:
+ *   84 / 85 → M-Pesa (Vodacom)
+ *   86 / 87 → e-Mola (Movitel)
+ */
+const normalizeMsisdn = (raw) => {
+  if (!raw) return null;
+  let digits = String(raw).replace(/\D/g, '');
+  // Remove prefixo internacional duplicado, normaliza para 258XXXXXXXXX
+  if (digits.startsWith('00258')) digits = digits.slice(3);
+  if (digits.startsWith('258')) digits = digits.slice(3);
+  if (digits.length === 9) digits = digits; // já é só o número local (8XXXXXXXX)
+  return `258${digits.slice(-9)}`;
 };
 
-// ─── SELLER: Pay platform commission (pendingFees) ─────────────────
-// method: 'WALLET' (debita saldo interno, instantâneo) ou
-//         'ZUMBOPAY' (dispara STK push para o telefone do vendedor)
-const payCommission = async (req, res) => {
+const detectMethod = (msisdnRaw) => {
+  const msisdn = normalizeMsisdn(msisdnRaw);
+  if (!msisdn) return null;
+  const prefix = msisdn.slice(3, 5); // 2 dígitos depois do 258
+  if (['84', '85'].includes(prefix)) return 'MPESA';
+  if (['86', '87'].includes(prefix)) return 'EMOLA';
+  return null;
+};
+
+const walletIdForMethod = (method) => {
+  // NOTA: a documentação técnica da ZumboPay mostra exemplos de wallet_id
+  // em formato UUID, mas o próprio painel ZumboPay → Carteiras exibe o
+  // identificador da carteira como o código de 6 dígitos (ex: "Wallet
+  // ID: 397476"). Confirmado por captura de ecrã do painel — é esse
+  // valor que deve ser enviado em wallet_id, não um UUID. Por isso,
+  // enviamos o valor configurado tal como está, sem validar formato.
+  const raw = method === 'MPESA'
+    ? process.env.ZUMBOPAY_WALLET_MPESA
+    : method === 'EMOLA'
+      ? process.env.ZUMBOPAY_WALLET_EMOLA
+      : null;
+  return raw ? raw.trim() : null;
+};
+
+const apiFetch = async (path, { method = 'GET', body = null, idempotencyKey = null } = {}) => {
+  if (!isConfigured()) {
+    throw new Error('ZumboPay não está configurada (faltam ZUMBOPAY_API_KEY / ZUMBOPAY_MERCHANT_ID).');
+  }
+
+  const headers = {
+    Authorization: `Bearer ${API_KEY}`,
+    'X-Merchant-Id': MERCHANT_ID,
+    'Content-Type': 'application/json'
+  };
+  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
+
+  // Timeout próprio, mais curto que o timeout de 20s do frontend. Sem
+  // isto, quando a ZumboPay demora a responder, o pedido ficava
+  // pendurado até o frontend desistir e TENTAR DE NOVO — e essa segunda
+  // tentativa batia no bloqueio "já existe um pagamento em processamento"
+  // (ver payCommission), o que parecia ao utilizador um erro, quando na
+  // realidade o primeiro pedido podia ainda vir a ser confirmado. Ao
+  // falhar rápido aqui, devolvemos uma resposta clara dentro do mesmo
+  // pedido, sem dar tempo ao frontend para duplicar a tentativa.
+  const controller = new AbortController();
+  const timeoutMs = parseInt(process.env.ZUMBOPAY_TIMEOUT_MS) || 12000;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  let res;
   try {
-    const { method, msisdn } = req.body;
-    if (!['WALLET', 'ZUMBOPAY'].includes(method)) {
-      return badRequest(res, 'Método inválido. Use WALLET ou ZUMBOPAY.');
-    }
-
-    const bazar = await prisma.bazar.findUnique({ where: { sellerId: req.user.id } });
-    if (!bazar) return notFound(res, 'Bazar não encontrado.');
-    if (bazar.pendingFees <= 0) return badRequest(res, 'Não há contribuição pendente.');
-
-    const amount = bazar.pendingFees;
-    const platformAdmin = await walletService.getPlatformAdmin(prisma);
-
-    // ── Caminho 1: pagar com saldo interno da wallet (instantâneo) ──
-    if (method === 'WALLET') {
-      await prisma.$transaction(async (tx) => {
-        // Reclama a contribuição pendente de forma atómica: só prossegue
-        // se `pendingFees` ainda corresponder ao valor lido acima. Se um
-        // pedido concorrente (ex: duplo clique) já a tiver reclamado
-        // primeiro, isto falha e nada é debitado/creditado — evita pagar
-        // a mesma comissão duas vezes.
-        const claim = await tx.bazar.updateMany({
-          where: { id: bazar.id, pendingFees: amount },
-          data: { paidFees: { increment: amount }, pendingFees: 0 }
-        });
-        if (claim.count === 0) throw new CommissionClaimError();
-
-        await walletService.debit(tx, {
-          userId: req.user.id,
-          amount,
-          type: 'DEBITO_COMISSAO',
-          description: `Pagamento de contribuição de plataforma (${bazar.name})`,
-          referenceType: 'COMMISSION',
-          referenceId: bazar.id
-        });
-        await walletService.credit(tx, {
-          userId: platformAdmin.id,
-          amount,
-          type: 'CREDITO_COMISSAO',
-          description: `Contribuição recebida de ${req.user.name} (${bazar.name})`,
-          referenceType: 'COMMISSION',
-          referenceId: bazar.id
-        });
-        await tx.commissionPayment.create({
-          data: {
-            bazarId: bazar.id, sellerId: req.user.id, amount,
-            method: 'WALLET', status: 'PAGA', paidAt: new Date()
-          }
-        });
-      });
-
-      notifSvc.push(req.user.id, {
-        type: 'SUCCESS', title: 'Contribuição paga',
-        message: `Pagamento de ${amount.toLocaleString('pt-MZ')} MT efectuado com sucesso via saldo da wallet.`,
-        link: '/wallet'
-      });
-
-      return ok(res, {}, 'Contribuição paga com sucesso a partir do saldo da sua wallet.');
-    }
-
-    // ── Caminho 2: STK push via ZumboPay (débito real no telefone) ──
-    if (!zumboPay.isConfigured()) {
-      return badRequest(res, 'Pagamento automático via M-Pesa/e-Mola ainda não está disponível. Tente pagar com saldo da wallet, ou contacte o suporte.');
-    }
-    if (!msisdn) return badRequest(res, 'Indique o número de telefone para o STK push.');
-
-    // Evita disparar dois STK push em paralelo para a mesma contribuição
-    // (ex: duplo clique, ou retry antes do primeiro pedido responder) —
-    // sem isto, ambos os pagamentos poderiam ser confirmados pelo
-    // webhook e a comissão seria creditada duas vezes ao admin.
-    const inFlight = await prisma.commissionPayment.findFirst({
-      where: { bazarId: bazar.id, method: 'ZUMBOPAY', status: 'PROCESSANDO' }
+    res = await fetch(`${BASE_URL}${path}`, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal
     });
-    if (inFlight) {
-      return badRequest(res, 'Já existe um pagamento em processamento para esta contribuição. Aguarde a confirmação ou verifique o estado do pagamento anterior.');
-    }
-
-    const sourceId = `commission-${bazar.id}-${Date.now()}`;
-    const pending = await prisma.commissionPayment.create({
-      data: {
-        bazarId: bazar.id, sellerId: req.user.id, amount,
-        method: 'ZUMBOPAY', status: 'PROCESSANDO', msisdn
-      }
-    });
-
-    try {
-      const chargeResult = await zumboPay.initiateCharge({
-        amount, msisdn, customerName: req.user.name, sourceId
-      });
-
-      await prisma.commissionPayment.update({
-        where: { id: pending.id },
-        data: {
-          gatewayReference: chargeResult.reference,
-          gatewayChannel: chargeResult.channel,
-          status: chargeResult.status === 'declined' ? 'FALHADA' : 'PROCESSANDO',
-          failReason: chargeResult.failReason || null
-        }
-      });
-
-      if (chargeResult.status === 'declined') {
-        return badRequest(res, chargeResult.failReason || 'Pagamento recusado pelo operador.');
-      }
-
-      return ok(res, { reference: chargeResult.reference, id: pending.id }, 'Pedido de pagamento enviado para o seu telemóvel. Introduza o seu PIN para confirmar.');
-    } catch (gatewayErr) {
-      await prisma.commissionPayment.update({
-        where: { id: pending.id },
-        data: { status: 'FALHADA', failReason: gatewayErr.message }
-      });
-      // Timeout/indisponibilidade da operadora é uma condição esperada,
-      // não um bug do servidor — devolvemos 400 com a mensagem amigável
-      // já preparada em zumboPayService, e a marcação como FALHADA acima
-      // liberta logo o "inFlight guard" para o utilizador poder tentar
-      // de novo, em vez de ficar bloqueado à espera de um pedido que já
-      // sabemos que não vai completar.
-      return badRequest(res, gatewayErr.message || 'Não foi possível processar o pagamento. Tente novamente.');
-    }
   } catch (err) {
-    if (err instanceof CommissionClaimError) return badRequest(res, err.message);
-    if (err instanceof walletService.InsufficientFundsError) return badRequest(res, err.message);
-    logger.error(`[Wallet.payCommission] ${err.message}`);
-    return serverError(res, err.message || 'Erro ao processar pagamento.');
+    if (err.name === 'AbortError') {
+      logger.error(`[ZumboPay] Pedido a ${path} excedeu ${timeoutMs}ms — a operadora está lenta a responder.`);
+      throw new Error('O operador de pagamento está a demorar a responder. Tente novamente em instantes.');
+    }
+    logger.error(`[ZumboPay] Falha de rede a contactar ${path}: ${err.message}`);
+    throw new Error('Não foi possível contactar o operador de pagamento. Tente novamente em instantes.');
+  } finally {
+    clearTimeout(timer);
   }
+
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    data = null;
+  }
+
+  return { httpStatus: res.status, data };
 };
 
-// ─── SELLER: Check status of a pending commission payment ─────────
-const commissionStatus = async (req, res) => {
-  try {
-    const payment = await prisma.commissionPayment.findUnique({ where: { id: req.params.id } });
-    if (!payment) return notFound(res);
-    if (payment.sellerId !== req.user.id && req.user.role !== 'ADMIN') return forbidden(res);
-    return ok(res, { payment });
-  } catch (err) {
-    logger.error(`[Wallet.commissionStatus] ${err.message}`);
-    return serverError(res);
+/**
+ * Dispara um STK push (cobrança directa C2B) para o telefone do
+ * vendedor, no valor da comissão pendente.
+ *
+ * Devolve { status: 'success' | 'pending' | 'declined', reference, channel, raw }
+ */
+const initiateCharge = async ({ amount, msisdn, customerName, sourceId }) => {
+  const method = detectMethod(msisdn);
+  if (!method) {
+    throw new Error('Número de telefone não reconhecido como M-Pesa (84/85) ou e-Mola (86/87).');
   }
+
+  const normalized = normalizeMsisdn(msisdn);
+  const walletId = walletIdForMethod(method);
+
+  const body = {
+    amount: Math.round(amount * 100) / 100,
+    msisdn: normalized,
+    customer_name: customerName || undefined,
+    source_id: sourceId
+  };
+  if (walletId) body.wallet_id = walletId;
+
+  const { httpStatus, data } = await apiFetch('/charges', {
+    method: 'POST',
+    body,
+    idempotencyKey: sourceId
+  });
+
+  if (httpStatus === 200) {
+    return {
+      status: data?.data?.status === 'success' ? 'success' : 'unknown',
+      reference: data?.data?.reference || null,
+      channel: data?.data?.channel || method.toLowerCase(),
+      raw: data
+    };
+  }
+  if (httpStatus === 202) {
+    return {
+      status: 'pending',
+      reference: data?.data?.reference || null,
+      channel: method.toLowerCase(),
+      raw: data
+    };
+  }
+  if (httpStatus === 402) {
+    return {
+      status: 'declined',
+      reference: null,
+      channel: method.toLowerCase(),
+      failReason: data?.error?.message || 'Pagamento recusado.',
+      raw: data
+    };
+  }
+
+  // 400/401/403/404/429/5xx — erro de pedido/infra
+  const message = data?.error?.message || `Erro inesperado da ZumboPay (HTTP ${httpStatus}).`;
+  logger.error(`[ZumboPay] charge failed: HTTP ${httpStatus} — ${message}`);
+  logger.error(`[ZumboPay] resposta completa: ${JSON.stringify(data)}`);
+  logger.error(`[ZumboPay] payload enviado: ${JSON.stringify({ ...body, msisdn: '***' })}`);
+  throw new Error(message);
 };
 
-// ═══════════════════════════════════════════════════════════════════
-// ADMIN
-// ═══════════════════════════════════════════════════════════════════
-
-const adminListCommissionPayments = async (req, res) => {
-  try {
-    const { status, page = 1, limit = 50 } = req.query;
-    const { take, skip } = paginate(page, limit);
-    const where = status ? { status } : {};
-    const [payments, total] = await Promise.all([
-      prisma.commissionPayment.findMany({
-        where, take, skip, orderBy: { createdAt: 'desc' },
-        include: { seller: { select: { name: true, email: true } } }
-      }),
-      prisma.commissionPayment.count({ where })
-    ]);
-    return ok(res, { payments, meta: paginateMeta(total, page, limit) });
-  } catch (err) {
-    logger.error(`[Wallet.adminListCommissionPayments] ${err.message}`);
-    return serverError(res);
+/**
+ * Endpoint de diagnóstico — confirma que as credenciais, carteiras e
+ * webhook estão correctamente configurados antes de ir para produção.
+ */
+const validateMerchant = async () => {
+  const { httpStatus, data } = await apiFetch('/merchant/validate');
+  if (httpStatus !== 200) {
+    throw new Error(data?.error?.message || `Falha ao validar credenciais ZumboPay (HTTP ${httpStatus}).`);
   }
+  return data?.data;
 };
 
-// ─── ADMIN: diagnostic — validate ZumboPay credentials/wallets ────
-const adminValidateGateway = async (req, res) => {
-  try {
-    if (!zumboPay.isConfigured()) {
-      return ok(res, { configured: false }, 'ZumboPay não configurada (faltam variáveis de ambiente).');
-    }
-    const data = await zumboPay.validateMerchant();
-    return ok(res, { configured: true, ...data });
-  } catch (err) {
-    logger.error(`[Wallet.adminValidateGateway] ${err.message}`);
-    return serverError(res, err.message);
+/**
+ * Verifica a assinatura HMAC-SHA256 de um webhook da ZumboPay.
+ * `rawBody` deve ser o corpo em bruto (Buffer ou string), NÃO o JSON
+ * já parseado — caso contrário a assinatura nunca vai coincidir.
+ */
+const verifyWebhookSignature = (rawBody, signature) => {
+  if (!WEBHOOK_SECRET) {
+    logger.warn('[ZumboPay] ZUMBOPAY_WEBHOOK_SECRET não configurado — a aceitar webhook sem validação de assinatura.');
+    return true;
   }
-};
+  if (!signature) return false;
 
-// ═══════════════════════════════════════════════════════════════════
-// WEBHOOK — ZumboPay (não autenticado por JWT; validado por assinatura)
-// ═══════════════════════════════════════════════════════════════════
-
-const zumboPayWebhook = async (req, res) => {
   try {
-    const signature = req.headers['x-zumbopay-signature'];
-    const valid = zumboPay.verifyWebhookSignature(req.rawBody, signature);
+    const expected = crypto
+      .createHmac('sha256', WEBHOOK_SECRET)
+      .update(rawBody)
+      .digest('hex');
 
-    if (!valid) {
-      logger.warn('[ZumboPay Webhook] Assinatura inválida — pedido ignorado.');
-      return res.status(401).json({ success: false, message: 'Assinatura inválida.' });
-    }
-
-    const event = req.body;
-    const type = event?.type || event?.event;
-    const reference = event?.data?.reference;
-
-    logger.info(`[ZumboPay Webhook] Evento recebido: ${type} — ref: ${reference}`);
-
-    if (!reference) {
-      return res.status(200).json({ received: true }); // nada a fazer, mas confirmamos recepção
-    }
-
-    const payment = await prisma.commissionPayment.findFirst({ where: { gatewayReference: reference } });
-
-    if (payment && type === 'payment.succeeded' && payment.status !== 'PAGA') {
-      const platformAdmin = await walletService.getPlatformAdmin(prisma);
-
-      // Reclama este pagamento de forma atómica: só prossegue se o status
-      // ainda não for 'PAGA' neste preciso momento. Gateways de pagamento
-      // costumam reenviar o mesmo webhook (garantia "at-least-once") ou
-      // podem chegar duas entregas em paralelo — sem isto, a comissão
-      // seria creditada duas vezes ao admin da plataforma.
-      const claim = await prisma.commissionPayment.updateMany({
-        where: { id: payment.id, status: { not: 'PAGA' } },
-        data: { status: 'PAGA', paidAt: new Date() }
-      });
-
-      if (claim.count > 0) {
-        await prisma.$transaction(async (tx) => {
-          await walletService.credit(tx, {
-            userId: platformAdmin.id,
-            amount: payment.amount,
-            type: 'CREDITO_COMISSAO',
-            description: `Contribuição recebida via ZumboPay (${payment.gatewayChannel || 'mobile money'}) — ref ${reference}`,
-            referenceType: 'COMMISSION',
-            referenceId: payment.bazarId
-          });
-          await tx.bazar.update({
-            where: { id: payment.bazarId },
-            data: { paidFees: { increment: payment.amount }, pendingFees: 0 }
-          });
-        });
-
-        notifSvc.push(payment.sellerId, {
-          type: 'SUCCESS', title: 'Contribuição paga',
-          message: `Pagamento de ${payment.amount.toLocaleString('pt-MZ')} MT confirmado via M-Pesa/e-Mola.`,
-          link: '/wallet'
-        });
-      }
-    }
-
-    if (payment && type === 'payment.failed' && payment.status !== 'PAGA') {
-      await prisma.commissionPayment.update({
-        where: { id: payment.id },
-        data: { status: 'FALHADA', failReason: event?.data?.message || 'Pagamento falhou.' }
-      });
-      notifSvc.push(payment.sellerId, {
-        type: 'ERROR', title: 'Pagamento falhou',
-        message: `O pagamento da contribuição de ${payment.amount.toLocaleString('pt-MZ')} MT não foi concluído. Tente novamente.`,
-        link: '/wallet'
-      });
-    }
-
-    return res.status(200).json({ received: true });
+    return crypto.timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(expected, 'hex'));
   } catch (err) {
-    logger.error(`[ZumboPay Webhook] ${err.message}`);
-    // Devolvemos 200 mesmo em erro interno para evitar que a ZumboPay
-    // fique a reenviar o mesmo webhook indefinidamente; o erro já está
-    // registado no log para investigação manual.
-    return res.status(200).json({ received: true, warning: 'internal_error_logged' });
+    logger.error(`[ZumboPay] Erro a verificar assinatura do webhook: ${err.message}`);
+    return false;
   }
 };
 
 module.exports = {
-  myWallet, payCommission, commissionStatus,
-  adminListCommissionPayments, adminValidateGateway,
-  zumboPayWebhook
+  isConfigured,
+  normalizeMsisdn,
+  detectMethod,
+  initiateCharge,
+  validateMerchant,
+  verifyWebhookSignature
 };
 
