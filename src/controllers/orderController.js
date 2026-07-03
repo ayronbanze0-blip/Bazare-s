@@ -120,14 +120,16 @@ const placeOrder = async (req, res) => {
       }
     });
 
-    // Post-transaction: notifications & emails (non-blocking)
-    for (const order of createdOrders) {
+    // Post-transaction: notifications & emails (non-blocking, em paralelo —
+    // eram feitas em série antes, o que atrasava a resposta quando uma
+    // encomenda tinha vários vendedores)
+    await Promise.all(createdOrders.map(async (order) => {
       const seller = await prisma.user.findUnique({ where: { id: order.sellerId } });
       notifSvc.orderReceived(order.sellerId, order.id, order.items.map(i => i.name).join(', '), order.total);
       if (seller?.email) {
         emailSvc.sendOrderNotificationEmail(seller.email, seller.name, order).catch(() => {});
       }
-    }
+    }));
 
     logger.info(`[Orders] ${createdOrders.length} order(s) placed by ${req.user.email}`);
     return created(res, { orders: createdOrders }, 'Encomenda realizada com sucesso.');
@@ -405,8 +407,12 @@ const submitReview = async (req, res) => {
     return created(res, {}, 'Avaliação enviada. Obrigado!');
   } catch (err) {
     logger.error(`[Orders.submitReview] ${err.message}`);
+    // P2002 em orderId: um pedido concorrente (duplo toque em "Enviar
+    // avaliação") já criou a review entre a verificação acima e o create.
+    if (err.code === 'P2002') return badRequest(res, 'Esta encomenda já foi avaliada.');
     return serverError(res);
   }
 };
 
 module.exports = { placeOrder, myOrders, sellerOrders, getOne, updateStatus, submitReview };
+
