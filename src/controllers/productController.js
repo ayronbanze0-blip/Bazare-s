@@ -349,10 +349,23 @@ const toggleFavorite = async (req, res) => {
     const existing = await prisma.favorite.findUnique({ where: key });
 
     if (existing) {
-      await prisma.favorite.delete({ where: key });
+      try {
+        await prisma.favorite.delete({ where: key });
+      } catch (delErr) {
+        // P2025: já foi removido por um pedido concorrente (ex: duplo
+        // toque no coração) — o resultado final pretendido já foi
+        // alcançado, por isso tratamos como sucesso em vez de erro.
+        if (delErr.code !== 'P2025') throw delErr;
+      }
       return ok(res, { isFavorite: false }, 'Removido dos favoritos.');
     } else {
-      await prisma.favorite.create({ data: { userId: req.user.id, productId } });
+      try {
+        await prisma.favorite.create({ data: { userId: req.user.id, productId } });
+      } catch (createErr) {
+        // P2002: um pedido concorrente já criou o mesmo favorito
+        // (mesma corrida de duplo toque) — idempotente, sucesso na mesma.
+        if (createErr.code !== 'P2002') throw createErr;
+      }
       return ok(res, { isFavorite: true }, 'Adicionado aos favoritos.');
     }
   } catch (err) {
