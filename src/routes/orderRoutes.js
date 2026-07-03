@@ -4,6 +4,7 @@ const router = require('express').Router();
 const { body } = require('express-validator');
 const ctrl = require('../controllers/orderController');
 const { authenticate, isBuyer } = require('../middleware/auth');
+const { orderLimiter } = require('../middleware/rateLimiter');
 
 const orderValidation = [
   body('items').isArray({ min: 1 }).withMessage('Pelo menos um item é obrigatório.'),
@@ -19,7 +20,7 @@ const reviewValidation = [
     .isInt({ min: 1, max: 5 }).withMessage('Avaliação deve ser entre 1 e 5.')
 ];
 
-router.post('/', authenticate, orderValidation, ctrl.placeOrder);
+router.post('/', authenticate, orderLimiter, orderValidation, ctrl.placeOrder);
 router.get('/mine', authenticate, ctrl.myOrders);
 router.get('/received', authenticate, ctrl.sellerOrders);
 router.get('/:id', authenticate, ctrl.getOne);
