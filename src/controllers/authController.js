@@ -78,11 +78,16 @@ const register = async (req, res) => {
       inviteId = invite.id;
       revendedorId = invite.createdById;
 
-      // Mark invite as used
-      await prisma.revendedorInvite.update({
-        where: { id: invite.id },
+      // Reclama o convite de forma atómica: só marca como usado se ainda
+      // estiver por usar neste preciso momento. Duas tentativas de registo
+      // concorrentes com o mesmo código (ex: link partilhado, duplo clique)
+      // só deixam UMA passar — a pré-verificação acima é só para dar um
+      // erro rápido e amigável, esta é a garantia real contra reutilização.
+      const claim = await prisma.revendedorInvite.updateMany({
+        where: { id: invite.id, used: false },
         data: { used: true, usedAt: new Date() }
       });
+      if (claim.count === 0) return badRequest(res, 'Código de convite inválido ou já utilizado.');
     }
 
     // Hash password
@@ -195,6 +200,21 @@ const login = async (req, res) => {
   }
 };
 
+// Janela de tolerância: um token revogado há pouco tempo ainda é aceite,
+// desde que sigamos a cadeia até ao token atualmente válido. Isto resolve
+// pedidos de refresh concorrentes (duas abas, ou polling em segundo plano
+// a coincidir com o carregamento de outra página) que de outra forma
+// deslogavam o utilizador por perderem a corrida da rotação.
+const REFRESH_GRACE_MS = 15 * 1000;
+
+const _resolveCurrentToken = async (record) => {
+  let current = record;
+  while (current?.revoked && current.replacedByToken) {
+    current = await prisma.refreshToken.findUnique({ where: { token: current.replacedByToken } });
+  }
+  return current;
+};
+
 // ─── REFRESH TOKEN ────────────────────────────────────────────────
 const refresh = async (req, res) => {
   const token = req.cookies?.refreshToken;
@@ -202,7 +222,27 @@ const refresh = async (req, res) => {
 
   try {
     const record = await prisma.refreshToken.findUnique({ where: { token } });
-    if (!record || record.revoked || new Date() > record.expiresAt) {
+    if (!record) return unauthorized(res, 'Refresh token inválido ou expirado. Faça login novamente.');
+
+    if (record.revoked) {
+      const withinGrace = record.revokedAt && (Date.now() - record.revokedAt.getTime()) < REFRESH_GRACE_MS;
+      const current = withinGrace ? await _resolveCurrentToken(record) : null;
+
+      if (!current || current.revoked || new Date() > current.expiresAt) {
+        return unauthorized(res, 'Refresh token inválido ou expirado. Faça login novamente.');
+      }
+
+      // Requisição concorrente que perdeu a corrida de rotação, mas dentro
+      // da janela de tolerância — devolve um access token novo para o
+      // token que já venceu a corrida, sem rodar de novo.
+      const user = await prisma.user.findUnique({ where: { id: current.userId } });
+      if (!user || !user.active) return unauthorized(res, 'Utilizador inválido.');
+
+      setRefreshCookie(res, current.token);
+      return ok(res, { accessToken: signAccess(user) }, 'Token renovado.');
+    }
+
+    if (new Date() > record.expiresAt) {
       return unauthorized(res, 'Refresh token inválido ou expirado. Faça login novamente.');
     }
 
@@ -210,8 +250,11 @@ const refresh = async (req, res) => {
     if (!user || !user.active) return unauthorized(res, 'Utilizador inválido.');
 
     // Rotate refresh token
-    await prisma.refreshToken.update({ where: { id: record.id }, data: { revoked: true } });
     const newRefreshToken = await createRefreshToken(user.id, req);
+    await prisma.refreshToken.update({
+      where: { id: record.id },
+      data: { revoked: true, revokedAt: new Date(), replacedByToken: newRefreshToken }
+    });
     setRefreshCookie(res, newRefreshToken);
 
     const accessToken = signAccess(user);
