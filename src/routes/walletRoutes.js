@@ -10,6 +10,7 @@ router.get('/me', authenticate, ctrl.myWallet);
 // ─── SELLER: comissão de plataforma ────────────────────────────────
 router.post('/commission/pay', authenticate, isSeller, ctrl.payCommission);
 router.get('/commission/:id', authenticate, ctrl.commissionStatus);
+router.post('/commission/:id/cancel', authenticate, isSeller, ctrl.cancelCommissionPayment);
 
 // ─── ADMIN ──────────────────────────────────────────────────────────
 router.get('/admin/commission-payments', authenticate, isAdmin, ctrl.adminListCommissionPayments);
