@@ -49,7 +49,21 @@ const addItem = async (req, res) => {
       if (newQty > product.stock) return badRequest(res, `Apenas ${product.stock} unidades disponíveis.`);
       item = await prisma.cartItem.update({ where: { id: existing.id }, data: { qty: newQty } });
     } else {
-      item = await prisma.cartItem.create({ data: { userId: req.user.id, productId, qty: parseInt(qty) } });
+      try {
+        item = await prisma.cartItem.create({ data: { userId: req.user.id, productId, qty: parseInt(qty) } });
+      } catch (createErr) {
+        // P2002: um pedido concorrente (duplo toque em "Adicionar") já
+        // criou a mesma linha entre a verificação acima e este create —
+        // soma a quantidade à linha que venceu a corrida em vez de falhar.
+        if (createErr.code !== 'P2002') throw createErr;
+        const winner = await prisma.cartItem.findUnique({
+          where: { userId_productId: { userId: req.user.id, productId } }
+        });
+        item = await prisma.cartItem.update({
+          where: { id: winner.id },
+          data: { qty: winner.qty + parseInt(qty) }
+        });
+      }
     }
 
     return ok(res, { item }, 'Adicionado ao carrinho.');
