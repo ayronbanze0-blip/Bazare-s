@@ -9,9 +9,9 @@ const { uploadLimiter } = require('../middleware/rateLimiter');
 // ─── Authenticated ────────────────────────────────────────────────
 router.get('/me/stats', authenticate, ctrl.myStats);
 router.put('/me', authenticate, uploadLimiter, upload.single('avatar'), ctrl.updateProfile);
-router.put('/me/onboarding', authenticate, ctrl.completeOnboarding);
 router.put('/me/cover', authenticate, uploadLimiter, upload.single('cover'), ctrl.updateCover);
 router.put('/me/password', authenticate, ctrl.changePassword);
+router.put('/me/onboarding', authenticate, ctrl.onboarding);
 router.delete('/me', authenticate, ctrl.deleteAccount);
 
 // ─── Public ───────────────────────────────────────────────────────
