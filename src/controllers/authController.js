@@ -187,6 +187,7 @@ const login = async (req, res) => {
 
     return ok(res, {
       accessToken,
+      refreshToken,
       user: {
         id: user.id, name: user.name, email: user.email,
         role: user.role, phone: user.phone, location: user.location,
@@ -217,7 +218,11 @@ const _resolveCurrentToken = async (record) => {
 
 // ─── REFRESH TOKEN ────────────────────────────────────────────────
 const refresh = async (req, res) => {
-  const token = req.cookies?.refreshToken;
+  // O cookie é a via preferida (não acessível a scripts), mas o Safari
+  // do iOS bloqueia-o por ser "de terceiro" (frontend e backend em
+  // domínios diferentes) — por isso aceitamos também o token vindo no
+  // corpo do pedido, que o frontend guarda como reforço nesse caso.
+  const token = req.cookies?.refreshToken || req.body?.refreshToken;
   if (!token) return unauthorized(res, 'Refresh token não fornecido.');
 
   try {
@@ -239,7 +244,7 @@ const refresh = async (req, res) => {
       if (!user || !user.active) return unauthorized(res, 'Utilizador inválido.');
 
       setRefreshCookie(res, current.token);
-      return ok(res, { accessToken: signAccess(user) }, 'Token renovado.');
+      return ok(res, { accessToken: signAccess(user), refreshToken: current.token }, 'Token renovado.');
     }
 
     if (new Date() > record.expiresAt) {
@@ -258,7 +263,7 @@ const refresh = async (req, res) => {
     setRefreshCookie(res, newRefreshToken);
 
     const accessToken = signAccess(user);
-    return ok(res, { accessToken }, 'Token renovado.');
+    return ok(res, { accessToken, refreshToken: newRefreshToken }, 'Token renovado.');
   } catch (err) {
     logger.error(`[Refresh] ${err.message}`);
     return serverError(res);
@@ -276,7 +281,7 @@ const clearRefreshCookie = (res) => {
 
 // ─── LOGOUT ───────────────────────────────────────────────────────
 const logout = async (req, res) => {
-  const token = req.cookies?.refreshToken;
+  const token = req.cookies?.refreshToken || req.body?.refreshToken;
   if (token) {
     await prisma.refreshToken.updateMany({
       where: { token },
