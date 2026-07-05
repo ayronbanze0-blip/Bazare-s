@@ -28,6 +28,7 @@ async function main() {
         role: 'ADMIN',
         verified: true,
         active: true,
+        onboarded: true,
         emailVerifiedAt: new Date()
       }
     });
