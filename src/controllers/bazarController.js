@@ -126,12 +126,23 @@ const update = async (req, res) => {
       }
     });
 
-    // Handle banner upload
-    if (req.file) {
-      const result = await uploadSvc.uploadBazarBanner(req.file.path);
+    // Handle banner and/or logo upload — vêm em req.files (não req.file)
+    // porque agora aceitamos dois campos de ficheiro em simultâneo.
+    const bannerFile = req.files?.banner?.[0];
+    const logoFile = req.files?.logo?.[0];
+
+    if (bannerFile) {
+      const result = await uploadSvc.uploadBazarBanner(bannerFile.path);
       if (result.ok) {
         await prisma.bazar.update({ where: { id: bazar.id }, data: { bannerUrl: result.url } });
         updated.bannerUrl = result.url;
+      }
+    }
+    if (logoFile) {
+      const result = await uploadSvc.uploadToCloud(logoFile.path, 'bazares/logos');
+      if (result.ok) {
+        await prisma.bazar.update({ where: { id: bazar.id }, data: { logoUrl: result.url } });
+        updated.logoUrl = result.url;
       }
     }
 
