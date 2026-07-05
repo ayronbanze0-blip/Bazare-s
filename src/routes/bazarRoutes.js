@@ -16,6 +16,6 @@ router.get('/', ctrl.list);
 router.get('/me', authenticate, isSeller, ctrl.myBazar);
 router.get('/:idOrSlug', ctrl.getOne);
 router.post('/', authenticate, isSeller, bazarValidation, ctrl.create);
-router.put('/me', authenticate, isSeller, upload.single('banner'), ctrl.update);
+router.put('/me', authenticate, isSeller, upload.fields([{ name: 'banner', maxCount: 1 }, { name: 'logo', maxCount: 1 }]), ctrl.update);
 
 module.exports = router;
