@@ -101,6 +101,49 @@ const updateProfile = async (req, res) => {
   }
 };
 
+// ─── PUT /api/users/me/onboarding ─────────────────────────────────
+// Conclui o pequeno questionário pós-registo (comprar/vender, já tem
+// loja fixa, onde ouviu falar do Bazares). Não se aplica a revendedores,
+// que já escolhem o papel ao usar o convite e nascem com onboarded:true.
+const HEARD_FROM_OPTIONS = ['INSTAGRAM', 'FACEBOOK', 'TIKTOK', 'AMIGO_FAMILIA', 'GOOGLE', 'OUTRO'];
+
+const completeOnboarding = async (req, res) => {
+  try {
+    if (req.user.role === 'REVENDEDOR' || req.user.role === 'ADMIN') {
+      return badRequest(res, 'Esta conta não passa por este questionário.');
+    }
+
+    const { role, hasPhysicalStore, heardFrom } = req.body;
+    if (!['BUYER', 'SELLER'].includes(role)) {
+      return badRequest(res, 'Escolha se pretende comprar ou vender.');
+    }
+    if (heardFrom !== undefined && heardFrom !== null && !HEARD_FROM_OPTIONS.includes(heardFrom)) {
+      return badRequest(res, 'Opção inválida.');
+    }
+
+    const data = {
+      role,
+      onboarded: true,
+      heardFrom: heardFrom || undefined
+    };
+    // Só faz sentido perguntar "já tem loja fixa" a quem escolheu vender.
+    if (role === 'SELLER' && typeof hasPhysicalStore === 'boolean') {
+      data.hasPhysicalStore = hasPhysicalStore;
+    }
+
+    const user = await prisma.user.update({ where: { id: req.user.id }, data });
+    return ok(res, {
+      user: {
+        id: user.id, role: user.role, onboarded: user.onboarded,
+        hasPhysicalStore: user.hasPhysicalStore, heardFrom: user.heardFrom
+      }
+    }, 'Tudo pronto!');
+  } catch (err) {
+    logger.error(`[Users.completeOnboarding] ${err.message}`);
+    return serverError(res);
+  }
+};
+
 // ─── PUT /api/users/me/cover ──────────────────────────────────────
 const updateCover = async (req, res) => {
   try {
@@ -244,4 +287,4 @@ const deleteAccount = async (req, res) => {
   }
 };
 
-module.exports = { myStats, updateProfile, updateCover, changePassword, publicProfile, deleteAccount };
+module.exports = { myStats, updateProfile, completeOnboarding, updateCover, changePassword, publicProfile, deleteAccount };
