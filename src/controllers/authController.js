@@ -93,24 +93,17 @@ const register = async (req, res) => {
     // Hash password
     const passwordHash = await bcrypt.hash(password, parseInt(process.env.BCRYPT_ROUNDS) || 12);
 
-    // Create user — já fica verificado, sem fluxo de verificação por email.
-    // A escolha comprador/vendedor deixou de ser feita neste formulário —
-    // nasce sempre BUYER (excepto revendedor, via convite) e é o ecrã de
-    // onboarding pós-registo que decide o papel definitivo. Por isso
-    // onboarded fica false para o par comprador/vendedor: o revendedor
-    // já escolheu o papel ao usar o convite, por isso não passa por lá.
-    const isRevendedor = role.toUpperCase() === 'REVENDEDOR';
+    // Create user — já fica verificado, sem fluxo de verificação por email
     const user = await prisma.user.create({
       data: {
         name: name.trim(),
         email: email.toLowerCase().trim(),
         passwordHash,
-        role: isRevendedor ? 'REVENDEDOR' : 'BUYER',
+        role: role.toUpperCase(),
         inviteId,
         revendedorId,
         verified: true,
-        emailVerifiedAt: new Date(),
-        onboarded: isRevendedor
+        emailVerifiedAt: new Date()
       }
     });
 
@@ -122,7 +115,7 @@ const register = async (req, res) => {
     logger.info(`[Auth] New user registered: ${user.email} (${user.role})`);
 
     return created(res, {
-      user: { id: user.id, name: user.name, email: user.email, role: user.role, verified: true, onboarded: user.onboarded }
+      user: { id: user.id, name: user.name, email: user.email, role: user.role, verified: true }
     }, 'Conta criada com sucesso. Faça login para continuar.');
   } catch (err) {
     logger.error(`[Register] ${err.message}`);
@@ -198,7 +191,7 @@ const login = async (req, res) => {
         id: user.id, name: user.name, email: user.email,
         role: user.role, phone: user.phone, location: user.location,
         avatarUrl: user.avatarUrl, verifiedSeller: user.verifiedSeller,
-        rating: user.rating, ratingCount: user.ratingCount
+        rating: user.rating, ratingCount: user.ratingCount, onboardedAt: user.onboardedAt
       }
     }, 'Login efectuado com sucesso.');
   } catch (err) {
@@ -383,8 +376,8 @@ const me = async (req, res) => {
         avatarUrl: true, coverUrl: true,
         verified: true, verifiedSeller: true, active: true,
         rating: true, ratingCount: true, cancelCount: true,
-        onboarded: true, hasPhysicalStore: true, heardFrom: true,
         revendedorId: true, createdAt: true, lastLoginAt: true,
+        onboardedAt: true,
         bazar: { select: { id: true, name: true, slug: true, active: true } },
         _count: {
           select: {
