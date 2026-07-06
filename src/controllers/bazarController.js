@@ -159,6 +159,7 @@ const myBazar = async (req, res) => {
     const bazar = await prisma.bazar.findUnique({
       where: { sellerId: req.user.id },
       include: {
+        seller: { select: { id: true, name: true, rating: true, ratingCount: true, verifiedSeller: true, createdAt: true } },
         _count: { select: { products: true, orders: true } }
       }
     });
@@ -171,4 +172,5 @@ const myBazar = async (req, res) => {
 };
 
 module.exports = { list, getOne, create, update, myBazar };
+
 
