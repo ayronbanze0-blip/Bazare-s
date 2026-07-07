@@ -14,6 +14,8 @@ router.put('/me/password', authenticate, ctrl.changePassword);
 router.put('/me/onboarding', authenticate, ctrl.onboarding);
 router.delete('/me', authenticate, ctrl.deleteAccount);
 
+router.post('/:id/thumb', authenticate, ctrl.giveThumb);
+
 // ─── Public ───────────────────────────────────────────────────────
 // Deve ficar por último para não capturar /me como :id
 router.get('/:id', ctrl.publicProfile);
