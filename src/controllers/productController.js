@@ -525,4 +525,3 @@ const related = async (req, res) => {
 };
 
 module.exports = { list, getOne, featured, related, trackView, create, update, deleteImage, reorderImages, toggle, toggleStock, remove, myProducts, toggleFavorite, myFavorites };
-
