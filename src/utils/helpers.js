@@ -101,7 +101,42 @@ const omit = (obj, keys) => {
 const calcFee = (amount, rate = 2.0) =>
   Math.round(amount * (rate / 100) * 100) / 100;
 
+/**
+ * Início da semana corrente (segunda-feira 00:00) e do mês corrente,
+ * usados para "visitas desta semana" e "vendas deste mês" (medalhas).
+ */
+const startOfWeek = (d = new Date()) => {
+  const date = new Date(d);
+  const day = date.getDay(); // 0=Domingo
+  const diff = (day === 0 ? -6 : 1) - day; // volta até segunda-feira
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() + diff);
+  return date;
+};
+
+const startOfMonth = (d = new Date()) => {
+  const date = new Date(d);
+  date.setDate(1);
+  date.setHours(0, 0, 0, 0);
+  return date;
+};
+
+/**
+ * Sistema de medalhas por vendas concluídas no mês corrente:
+ *   Bronze — 0 a 30 vendas/mês
+ *   Prata  — 30 a 50 vendas/mês
+ *   Ouro   — mais de 50 vendas/mês
+ * Vendedores Ouro aparecem no topo das listagens de bazares.
+ */
+const getBadgeTier = (monthlySales = 0) => {
+  const sales = Number(monthlySales) || 0;
+  if (sales > 50) return { tier: 'OURO', label: 'Ouro', icon: '🥇', rank: 3 };
+  if (sales >= 30) return { tier: 'PRATA', label: 'Prata', icon: '🥈', rank: 2 };
+  return { tier: 'BRONZE', label: 'Bronze', icon: '🥉', rank: 1 };
+};
+
 module.exports = {
   toSlug, uniqueSlug, sanitize, genToken, genCode,
-  expiresAt, fmtMT, paginate, paginateMeta, pick, omit, calcFee
+  expiresAt, fmtMT, paginate, paginateMeta, pick, omit, calcFee,
+  startOfWeek, startOfMonth, getBadgeTier
 };
