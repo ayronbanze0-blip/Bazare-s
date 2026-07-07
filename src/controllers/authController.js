@@ -251,7 +251,22 @@ const refresh = async (req, res) => {
       return unauthorized(res, 'Refresh token inválido ou expirado. Faça login novamente.');
     }
 
-    const user = await prisma.user.findUnique({ where: { id: record.userId } });
+    const user = await prisma.user.findUnique({
+      where: { id: record.userId },
+      select: {
+        id: true, name: true, email: true, role: true,
+        phone: true, location: true, bio: true,
+        avatarUrl: true, coverUrl: true,
+        verified: true, verifiedSeller: true, active: true,
+        rating: true, ratingCount: true, cancelCount: true,
+        revendedorId: true, createdAt: true, lastLoginAt: true,
+        onboardedAt: true,
+        bazar: { select: { id: true, name: true, slug: true, active: true } },
+        _count: {
+          select: { orders: true, sellerOrders: true, favorites: true, cartItems: true }
+        }
+      }
+    });
     if (!user || !user.active) return unauthorized(res, 'Utilizador inválido.');
 
     // Rotate refresh token
@@ -262,8 +277,11 @@ const refresh = async (req, res) => {
     });
     setRefreshCookie(res, newRefreshToken);
 
+    // Devolve o utilizador já aqui — evita ao frontend ter de fazer um
+    // segundo pedido a /auth/me só para saber quem está autenticado.
+    // Isto poupa uma volta completa de rede em CADA carregamento de página.
     const accessToken = signAccess(user);
-    return ok(res, { accessToken, refreshToken: newRefreshToken }, 'Token renovado.');
+    return ok(res, { accessToken, refreshToken: newRefreshToken, user }, 'Token renovado.');
   } catch (err) {
     logger.error(`[Refresh] ${err.message}`);
     return serverError(res);
@@ -407,4 +425,5 @@ module.exports = {
   login, refresh, logout, logoutAll,
   forgotPassword, resetPassword, me
 };
+
 
