@@ -2,7 +2,7 @@
 
 const bcrypt = require('bcryptjs');
 const { ok, badRequest, notFound, serverError } = require('../utils/response');
-const { sanitize } = require('../utils/helpers');
+const { sanitize, startOfMonth, getBadgeTier } = require('../utils/helpers');
 const { uploadAvatar, uploadBazarBanner } = require('../services/uploadService');
 const walletService = require('../services/walletService');
 const logger = require('../utils/logger');
@@ -152,6 +152,7 @@ const publicProfile = async (req, res) => {
       select: {
         id: true, name: true, bio: true, avatarUrl: true, coverUrl: true,
         role: true, rating: true, ratingCount: true, verifiedSeller: true,
+        thumbsUp: true, thumbsDown: true,
         createdAt: true,
         bazar: {
           select: {
@@ -165,9 +166,69 @@ const publicProfile = async (req, res) => {
       }
     });
     if (!user) return notFound(res, 'Utilizador não encontrado.');
+
+    if (user.bazar) {
+      const monthlySales = await prisma.order.count({
+        where: { sellerId: user.id, status: 'ENTREGUE', createdAt: { gte: startOfMonth() } }
+      });
+      user.monthlySales = monthlySales;
+      user.badge = getBadgeTier(monthlySales);
+    }
+
     return ok(res, { user });
   } catch (err) {
     logger.error(`[Users.publicProfile] ${err.message}`);
+    return serverError(res);
+  }
+};
+
+// ─── POST /api/users/:id/thumb ────────────────────────────────────
+// Compradores autenticados podem deixar um polegar para cima/baixo
+// rápido num vendedor (independente da avaliação por estrelas do pedido).
+// Um voto por comprador por vendedor — repetir o pedido substitui o voto.
+const giveThumb = async (req, res) => {
+  try {
+    const sellerId = req.params.id;
+    const { thumb } = req.body; // 'up' | 'down'
+    if (!['up', 'down'].includes(thumb)) return badRequest(res, 'Voto inválido.');
+    if (sellerId === req.user.id) return badRequest(res, 'Não pode votar em si mesmo.');
+
+    const seller = await prisma.user.findUnique({ where: { id: sellerId } });
+    if (!seller) return notFound(res, 'Vendedor não encontrado.');
+
+    // Guarda o voto como uma "review sem pedido" seria invasivo demais no
+    // esquema actual; em vez disso, mantemos apenas o efeito líquido do
+    // último voto de cada comprador usando o AuditLog como registo simples
+    // e recalculamos os contadores a partir dele.
+    const existing = await prisma.auditLog.findFirst({
+      where: { userId: req.user.id, action: 'SELLER_THUMB', entityId: sellerId },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    if (existing && existing.newValue?.thumb === thumb) {
+      return ok(res, { thumbsUp: seller.thumbsUp, thumbsDown: seller.thumbsDown, myVote: thumb }, 'Voto já registado.');
+    }
+
+    await prisma.auditLog.create({
+      data: { userId: req.user.id, action: 'SELLER_THUMB', entity: 'User', entityId: sellerId, newValue: { thumb } }
+    });
+
+    const delta = { thumbsUp: 0, thumbsDown: 0 };
+    if (existing?.newValue?.thumb === 'up') delta.thumbsUp -= 1;
+    if (existing?.newValue?.thumb === 'down') delta.thumbsDown -= 1;
+    if (thumb === 'up') delta.thumbsUp += 1; else delta.thumbsDown += 1;
+
+    const updated = await prisma.user.update({
+      where: { id: sellerId },
+      data: {
+        thumbsUp: { increment: delta.thumbsUp },
+        thumbsDown: { increment: delta.thumbsDown }
+      }
+    });
+
+    return ok(res, { thumbsUp: updated.thumbsUp, thumbsDown: updated.thumbsDown, myVote: thumb }, 'Voto registado.');
+  } catch (err) {
+    logger.error(`[Users.giveThumb] ${err.message}`);
     return serverError(res);
   }
 };
@@ -283,4 +344,5 @@ const onboarding = async (req, res) => {
   }
 };
 
-module.exports = { myStats, updateProfile, updateCover, changePassword, publicProfile, deleteAccount, onboarding };
+module.exports = { myStats, updateProfile, updateCover, changePassword, publicProfile, giveThumb, deleteAccount, onboarding };
+
