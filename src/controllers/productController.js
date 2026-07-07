@@ -12,7 +12,7 @@ const prisma = require('../config/database');
 // ─── PUBLIC: List products ───────────────────────────────────────
 const list = async (req, res) => {
   try {
-    const { q, category, bazarId, sellerId, minPrice, maxPrice, sort = 'new', page = 1, limit = 20 } = req.query;
+    const { q, category, bazarId, sellerId, minPrice, maxPrice, condition, sort = 'new', page = 1, limit = 20 } = req.query;
     const { take, skip } = paginate(page, limit);
 
     const where = {
@@ -26,6 +26,7 @@ const list = async (req, res) => {
       ...(category && { category }),
       ...(bazarId && { bazarId }),
       ...(sellerId && { sellerId }),
+      ...(condition && { condition }),
       ...(minPrice && { price: { gte: parseFloat(minPrice) } }),
       ...(maxPrice && { price: { ...((minPrice && { gte: parseFloat(minPrice) }) || {}), lte: parseFloat(maxPrice) } })
     };
@@ -498,3 +499,4 @@ const related = async (req, res) => {
 };
 
 module.exports = { list, getOne, featured, related, trackView, create, update, deleteImage, reorderImages, toggle, toggleStock, remove, myProducts, toggleFavorite, myFavorites };
+
