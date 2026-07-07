@@ -43,6 +43,11 @@ model User {
   ratingCount       Int       @default(0)
   cancelCount       Int       @default(0)
 
+  // Feedback rápido (polegar) — agregados denormalizados a partir de Review.recommend,
+  // recalculados sempre que uma avaliação é criada. Ver reviewRoutes.js.
+  thumbsUp          Int       @default(0)
+  thumbsDown        Int       @default(0)
+
   // Revendedor system
   revendedorId      String?
   revendedor        User?     @relation("RevendedorSellers", fields: [revendedorId], references: [id])
@@ -180,10 +185,25 @@ model Bazar {
   products    Product[]
   orders      Order[]
   transactions Transaction[]
+  visits      BazarVisit[]
 
   @@index([slug])
   @@index([category])
   @@index([active])
+}
+
+// ─────────────────────────────────────────────
+// BAZAR VISITS — usado para "quantos visitaram esta semana"
+// Um registo por acesso à página pública do bazar (não requer login).
+// ─────────────────────────────────────────────
+model BazarVisit {
+  id         String   @id @default(uuid())
+  bazarId    String
+  bazar      Bazar    @relation(fields: [bazarId], references: [id], onDelete: Cascade)
+  visitorId  String?  // id do utilizador, se autenticado (para futura dedupe)
+  createdAt  DateTime @default(now())
+
+  @@index([bazarId, createdAt])
 }
 
 // ─────────────────────────────────────────────
@@ -354,6 +374,9 @@ model Review {
   buyerId    String
   buyer      User    @relation("ReviewsByUser", fields: [buyerId], references: [id])
   rating     Int
+  // Polegar para cima/baixo — recomendação rápida, além das estrelas.
+  // true = recomenda, false = não recomenda, null = não respondeu.
+  recommend  Boolean?
   comment    String? @db.Text
   createdAt  DateTime @default(now())
 
