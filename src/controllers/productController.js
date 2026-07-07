@@ -129,9 +129,11 @@ const create = async (req, res) => {
     });
 
     // Handle uploaded images
+    let imagesFailed = 0;
     if (req.files && req.files.length > 0) {
       const uploadResults = await uploadSvc.uploadMany(req.files, 'bazares/products');
       const validImages = uploadResults.filter(r => r.ok);
+      imagesFailed = req.files.length - validImages.length;
       if (validImages.length > 0) {
         await prisma.productImage.createMany({
           data: validImages.map((r, i) => ({
@@ -141,6 +143,12 @@ const create = async (req, res) => {
             order: i
           }))
         });
+      }
+      if (imagesFailed > 0) {
+        // Não deixamos isto passar em silêncio — o vendedor precisa de saber
+        // que o produto ficou sem (todas ou algumas) fotos, para tentar de
+        // novo, em vez de descobrir só mais tarde na loja pública.
+        logger.error(`[Products.create] ${imagesFailed}/${req.files.length} imagem(ns) falharam a subir para o Cloudinary (produto ${product.id}). Verifique as credenciais CLOUDINARY_* no servidor.`);
       }
     }
 
@@ -161,7 +169,12 @@ const create = async (req, res) => {
     });
 
     logger.info(`[Products] Created: ${product.name} by ${req.user.email}`);
-    return created(res, { product: full }, 'Produto criado com sucesso.');
+    const msg = imagesFailed > 0
+      ? (full.images.length === 0
+          ? 'Produto criado, mas as fotos não foram guardadas — tente adicioná-las novamente em "Editar".'
+          : `Produto criado. ${imagesFailed} imagem(ns) não foram guardadas — pode tentar adicioná-las novamente.`)
+      : 'Produto criado com sucesso.';
+    return created(res, { product: full, imagesFailed }, msg);
   } catch (err) {
     logger.error(`[Products.create] ${err.message}`);
     return serverError(res);
@@ -196,9 +209,11 @@ const update = async (req, res) => {
     });
 
     // Handle new uploaded images
+    let imagesFailed = 0;
     if (req.files && req.files.length > 0) {
       const uploadResults = await uploadSvc.uploadMany(req.files, 'bazares/products');
       const validImages = uploadResults.filter(r => r.ok);
+      imagesFailed = req.files.length - validImages.length;
       const currentCount = await prisma.productImage.count({ where: { productId: product.id } });
       if (validImages.length > 0 && currentCount < 20) {
         await prisma.productImage.createMany({
@@ -207,9 +222,20 @@ const update = async (req, res) => {
           }))
         });
       }
+      if (imagesFailed > 0) {
+        logger.error(`[Products.update] ${imagesFailed}/${req.files.length} imagem(ns) falharam a subir para o Cloudinary (produto ${product.id}). Verifique as credenciais CLOUDINARY_* no servidor.`);
+      }
     }
 
-    return ok(res, { product: updated }, 'Produto actualizado.');
+    const finalProduct = await prisma.product.findUnique({
+      where: { id: product.id },
+      include: { images: { orderBy: { order: 'asc' } } }
+    });
+
+    const msg = imagesFailed > 0
+      ? `Produto actualizado. ${imagesFailed} imagem(ns) não foram guardadas — pode tentar adicioná-las novamente.`
+      : 'Produto actualizado.';
+    return ok(res, { product: finalProduct, imagesFailed }, msg);
   } catch (err) {
     logger.error(`[Products.update] ${err.message}`);
     return serverError(res);
