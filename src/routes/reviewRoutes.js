@@ -15,9 +15,13 @@ const prisma = require('../config/database');
 
 router.post('/', authenticate, async (req, res) => {
   try {
-    const { orderId, productId, rating, comment } = req.body;
+    const { orderId, productId, rating, comment, recommend } = req.body;
     if (!orderId) return badRequest(res, 'orderId obrigatório.');
     if (!rating || rating < 1 || rating > 5) return badRequest(res, 'Avaliação deve ser entre 1 e 5.');
+    // recommend é opcional: aceita true/false ou "true"/"false" vindo do form.
+    const recommendValue = recommend === undefined || recommend === null || recommend === ''
+      ? null
+      : (recommend === true || recommend === 'true');
 
     const order = await prisma.order.findUnique({
       where: { id: orderId },
@@ -40,6 +44,7 @@ router.post('/', authenticate, async (req, res) => {
           sellerId: order.sellerId,
           buyerId: req.user.id,
           rating: parseInt(rating),
+          recommend: recommendValue,
           comment: comment || null
         }
       });
@@ -48,9 +53,16 @@ router.post('/', authenticate, async (req, res) => {
 
       const sellerReviews = await tx.review.findMany({ where: { sellerId: order.sellerId } });
       const avgRating = sellerReviews.reduce((s, r) => s + r.rating, 0) / sellerReviews.length;
+      const thumbsUp = sellerReviews.filter(r => r.recommend === true).length;
+      const thumbsDown = sellerReviews.filter(r => r.recommend === false).length;
       await tx.user.update({
         where: { id: order.sellerId },
-        data: { rating: Math.round(avgRating * 10) / 10, ratingCount: sellerReviews.length }
+        data: {
+          rating: Math.round(avgRating * 10) / 10,
+          ratingCount: sellerReviews.length,
+          thumbsUp,
+          thumbsDown
+        }
       });
 
       const productReviews = await tx.review.findMany({ where: { productId: resolvedProductId } });
