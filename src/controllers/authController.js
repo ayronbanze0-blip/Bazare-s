@@ -251,22 +251,7 @@ const refresh = async (req, res) => {
       return unauthorized(res, 'Refresh token inválido ou expirado. Faça login novamente.');
     }
 
-    const user = await prisma.user.findUnique({
-      where: { id: record.userId },
-      select: {
-        id: true, name: true, email: true, role: true,
-        phone: true, location: true, bio: true,
-        avatarUrl: true, coverUrl: true,
-        verified: true, verifiedSeller: true, active: true,
-        rating: true, ratingCount: true, cancelCount: true,
-        revendedorId: true, createdAt: true, lastLoginAt: true,
-        onboardedAt: true,
-        bazar: { select: { id: true, name: true, slug: true, active: true } },
-        _count: {
-          select: { orders: true, sellerOrders: true, favorites: true, cartItems: true }
-        }
-      }
-    });
+    const user = await prisma.user.findUnique({ where: { id: record.userId } });
     if (!user || !user.active) return unauthorized(res, 'Utilizador inválido.');
 
     // Rotate refresh token
@@ -277,11 +262,8 @@ const refresh = async (req, res) => {
     });
     setRefreshCookie(res, newRefreshToken);
 
-    // Devolve o utilizador já aqui — evita ao frontend ter de fazer um
-    // segundo pedido a /auth/me só para saber quem está autenticado.
-    // Isto poupa uma volta completa de rede em CADA carregamento de página.
     const accessToken = signAccess(user);
-    return ok(res, { accessToken, refreshToken: newRefreshToken, user }, 'Token renovado.');
+    return ok(res, { accessToken, refreshToken: newRefreshToken }, 'Token renovado.');
   } catch (err) {
     logger.error(`[Refresh] ${err.message}`);
     return serverError(res);
@@ -318,6 +300,71 @@ const logoutAll = async (req, res) => {
   }).catch(() => {});
   clearRefreshCookie(res);
   return ok(res, {}, 'Todas as sessões terminadas.');
+};
+
+// ─── VERIFY EMAIL ─────────────────────────────────────────────────
+// A conta fica "verified: true" logo no registo, mas o frontend mantém
+// o ecrã de verificação (ex: para reforçar confiança / uso futuro), por
+// isso estes endpoints ficam disponíveis e funcionais.
+const verifyEmail = async (req, res) => {
+  const { email, code } = req.body;
+  if (!email || !code) return badRequest(res, 'Email e código são obrigatórios.');
+
+  try {
+    const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
+    if (!user) return badRequest(res, 'Utilizador não encontrado.');
+    if (user.verified) return ok(res, {}, 'Email já verificado.');
+
+    const record = await prisma.verificationCode.findFirst({
+      where: { userId: user.id, purpose: 'EMAIL_VERIFY', usedAt: null },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    if (!record || record.code !== code) return badRequest(res, 'Código inválido.');
+    if (new Date() > record.expiresAt) return badRequest(res, 'Código expirado.');
+
+    await prisma.$transaction([
+      prisma.user.update({ where: { id: user.id }, data: { verified: true, emailVerifiedAt: new Date() } }),
+      prisma.verificationCode.update({ where: { id: record.id }, data: { usedAt: new Date() } })
+    ]);
+
+    logger.info(`[Auth] Email verified: ${user.email}`);
+    return ok(res, {}, 'Email verificado com sucesso.');
+  } catch (err) {
+    logger.error(`[VerifyEmail] ${err.message}`);
+    return serverError(res);
+  }
+};
+
+// ─── RESEND VERIFICATION ──────────────────────────────────────────
+const resendVerification = async (req, res) => {
+  const { email } = req.body;
+  if (!email) return badRequest(res, 'Email obrigatório.');
+
+  // Mesma mensagem sempre, para não revelar se o email existe.
+  const msg = 'Se o email existir e não estiver verificado, receberá um novo código.';
+
+  try {
+    const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
+    if (!user || user.verified) return ok(res, {}, msg);
+
+    await prisma.verificationCode.updateMany({
+      where: { userId: user.id, purpose: 'EMAIL_VERIFY', usedAt: null },
+      data: { usedAt: new Date() }
+    });
+
+    const code = genCode();
+    await prisma.verificationCode.create({
+      data: { userId: user.id, code, purpose: 'EMAIL_VERIFY', expiresAt: expiresAt(15) }
+    });
+
+    emailSvc.sendVerificationEmail(user.email, user.name, code).catch(() => {});
+    logger.info(`[Auth] Verification code resent: ${user.email}`);
+    return ok(res, {}, msg);
+  } catch (err) {
+    logger.error(`[ResendVerification] ${err.message}`);
+    return ok(res, {}, msg);
+  }
 };
 
 // ─── FORGOT PASSWORD ──────────────────────────────────────────────
@@ -423,7 +470,8 @@ const me = async (req, res) => {
 module.exports = {
   register,
   login, refresh, logout, logoutAll,
-  forgotPassword, resetPassword, me
+  forgotPassword, resetPassword, me,
+  verifyEmail, resendVerification
 };
 
 
