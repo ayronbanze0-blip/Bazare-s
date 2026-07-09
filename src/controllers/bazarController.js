@@ -180,3 +180,4 @@ const myBazar = async (req, res) => {
 
 module.exports = { list, getOne, create, update, myBazar };
 
+
