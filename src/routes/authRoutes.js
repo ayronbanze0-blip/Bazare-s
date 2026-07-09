@@ -31,6 +31,8 @@ router.post('/logout', ctrl.logout);
 router.post('/logout-all', authenticate, ctrl.logoutAll);
 router.post('/forgot-password', emailLimiter, ctrl.forgotPassword);
 router.post('/reset-password', authLimiter, resetPasswordValidation, ctrl.resetPassword);
+router.post('/verify-email', authLimiter, ctrl.verifyEmail);
+router.post('/resend-verification', emailLimiter, ctrl.resendVerification);
 router.get('/me', authenticate, ctrl.me);
 
 module.exports = router;
