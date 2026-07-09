@@ -2,7 +2,7 @@
 
 const router = require('express').Router();
 const ctrl = require('../controllers/userController');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, optionalAuth } = require('../middleware/auth');
 const { upload } = require('../services/uploadService');
 const { uploadLimiter } = require('../middleware/rateLimiter');
 
@@ -13,11 +13,10 @@ router.put('/me/cover', authenticate, uploadLimiter, upload.single('cover'), ctr
 router.put('/me/password', authenticate, ctrl.changePassword);
 router.put('/me/onboarding', authenticate, ctrl.onboarding);
 router.delete('/me', authenticate, ctrl.deleteAccount);
-
-router.post('/:id/thumb', authenticate, ctrl.giveThumb);
+router.post('/:id/thumb', authenticate, ctrl.sendThumb);
 
 // ─── Public ───────────────────────────────────────────────────────
 // Deve ficar por último para não capturar /me como :id
-router.get('/:id', ctrl.publicProfile);
+router.get('/:id', optionalAuth, ctrl.publicProfile);
 
 module.exports = router;
