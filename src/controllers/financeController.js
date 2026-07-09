@@ -50,6 +50,37 @@ const myFinance = async (req, res) => {
   }
 };
 
+// ─── SELLER: Payment history (comprovativos confirmados) ─────────
+// Cada transacção tipo PAGAMENTO só é criada quando um admin confirma
+// o comprovativo (ver confirmPayment) — ou seja, por definição já está
+// aprovada. Mapeamos status:'APROVADO' para o formato que o frontend
+// (finance.html) espera.
+const listPayments = async (req, res) => {
+  try {
+    const bazar = await prisma.bazar.findUnique({ where: { sellerId: req.user.id } });
+    if (!bazar) return notFound(res, 'Bazar não encontrado.');
+
+    const { page = 1, limit = 50 } = req.query;
+    const { take, skip } = paginate(page, limit);
+
+    const [payments, total] = await Promise.all([
+      prisma.transaction.findMany({
+        where: { sellerId: req.user.id, type: 'PAGAMENTO' },
+        orderBy: { createdAt: 'desc' }, take, skip
+      }),
+      prisma.transaction.count({ where: { sellerId: req.user.id, type: 'PAGAMENTO' } })
+    ]);
+
+    return ok(res, {
+      payments: payments.map(p => ({ ...p, status: 'APROVADO' })),
+      meta: paginateMeta(total, page, limit)
+    });
+  } catch (err) {
+    logger.error(`[Finance.listPayments] ${err.message}`);
+    return serverError(res);
+  }
+};
+
 // ─── SELLER: Submit fee payment proof ────────────────────────────
 const submitPayment = async (req, res) => {
   try {
@@ -238,6 +269,7 @@ const allTransactions = async (req, res) => {
 };
 
 module.exports = {
-  myFinance, submitPayment, confirmPayment, adjustFee,
+  myFinance, listPayments, submitPayment, confirmPayment, adjustFee,
   setFeeRate, platformFinance, allTransactions
 };
+
