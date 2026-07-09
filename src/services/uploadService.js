@@ -43,11 +43,42 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024, files: 20 } // 10MB per file, max 20
 });
 
-// ─── Upload to Cloudinary ────────────────────────────────────────
-const uploadToCloud = async (localPath, folder = 'bazares/products') => {
+// ─── Erros transitórios (rede/timeout) vs erros definitivos ──────
+// Estes valem a pena repetir; erros de auth/validação da Cloudinary não.
+const isTransientError = (err) => {
+  const code = err.code || '';
+  const msg = (err.message || '').toLowerCase();
+  return (
+    ['ENOTFOUND', 'ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'EAI_AGAIN'].includes(code) ||
+    msg.includes('timeout') ||
+    msg.includes('network') ||
+    msg.includes('socket hang up')
+  );
+};
+
+// Mensagem amigável e HONESTA para o utilizador final — nunca inventa
+// "sem ligação à Internet" quando o problema é outro (ex.: credenciais
+// Cloudinary em falta, ficheiro corrompido, quota excedida, etc.)
+const friendlyUploadError = (err) => {
+  if (isTransientError(err)) {
+    return 'Falha de rede ao enviar a imagem. Tenta novamente.';
+  }
+  if (err.http_code === 401 || /invalid.*api.*key|api.?secret/i.test(err.message || '')) {
+    return 'Erro de configuração do serviço de imagens. Contacta o suporte.';
+  }
+  if (/file size|too large/i.test(err.message || '')) {
+    return 'Imagem demasiado grande.';
+  }
+  return `Não foi possível processar a imagem (${err.message || 'erro desconhecido'}).`;
+};
+
+// ─── Upload to Cloudinary (com retry para falhas transitórias) ───
+const uploadToCloud = async (localPath, folder = 'bazares/products', attempt = 1) => {
+  const MAX_ATTEMPTS = 3;
   try {
     const result = await cloudinary.uploader.upload(localPath, {
       folder,
+      timeout: 60000,
       transformation: [
         { width: 1200, height: 1200, crop: 'limit', quality: 'auto:good' },
         { fetch_format: 'auto' }
@@ -59,9 +90,15 @@ const uploadToCloud = async (localPath, folder = 'bazares/products') => {
     });
     return { ok: true, url: result.secure_url, publicId: result.public_id };
   } catch (err) {
-    logger.error(`[Cloudinary] Upload failed: ${err.message}`);
+    const transient = isTransientError(err);
+    if (transient && attempt < MAX_ATTEMPTS) {
+      logger.warn(`[Cloudinary] Tentativa ${attempt} falhou (${err.message}) — a repetir...`);
+      await new Promise(r => setTimeout(r, attempt * 500)); // backoff: 500ms, 1000ms
+      return uploadToCloud(localPath, folder, attempt + 1);
+    }
+    logger.error(`[Cloudinary] Upload falhou definitivamente após ${attempt} tentativa(s): ${err.message}`);
     fs.unlink(localPath, () => {});
-    return { ok: false, error: err.message };
+    return { ok: false, error: friendlyUploadError(err), transient };
   }
 };
 
