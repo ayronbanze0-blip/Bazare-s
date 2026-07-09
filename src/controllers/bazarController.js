@@ -3,26 +3,11 @@
 const { validationResult } = require('express-validator');
 
 const { ok, created, badRequest, forbidden, notFound, conflict, serverError, validationError } = require('../utils/response');
-const { paginate, paginateMeta, sanitize, uniqueSlug, startOfWeek, startOfMonth, getBadgeTier } = require('../utils/helpers');
+const { paginate, paginateMeta, sanitize, uniqueSlug } = require('../utils/helpers');
 const uploadSvc = require('../services/uploadService');
 const logger = require('../utils/logger');
 
 const prisma = require('../config/database');
-
-// ─── Vendas do mês corrente por vendedor (para medalhas) ──────────
-// Agrupa encomendas ENTREGUE deste mês por sellerId. Usado para calcular
-// a medalha (Bronze/Prata/Ouro) e para ordenar os bazares Ouro no topo.
-const monthlySalesBySeller = async (sellerIds = []) => {
-  if (!sellerIds.length) return {};
-  const rows = await prisma.order.groupBy({
-    by: ['sellerId'],
-    where: { sellerId: { in: sellerIds }, status: 'ENTREGUE', createdAt: { gte: startOfMonth() } },
-    _count: { _all: true }
-  });
-  const map = {};
-  rows.forEach(r => { map[r.sellerId] = r._count._all; });
-  return map;
-};
 
 // ─── PUBLIC: List bazars ─────────────────────────────────────────
 const list = async (req, res) => {
@@ -36,26 +21,16 @@ const list = async (req, res) => {
       ...(category && { category })
     };
 
-    // Vem-se a lista completa (limitada) para poder ordenar por medalha —
-    // os bazares Ouro ficam sempre no topo, depois Prata, depois Bronze,
-    // mantendo a ordem por mais recente dentro de cada nível.
-    const all = await prisma.bazar.findMany({
-      where, orderBy: { createdAt: 'desc' }, take: 500,
-      include: {
-        seller: { select: { id: true, name: true, rating: true, ratingCount: true, verifiedSeller: true, thumbsUp: true, thumbsDown: true } },
-        _count: { select: { products: { where: { active: true } } } }
-      }
-    });
-
-    const salesMap = await monthlySalesBySeller(all.map(b => b.sellerId));
-    const withBadge = all.map(b => {
-      const monthlySales = salesMap[b.sellerId] || 0;
-      return { ...b, monthlySales, badge: getBadgeTier(monthlySales) };
-    });
-    withBadge.sort((a, b) => b.badge.rank - a.badge.rank || b.monthlySales - a.monthlySales);
-
-    const total = withBadge.length;
-    const bazars = withBadge.slice(skip, skip + take);
+    const [bazars, total] = await Promise.all([
+      prisma.bazar.findMany({
+        where, take, skip, orderBy: { createdAt: 'desc' },
+        include: {
+          seller: { select: { id: true, name: true, rating: true, ratingCount: true, verifiedSeller: true } },
+          _count: { select: { products: { where: { active: true } } } }
+        }
+      }),
+      prisma.bazar.count({ where })
+    ]);
 
     return ok(res, { bazars, meta: paginateMeta(total, page, limit) });
   } catch (err) {
@@ -81,19 +56,7 @@ const getOne = async (req, res) => {
     });
 
     if (!bazar) return notFound(res, 'Bazar não encontrado.');
-
-    // Regista a visita (não bloqueia a resposta) — usado para "quantos
-    // visitaram o seu bazar esta semana" no painel do vendedor.
-    prisma.bazarVisit.create({
-      data: { bazarId: bazar.id, visitorId: req.user?.id || null }
-    }).catch(err => logger.warn(`[Bazars.getOne] Falha ao registar visita: ${err.message}`));
-
-    const [weeklyVisits, monthlySales] = await Promise.all([
-      prisma.bazarVisit.count({ where: { bazarId: bazar.id, createdAt: { gte: startOfWeek() } } }),
-      prisma.order.count({ where: { sellerId: bazar.sellerId, status: 'ENTREGUE', createdAt: { gte: startOfMonth() } } })
-    ]);
-
-    return ok(res, { bazar: { ...bazar, weeklyVisits, monthlySales, badge: getBadgeTier(monthlySales) } });
+    return ok(res, { bazar });
   } catch (err) {
     logger.error(`[Bazars.getOne] ${err.message}`);
     return serverError(res);
@@ -167,12 +130,15 @@ const update = async (req, res) => {
     // porque agora aceitamos dois campos de ficheiro em simultâneo.
     const bannerFile = req.files?.banner?.[0];
     const logoFile = req.files?.logo?.[0];
+    const imageUploadErrors = [];
 
     if (bannerFile) {
       const result = await uploadSvc.uploadBazarBanner(bannerFile.path);
       if (result.ok) {
         await prisma.bazar.update({ where: { id: bazar.id }, data: { bannerUrl: result.url } });
         updated.bannerUrl = result.url;
+      } else {
+        imageUploadErrors.push({ field: 'banner', error: result.error });
       }
     }
     if (logoFile) {
@@ -180,10 +146,15 @@ const update = async (req, res) => {
       if (result.ok) {
         await prisma.bazar.update({ where: { id: bazar.id }, data: { logoUrl: result.url } });
         updated.logoUrl = result.url;
+      } else {
+        imageUploadErrors.push({ field: 'logo', error: result.error });
       }
     }
 
-    return ok(res, { bazar: updated }, 'Bazar actualizado.');
+    const message = imageUploadErrors.length > 0
+      ? `Bazar actualizado, mas ${imageUploadErrors.length} imagem(ns) falharam ao enviar.`
+      : 'Bazar actualizado.';
+    return ok(res, { bazar: updated, imageUploadErrors }, message);
   } catch (err) {
     logger.error(`[Bazars.update] ${err.message}`);
     return serverError(res);
@@ -196,23 +167,11 @@ const myBazar = async (req, res) => {
     const bazar = await prisma.bazar.findUnique({
       where: { sellerId: req.user.id },
       include: {
-        seller: { select: { id: true, name: true, rating: true, ratingCount: true, verifiedSeller: true, thumbsUp: true, thumbsDown: true } },
         _count: { select: { products: true, orders: true } }
       }
     });
     if (!bazar) return notFound(res, 'Ainda não criou um Bazar.');
-
-    const [weeklyVisits, monthlySales] = await Promise.all([
-      prisma.bazarVisit.count({ where: { bazarId: bazar.id, createdAt: { gte: startOfWeek() } } }),
-      prisma.order.count({ where: { sellerId: req.user.id, status: 'ENTREGUE', createdAt: { gte: startOfMonth() } } })
-    ]);
-    const badge = getBadgeTier(monthlySales);
-    // Próximo patamar, para mostrar progresso no painel ("faltam N vendas para Prata/Ouro").
-    const nextTier = badge.tier === 'BRONZE' ? { label: 'Prata', needed: Math.max(0, 30 - monthlySales) }
-      : badge.tier === 'PRATA' ? { label: 'Ouro', needed: Math.max(0, 51 - monthlySales) }
-      : null;
-
-    return ok(res, { bazar: { ...bazar, weeklyVisits, monthlySales, badge, nextTier } });
+    return ok(res, { bazar });
   } catch (err) {
     logger.error(`[Bazars.myBazar] ${err.message}`);
     return serverError(res);
@@ -220,5 +179,4 @@ const myBazar = async (req, res) => {
 };
 
 module.exports = { list, getOne, create, update, myBazar };
-
 
