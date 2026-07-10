@@ -10,9 +10,13 @@ const morgan = require('morgan');
 const routes = require('./routes');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 const { apiLimiter } = require('./middleware/rateLimiter');
+const requestId = require('./middleware/requestId');
 const logger = require('./utils/logger');
 
 const app = express();
+
+// ─── Request ID (tem de ser o 1º middleware — tudo o resto usa req.id) ──
+app.use(requestId);
 
 // ─── Security Headers (Helmet + CSP) ─────────────────────────────
 const frontendOrigins = (process.env.FRONTEND_URL || '')
@@ -84,9 +88,13 @@ app.use(cookieParser());
 app.use(compression());
 
 // ─── Request Logging ─────────────────────────────────────────────
-app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev', {
-  stream: { write: (msg) => logger.info(msg.trim()) }
-}));
+morgan.token('id', (req) => req.id);
+app.use(morgan(
+  process.env.NODE_ENV === 'production'
+    ? ':id :method :url :status :res[content-length] - :response-time ms'
+    : ':id :method :url :status :response-time ms',
+  { stream: { write: (msg) => logger.info(msg.trim()) } }
+));
 
 // ─── Trust proxy (for correct req.ip behind load balancers) ──────
 app.set('trust proxy', 1);
