@@ -120,16 +120,17 @@ const placeOrder = async (req, res) => {
       }
     });
 
-    // Post-transaction: notifications & emails (non-blocking, em paralelo —
-    // eram feitas em série antes, o que atrasava a resposta quando uma
-    // encomenda tinha vários vendedores)
-    await Promise.all(createdOrders.map(async (order) => {
+    // Notificações & emails DEPOIS de responder — não devem atrasar a
+    // confirmação da compra. Um SMTP lento (comum, 1-3s por email) não
+    // pode ser o que decide quanto tempo o comprador espera pelo "compra
+    // confirmada". Erros aqui só vão para o log, nunca para o cliente.
+    Promise.all(createdOrders.map(async (order) => {
       const seller = await prisma.user.findUnique({ where: { id: order.sellerId } });
       notifSvc.orderReceived(order.sellerId, order.id, order.items.map(i => i.name).join(', '), order.total);
       if (seller?.email) {
         emailSvc.sendOrderNotificationEmail(seller.email, seller.name, order).catch(() => {});
       }
-    }));
+    })).catch((e) => logger.warn(`[Orders.placeOrder] Falha ao notificar vendedor(es): ${e.message}`));
 
     logger.info(`[Orders] ${createdOrders.length} order(s) placed by ${req.user.email}`);
     return created(res, { orders: createdOrders }, 'Encomenda realizada com sucesso.');
@@ -380,20 +381,30 @@ const submitReview = async (req, res) => {
       // Mark order as rated
       await tx.order.update({ where: { id: order.id }, data: { rated: true } });
 
-      // Recalculate seller rating
-      const sellerReviews = await tx.review.findMany({ where: { sellerId: order.sellerId } });
-      const avgRating = sellerReviews.reduce((s, r) => s + r.rating, 0) / sellerReviews.length;
+      // Recalculate seller rating — usar aggregate() para a BD calcular a
+      // média directamente, em vez de carregar TODAS as reviews do vendedor
+      // para a memória do Node só para somar. Com um vendedor popular (milhares
+      // de reviews), a versão antiga ficava mais lenta a cada review nova, e
+      // mantinha a transacção (e a ligação à BD) aberta cada vez mais tempo.
+      const sellerAgg = await tx.review.aggregate({
+        where: { sellerId: order.sellerId },
+        _avg: { rating: true },
+        _count: true
+      });
       await tx.user.update({
         where: { id: order.sellerId },
-        data: { rating: Math.round(avgRating * 10) / 10, ratingCount: sellerReviews.length }
+        data: { rating: Math.round((sellerAgg._avg.rating || 0) * 10) / 10, ratingCount: sellerAgg._count }
       });
 
-      // Recalculate product rating
-      const productReviews = await tx.review.findMany({ where: { productId } });
-      const avgProductRating = productReviews.reduce((s, r) => s + r.rating, 0) / productReviews.length;
+      // Recalculate product rating (mesma razão)
+      const productAgg = await tx.review.aggregate({
+        where: { productId },
+        _avg: { rating: true },
+        _count: true
+      });
       await tx.product.update({
         where: { id: productId },
-        data: { rating: Math.round(avgProductRating * 10) / 10, ratingCount: productReviews.length }
+        data: { rating: Math.round((productAgg._avg.rating || 0) * 10) / 10, ratingCount: productAgg._count }
       });
     });
 
@@ -415,4 +426,5 @@ const submitReview = async (req, res) => {
 };
 
 module.exports = { placeOrder, myOrders, sellerOrders, getOne, updateStatus, submitReview };
+
 
