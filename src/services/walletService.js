@@ -86,14 +86,24 @@ const debit = async (tx, { userId, amount, type, description, referenceType = nu
   let wallet = await tx.wallet.findUnique({ where: { userId } });
   if (!wallet) wallet = await tx.wallet.create({ data: { userId, balance: 0 } });
 
-  if (wallet.balance < amount) {
+  // Verificação de saldo + decremento têm de ser a MESMA operação atómica.
+  // A versão anterior fazia "if (wallet.balance < amount) throw" e só DEPOIS
+  // decrementava — dois débitos concorrentes na mesma wallet (ex.: duplo
+  // clique, ou dois pagamentos em paralelo) podiam ambos ler o saldo antigo,
+  // ambos passar na verificação, e o saldo final ficar negativo. O `where`
+  // abaixo faz o Postgres verificar e decrementar num único passo atómico —
+  // impossível dois pedidos concorrentes "passarem" ao mesmo tempo além do
+  // saldo disponível.
+  const result = await tx.wallet.updateMany({
+    where: { id: wallet.id, balance: { gte: amount } },
+    data: { balance: { decrement: amount } }
+  });
+
+  if (result.count === 0) {
     throw new InsufficientFundsError(`Saldo insuficiente. Disponível: ${wallet.balance.toLocaleString('pt-MZ')} MT.`);
   }
 
-  const updated = await tx.wallet.update({
-    where: { id: wallet.id },
-    data: { balance: { decrement: amount } }
-  });
+  const updated = await tx.wallet.findUnique({ where: { id: wallet.id } });
 
   const walletTx = await tx.walletTransaction.create({
     data: {
@@ -200,3 +210,4 @@ module.exports = {
   getStatement,
   getPlatformAdmin
 };
+
