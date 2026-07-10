@@ -46,6 +46,16 @@ const errorHandler = (err, req, res, next) => {
   if (err.code === 'P2003') {
     return res.status(400).json({ success: false, message: 'Referência inválida.' });
   }
+  // P2024: esgotou o pool de ligações à base de dados (muitos pedidos em
+  // simultâneo). Sem isto, o cliente veria um "Erro interno do servidor"
+  // genérico em vez de perceber que é só um pico de carga transitório.
+  if (err.code === 'P2024' || /timed out fetching a new connection/i.test(err.message || '')) {
+    return res.status(503).json({
+      success: false,
+      message: 'Servidor com muitos pedidos em simultâneo. Tenta novamente em alguns segundos.',
+      requestId: req.id
+    });
+  }
 
   // JWT errors
   if (err.name === 'JsonWebTokenError') {
