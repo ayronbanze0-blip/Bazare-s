@@ -1,7 +1,7 @@
 'use strict';
 
 const logger = require('../utils/logger');
-const { serverError, notFound } = require('../utils/response');
+const { notFound } = require('../utils/response');
 
 // ─── 404 Handler ────────────────────────────────────────────────
 const notFoundHandler = (req, res) => {
@@ -11,6 +11,7 @@ const notFoundHandler = (req, res) => {
 // ─── Global Error Handler ────────────────────────────────────────
 const errorHandler = (err, req, res, next) => {
   logger.error(`[Error] ${err.message}`, {
+    requestId: req.id,
     stack: err.stack,
     url: req.originalUrl,
     method: req.method,
@@ -63,7 +64,7 @@ const errorHandler = (err, req, res, next) => {
   const msg = process.env.NODE_ENV === 'production'
     ? 'Erro interno do servidor.'
     : err.message;
-  return serverError(res, msg);
+  return res.status(500).json({ success: false, message: msg, requestId: req.id });
 };
 
 module.exports = { notFoundHandler, errorHandler };
