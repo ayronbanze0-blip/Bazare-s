@@ -16,7 +16,7 @@ const productValidation = [
 
 // ─── Public ───────────────────────────────────────────────────────
 router.get('/', optionalAuth, ctrl.list);
-router.get('/featured', ctrl.featured);
+router.get('/featured', optionalAuth, ctrl.featured);
 
 // ─── Seller (antes de /:id para não ser capturado) ───────────────
 router.get('/mine', authenticate, isSeller, ctrl.myProducts);
@@ -34,7 +34,7 @@ router.post('/:productId/favorite', authenticate, ctrl.toggleFavorite);
 
 // ─── Public — lookup genérico (deve ser o último) ────────────────
 router.get('/:id', optionalAuth, ctrl.getOne);
-router.get('/:id/related', ctrl.related);
+router.get('/:id/related', optionalAuth, ctrl.related);
 router.post('/:id/viewed', ctrl.trackView);   // fire-and-forget, sem auth
 
 module.exports = router;
