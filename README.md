@@ -101,3 +101,23 @@ e activa os eventos `payment.succeeded` e `payment.failed`. Copia o
 - **Pagamentos split / recorrentes / checkout hospedado** da ZumboPay
   não foram usados — ficam disponíveis para uma fase futura (ex: cobrar
   directamente o comprador em vez de pagamento na entrega).
+
+## Testes de contrato (backend ↔ frontend)
+
+O ficheiro `tests/contract/api-contract.json` é a fonte única de
+verdade das chaves que o frontend lê de cada resposta (`res.data.X`).
+`tests/contract/response-shape.test.js` chama os controllers
+directamente (Prisma mockado — não precisa de base de dados nem de
+rede) e falha se algum controller devolver uma chave diferente da que
+está documentada. Isto existe por causa de um bug real: a listagem de
+Favoritos devolvia `{ favorites: [...] }` mas o frontend lia
+`res.data.products`, e a página ficava sempre vazia, sem nenhum erro
+visível.
+
+Regra ao mexer num endpoint: actualizar primeiro o `api-contract.json`
+(e o ficheiro do frontend que lê essa chave), só depois o controller.
+
+```bash
+npm install
+npm test
+```
