@@ -5,17 +5,24 @@ const logger = require('../utils/logger');
 
 // ─── Transporter ────────────────────────────────────────────────
 let transporter;
+let usingEthereal = false;
 
-const getTransporter = () => {
+const getTransporter = async () => {
   if (transporter) return transporter;
+
   if (process.env.NODE_ENV === 'test' || !process.env.SMTP_USER) {
-    // Use Ethereal (fake SMTP) in dev/test
+    // Gera uma conta de teste REAL no Ethereal (as credenciais estáticas
+    // antigas 'ethereal_user'/'ethereal_pass' eram inválidas e faziam
+    // qualquer envio falhar sempre com timeout de ligação).
+    const testAccount = await nodemailer.createTestAccount();
     transporter = nodemailer.createTransport({
       host: 'smtp.ethereal.email',
-      port: 465,
-      auth: { user: 'ethereal_user', pass: 'ethereal_pass' }
+      port: 587,
+      secure: false,
+      auth: { user: testAccount.user, pass: testAccount.pass }
     });
-    logger.warn('[Email] Using mock SMTP (Ethereal). Set SMTP_USER to use real email.');
+    usingEthereal = true;
+    logger.warn('[Email] Sem SMTP_USER definido — a usar conta de teste Ethereal (os emails NÃO chegam a caixas reais). Define SMTP_HOST/SMTP_USER/SMTP_PASS no Railway para envio real.');
   } else {
     transporter = nodemailer.createTransport({
       host: process.env.SMTP_HOST || 'smtp.gmail.com',
@@ -70,8 +77,8 @@ const baseTemplate = (content) => `
 // ─── Email Sender ────────────────────────────────────────────────
 const sendEmail = async ({ to, subject, html }) => {
   try {
-    const transporter = getTransporter();
-    
+    const transporter = await getTransporter();
+
     // Adicionei um log de "A tentar enviar..."
     logger.info(`[Email] A enviar para ${to}...`);
 
@@ -82,8 +89,11 @@ const sendEmail = async ({ to, subject, html }) => {
       html
     });
 
-    // Esta linha SÓ é atingida se o Mailtrap responder com sucesso
-    logger.info(`[Email] Sucesso! ID do Mailtrap: ${info.messageId}`);
+    if (usingEthereal) {
+      logger.info(`[Email] (Modo teste Ethereal) Pré-visualização: ${nodemailer.getTestMessageUrl(info)}`);
+    } else {
+      logger.info(`[Email] Sucesso! ID: ${info.messageId}`);
+    }
     return { ok: true, messageId: info.messageId };
     
   } catch (err) {
@@ -191,3 +201,4 @@ module.exports = {
   sendAccountSuspendedEmail,
   sendFeeAlertEmail
 };
+
