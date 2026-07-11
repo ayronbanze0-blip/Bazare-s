@@ -8,6 +8,7 @@ const uploadSvc = require('../services/uploadService');
 const logger = require('../utils/logger');
 
 const prisma = require('../config/database');
+const { attachFavorites } = require('./productController');
 
 // ─── PUBLIC: List bazars ─────────────────────────────────────────
 const list = async (req, res) => {
@@ -56,6 +57,7 @@ const getOne = async (req, res) => {
     });
 
     if (!bazar) return notFound(res, 'Bazar não encontrado.');
+    bazar.products = await attachFavorites(bazar.products, req.user?.id);
     return ok(res, { bazar });
   } catch (err) {
     logger.error(`[Bazars.getOne] ${err.message}`);
@@ -179,5 +181,6 @@ const myBazar = async (req, res) => {
 };
 
 module.exports = { list, getOne, create, update, myBazar };
+
 
 
