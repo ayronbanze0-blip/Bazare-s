@@ -3,7 +3,7 @@
 const router = require('express').Router();
 const { body } = require('express-validator');
 const ctrl = require('../controllers/bazarController');
-const { authenticate, isSeller } = require('../middleware/auth');
+const { authenticate, isSeller, optionalAuth } = require('../middleware/auth');
 const { upload } = require('../services/uploadService');
 
 const bazarValidation = [
@@ -14,7 +14,7 @@ const bazarValidation = [
 
 router.get('/', ctrl.list);
 router.get('/me', authenticate, isSeller, ctrl.myBazar);
-router.get('/:idOrSlug', ctrl.getOne);
+router.get('/:idOrSlug', optionalAuth, ctrl.getOne);
 router.post('/', authenticate, isSeller, bazarValidation, ctrl.create);
 router.put('/me', authenticate, isSeller, upload.fields([{ name: 'banner', maxCount: 1 }, { name: 'logo', maxCount: 1 }]), ctrl.update);
 
