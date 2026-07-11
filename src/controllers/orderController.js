@@ -249,11 +249,16 @@ const updateStatus = async (req, res) => {
       if (order.status !== 'EM_ENTREGA') return badRequest(res, 'Encomenda ainda não está em entrega.');
     }
 
-    // Sellers cannot go backwards in flow (except cancel)
-    if (isSeller && !isAdmin && status !== 'CANCELADA') {
-      const curIdx = STATUS_FLOW.indexOf(order.status);
-      const newIdx = STATUS_FLOW.indexOf(status);
-      if (newIdx <= curIdx) return badRequest(res, 'Não é possível retroceder o estado da encomenda.');
+    // Sellers cannot go backwards in flow (except cancel), and cannot
+    // confirm ENTREGUE themselves — só o comprador (ou admin) pode
+    // confirmar que o artigo chegou.
+    if (isSeller && !isAdmin) {
+      if (status === 'ENTREGUE') return forbidden(res, 'Apenas o comprador pode confirmar a entrega.');
+      if (status !== 'CANCELADA') {
+        const curIdx = STATUS_FLOW.indexOf(order.status);
+        const newIdx = STATUS_FLOW.indexOf(status);
+        if (newIdx <= curIdx) return badRequest(res, 'Não é possível retroceder o estado da encomenda.');
+      }
     }
 
     const updateData = {
@@ -426,5 +431,6 @@ const submitReview = async (req, res) => {
 };
 
 module.exports = { placeOrder, myOrders, sellerOrders, getOne, updateStatus, submitReview };
+
 
 
