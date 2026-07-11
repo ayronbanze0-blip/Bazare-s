@@ -1,0 +1,23 @@
+{
+  "_readme": "Fonte única de verdade das chaves de resposta ('data.*') que o frontend espera de cada endpoint. Gerado a partir de uma auditoria linha-a-linha do frontend (grep a todos os 'res?.data?.X' associados a cada chamada api.*). Sempre que um controller mudar o nome de uma chave devolvida, response-shape.test.js falha — é o mesmo tipo de bug que causou 'Favoritos' a aparecer sempre vazio (backend devolvia 'favorites', frontend lia 'products'). Ao adicionar/alterar um endpoint: 1) actualizar aqui a chave exacta lida pelo frontend, 2) actualizar o controller, 3) correr `npm test`.",
+
+  "GET /products": { "dataKeys": ["products", "meta"] },
+  "GET /products/featured": { "dataKeys": ["products"] },
+  "GET /products/:id": { "dataKeys": ["product"] },
+  "GET /products/:id/related": { "dataKeys": ["products"] },
+  "GET /products/mine": { "dataKeys": ["products", "meta"] },
+  "GET /products/favorites": { "dataKeys": ["products"] },
+  "POST /products/:productId/favorite": { "dataKeys": ["isFavorite"] },
+  "PATCH /products/:id/toggle": { "dataKeys": ["active"] },
+  "PATCH /products/:id/stock": { "dataKeys": ["stock", "outOfStock"] },
+
+  "GET /bazars": { "dataKeys": ["bazars", "meta"] },
+  "GET /bazars/:idOrSlug": { "dataKeys": ["bazar"] },
+  "GET /bazars/me": { "dataKeys": ["bazar"] },
+
+  "GET /cart": { "dataKeys": ["items", "total"] },
+  "GET /orders/mine": { "dataKeys": ["orders", "meta"] },
+  "GET /orders/received": { "dataKeys": ["orders", "meta"] },
+  "GET /wallet/me": { "dataKeys": ["balance", "transactions", "meta"] },
+  "GET /notifications": { "dataKeys": ["notifications", "unreadCount", "meta"] }
+}
