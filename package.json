@@ -16,7 +16,8 @@
     "db:generate": "npx prisma generate",
     "db:seed": "node prisma/seed.js",
     "db:studio": "npx prisma studio",
-    "db:backup": "node scripts/backup-db.js"
+    "db:backup": "node scripts/backup-db.js",
+    "test": "jest tests/contract"
   },
   "dependencies": {
     "@prisma/client": "^5.10.2",
@@ -40,6 +41,7 @@
     "xss": "^1.0.15"
   },
   "devDependencies": {
+    "jest": "^29.7.0",
     "nodemon": "^3.1.0",
     "prisma": "^5.10.2"
   }
