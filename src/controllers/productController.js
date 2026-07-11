@@ -9,6 +9,24 @@ const logger = require('../utils/logger');
 
 const prisma = require('../config/database');
 
+// ─── Marca isFavorite em cada produto de uma lista, numa única query ────
+// Antes disto, listagens (list/featured/related) nunca calculavam
+// isFavorite — o coração aparecia sempre vazio mesmo para produtos já
+// favoritados, e tocar nele "removia" um favorito que o utilizador
+// pensava estar a adicionar. Só a página de produto único (getOne)
+// calculava isto correctamente.
+async function attachFavorites(products, userId) {
+  if (!userId || !products.length) {
+    return products.map(p => ({ ...p, isFavorite: false }));
+  }
+  const favs = await prisma.favorite.findMany({
+    where: { userId, productId: { in: products.map(p => p.id) } },
+    select: { productId: true }
+  });
+  const favSet = new Set(favs.map(f => f.productId));
+  return products.map(p => ({ ...p, isFavorite: favSet.has(p.id) }));
+}
+
 // ─── PUBLIC: List products ───────────────────────────────────────
 const list = async (req, res) => {
   try {
@@ -52,7 +70,7 @@ const list = async (req, res) => {
       prisma.product.count({ where })
     ]);
 
-    return ok(res, { products, meta: paginateMeta(total, page, limit) });
+    return ok(res, { products: await attachFavorites(products, req.user?.id), meta: paginateMeta(total, page, limit) });
   } catch (err) {
     logger.error(`[Products.list] ${err.message}`);
     return serverError(res);
@@ -396,7 +414,13 @@ const myFavorites = async (req, res) => {
       },
       orderBy: { createdAt: 'desc' }
     });
-    return ok(res, { favorites: favs.map(f => f.product) });
+    // NOTA: a chave tem de ser "products" — todas as outras listagens de
+    // produtos (list/featured/related/myProducts) usam esse nome, e é o
+    // que o favorites.html lê (`res?.data?.products`). Chamar-lhe
+    // "favorites" aqui fazia a página aparecer sempre vazia, mesmo com
+    // favoritos guardados (o contador do dashboard, que conta directamente
+    // na tabela Favorite, continuava certo — só esta listagem estava presa).
+    return ok(res, { products: favs.map(f => f.product) });
   } catch (err) {
     logger.error(`[Products.myFavorites] ${err.message}`);
     return serverError(res);
@@ -470,7 +494,7 @@ const featured = async (req, res) => {
         bazar: { select: { id: true, name: true, slug: true } }
       }
     });
-    return ok(res, { products });
+    return ok(res, { products: await attachFavorites(products, req.user?.id) });
   } catch (err) {
     logger.error(`[Products.featured] ${err.message}`);
     return serverError(res);
@@ -500,12 +524,13 @@ const related = async (req, res) => {
         bazar: { select: { name: true, slug: true } }
       }
     });
-    return ok(res, { products });
+    return ok(res, { products: await attachFavorites(products, req.user?.id) });
   } catch (err) {
     logger.error(`[Products.related] ${err.message}`);
     return serverError(res);
   }
 };
 
-module.exports = { list, getOne, featured, related, trackView, create, update, deleteImage, reorderImages, toggle, toggleStock, remove, myProducts, toggleFavorite, myFavorites };
+module.exports = { list, getOne, featured, related, trackView, create, update, deleteImage, reorderImages, toggle, toggleStock, remove, myProducts, toggleFavorite, myFavorites, attachFavorites };
+
 
