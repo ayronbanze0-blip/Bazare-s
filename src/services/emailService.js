@@ -1,41 +1,17 @@
 'use strict';
 
-const nodemailer = require('nodemailer');
 const logger = require('../utils/logger');
 
-// ─── Transporter ────────────────────────────────────────────────
-let transporter;
-let usingEthereal = false;
+// ─── Envio via Twilio SendGrid (API HTTPS) ─────────────────────────
+// O Railway bloqueia ligações SMTP de saída (portas 465/587) nos planos
+// Free/Trial/Hobby — só o plano Pro liberta SMTP. Por isso usamos a API
+// HTTPS do SendGrid em vez de SMTP/Nodemailer: a porta 443 nunca é bloqueada.
+// O sender foi verificado via Single Sender Verification (sem domínio
+// próprio) em Settings → Sender Authentication no dashboard do SendGrid.
+const SENDGRID_API_URL = 'https://api.sendgrid.com/v3/mail/send';
 
-const getTransporter = async () => {
-  if (transporter) return transporter;
-
-  if (process.env.NODE_ENV === 'test' || !process.env.SMTP_USER) {
-    // Gera uma conta de teste REAL no Ethereal (as credenciais estáticas
-    // antigas 'ethereal_user'/'ethereal_pass' eram inválidas e faziam
-    // qualquer envio falhar sempre com timeout de ligação).
-    const testAccount = await nodemailer.createTestAccount();
-    transporter = nodemailer.createTransport({
-      host: 'smtp.ethereal.email',
-      port: 587,
-      secure: false,
-      auth: { user: testAccount.user, pass: testAccount.pass }
-    });
-    usingEthereal = true;
-    logger.warn('[Email] Sem SMTP_USER definido — a usar conta de teste Ethereal (os emails NÃO chegam a caixas reais). Define SMTP_HOST/SMTP_USER/SMTP_PASS no Railway para envio real.');
-  } else {
-    transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST || 'smtp.gmail.com',
-      port: parseInt(process.env.SMTP_PORT) || 465,
-      secure: true,
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS
-      }
-    });
-  }
-  return transporter;
-};
+const SENDER_EMAIL = process.env.EMAIL_FROM_ADDRESS || 'bazares03@gmail.com';
+const SENDER_NAME = process.env.EMAIL_FROM_NAME || 'Bazares';
 
 // ─── HTML Template Base ─────────────────────────────────────────
 const baseTemplate = (content) => `
@@ -68,7 +44,7 @@ const baseTemplate = (content) => `
     <div class="body">${content}</div>
     <div class="footer">
       © ${new Date().getFullYear()} Bazares · Marketplace Moçambicano<br>
-      📧 bazares09@gmail.com · 📞 +258 84 676 1897
+      📧 ${SENDER_EMAIL} · 📞 +258 84 676 1897
     </div>
   </div>
 </body>
@@ -76,26 +52,39 @@ const baseTemplate = (content) => `
 
 // ─── Email Sender ────────────────────────────────────────────────
 const sendEmail = async ({ to, subject, html }) => {
-  try {
-    const transporter = await getTransporter();
+  if (!process.env.SENDGRID_API_KEY) {
+    logger.warn(`[Email] Sem SENDGRID_API_KEY definida — email para ${to} NÃO foi enviado. Define SENDGRID_API_KEY no Railway.`);
+    return { ok: false, error: 'SENDGRID_API_KEY não configurada' };
+  }
 
-    // Adicionei um log de "A tentar enviar..."
+  try {
     logger.info(`[Email] A enviar para ${to}...`);
 
-    const info = await transporter.sendMail({
-      from: `"Bazares" <bazares03@gmail.com>`,
-      to,
-      subject,
-      html
+    const res = await fetch(SENDGRID_API_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.SENDGRID_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        personalizations: [{ to: [{ email: to }] }],
+        from: { email: SENDER_EMAIL, name: SENDER_NAME },
+        subject,
+        content: [{ type: 'text/html', value: html }]
+      })
     });
 
-    if (usingEthereal) {
-      logger.info(`[Email] (Modo teste Ethereal) Pré-visualização: ${nodemailer.getTestMessageUrl(info)}`);
-    } else {
-      logger.info(`[Email] Sucesso! ID: ${info.messageId}`);
+    // Sucesso do SendGrid é 202 com corpo vazio — não dá para fazer res.json()
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      const msg = data.errors?.map(e => e.message).join('; ') || `SendGrid respondeu ${res.status}`;
+      throw new Error(msg);
     }
-    return { ok: true, messageId: info.messageId };
-    
+
+    const messageId = res.headers.get('x-message-id');
+    logger.info(`[Email] Sucesso! ID: ${messageId}`);
+    return { ok: true, messageId };
+
   } catch (err) {
     logger.error(`[Email] ERRO CRÍTICO: ${err.message}`);
     return { ok: false, error: err.message };
@@ -201,4 +190,5 @@ module.exports = {
   sendAccountSuspendedEmail,
   sendFeeAlertEmail
 };
+
 
