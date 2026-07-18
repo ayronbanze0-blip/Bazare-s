@@ -1,7 +1,7 @@
 'use strict';
 
 
-const { ok, badRequest, notFound, serverError } = require('../utils/response');
+const { ok, badRequest, notFound, conflict, serverError } = require('../utils/response');
 const { paginate, paginateMeta } = require('../utils/helpers');
 const notifSvc = require('../services/notificationService');
 const emailSvc = require('../services/emailService');
@@ -364,8 +364,52 @@ const toggleFeatured = async (req, res) => {
   }
 };
 
+// ─── Delete user permanently ──────────────────────────────────────
+// O schema já faz cascade automático para Bazar→Product→CartItem/Favorite,
+// Wallet→WalletTransaction, Chat→Message, Thumb e RefreshToken ao apagar o
+// User. Mas Order (buyer/seller), Review e Transaction referenciam o User
+// sem cascade — se não forem tratados à mão primeiro, o delete falha com
+// violação de foreign key. Por isso: 1) apaga Reviews das encomendas do
+// utilizador, 2) desliga (orderId=null) as Transactions dessas encomendas
+// para não apagar o histórico financeiro da OUTRA parte, 3) apaga as
+// Orders, 4) apaga as Transactions do próprio utilizador, 5) apaga
+// RevendedorInvites não usados criados por ele, e só depois 6) apaga o User.
+const deleteUser = async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.params.id } });
+    if (!user) return notFound(res);
+    if (user.role === 'ADMIN') return badRequest(res, 'Não é possível eliminar um administrador.');
+
+    const orders = await prisma.order.findMany({
+      where: { OR: [{ buyerId: user.id }, { sellerId: user.id }] },
+      select: { id: true }
+    });
+    const orderIds = orders.map(o => o.id);
+
+    await prisma.$transaction([
+      prisma.review.deleteMany({ where: { orderId: { in: orderIds } } }),
+      prisma.transaction.updateMany({ where: { orderId: { in: orderIds } }, data: { orderId: null } }),
+      prisma.order.deleteMany({ where: { id: { in: orderIds } } }),
+      prisma.transaction.deleteMany({ where: { sellerId: user.id } }),
+      prisma.revendedorInvite.deleteMany({ where: { createdById: user.id, used: false } }),
+      prisma.user.delete({ where: { id: user.id } })
+    ]);
+
+    logger.info(`[Admin] User deleted: ${user.email} (${user.id}) by ${req.user.email}`);
+    return ok(res, {}, 'Conta eliminada definitivamente.');
+  } catch (err) {
+    if (err.code === 'P2003') {
+      logger.error(`[Admin.deleteUser] FK constraint: ${err.message}`);
+      return conflict(res, 'Não foi possível eliminar: existem dados associados que ainda não podem ser removidos (ex: convites de revendedor já usados).');
+    }
+    logger.error(`[Admin.deleteUser] ${err.message}`);
+    return serverError(res);
+  }
+};
+
 module.exports = {
-  overview, listUsers, toggleUser, verifySeller, messageUser, broadcast,
+  overview, listUsers, toggleUser, verifySeller, messageUser, broadcast, deleteUser,
   listProducts, toggleProduct, toggleFeatured, listOrders, listReports, resolveReport, reports, auditLogs,
   setBazarFeeRate
 };
+
