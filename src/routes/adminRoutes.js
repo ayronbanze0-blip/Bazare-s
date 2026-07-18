@@ -12,6 +12,7 @@ router.get('/overview', ctrl.overview);
 router.get('/users', ctrl.listUsers);
 router.patch('/users/:id/toggle', ctrl.toggleUser);
 router.patch('/users/:id/verify-seller', ctrl.verifySeller);
+router.delete('/users/:id', ctrl.deleteUser);
 router.post('/users/:id/message', ctrl.messageUser);
 router.post('/broadcast', ctrl.broadcast);
 
