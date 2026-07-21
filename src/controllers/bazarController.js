@@ -3,7 +3,7 @@
 const { validationResult } = require('express-validator');
 
 const { ok, created, badRequest, forbidden, notFound, conflict, serverError, validationError } = require('../utils/response');
-const { paginate, paginateMeta, sanitize, uniqueSlug } = require('../utils/helpers');
+const { paginate, paginateMeta, sanitize, uniqueSlug, startOfMonth, getBadgeTier } = require('../utils/helpers');
 const uploadSvc = require('../services/uploadService');
 const logger = require('../utils/logger');
 
@@ -169,11 +169,30 @@ const myBazar = async (req, res) => {
     const bazar = await prisma.bazar.findUnique({
       where: { sellerId: req.user.id },
       include: {
-        _count: { select: { products: true, orders: true } }
+        _count: { select: { products: true, orders: true } },
+        // Faltava isto — sem o seller incluído, o frontend nunca recebia
+        // rating/ratingCount/thumbs e mostrava sempre "Sem avaliações".
+        seller: {
+          select: { id: true, rating: true, ratingCount: true, thumbsUp: true, thumbsDown: true, verifiedSeller: true }
+        }
       }
     });
     if (!bazar) return notFound(res, 'Ainda não criou um Bazar.');
-    return ok(res, { bazar });
+
+    // Vendas entregues este mês — base do sistema de medalhas. Isto nunca
+    // era calculado antes, por isso monthlySales chegava sempre a 0 ao
+    // frontend e a medalha/barra/mensagem vinham todas erradas.
+    const monthlySales = await prisma.order.count({
+      where: { bazarId: bazar.id, status: 'ENTREGUE', deliveredAt: { gte: startOfMonth(new Date()) } }
+    });
+
+    const badge = getBadgeTier(monthlySales);
+    const nextTier =
+      badge.tier === 'BRONZE' ? { label: 'Prata', needed: Math.max(0, 30 - monthlySales) } :
+      badge.tier === 'PRATA'  ? { label: 'Ouro',  needed: Math.max(0, 51 - monthlySales) } :
+      null; // Ouro é o nível máximo — aqui sim faz sentido não haver próximo nível
+
+    return ok(res, { bazar: { ...bazar, monthlySales, badge, nextTier } });
   } catch (err) {
     logger.error(`[Bazars.myBazar] ${err.message}`);
     return serverError(res);
