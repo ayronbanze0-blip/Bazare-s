@@ -14,7 +14,7 @@ model User {
   id                String    @id @default(uuid())
   name              String
   email             String    @unique
-  passwordHash      String
+  passwordHash      String?
   role              Role      @default(BUYER)
   phone             String?
   location          String?
@@ -27,6 +27,12 @@ model User {
   active            Boolean   @default(true)
   emailVerifiedAt   DateTime?
   lastLoginAt       DateTime?
+
+  // Login social (Google / Facebook / Apple). provider fica null para
+  // contas criadas com email+password. providerId é o ID único que cada
+  // plataforma devolve para a conta do utilizador.
+  provider          String?
+  providerId        String?
 
   // Seller verification badge
   verifiedSeller    Boolean   @default(false)
@@ -88,6 +94,7 @@ model User {
   @@index([email])
   @@index([role])
   @@index([revendedorId])
+  @@unique([provider, providerId])
 }
 
 enum Role {
