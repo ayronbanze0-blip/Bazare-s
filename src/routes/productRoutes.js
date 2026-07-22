@@ -20,6 +20,7 @@ router.get('/featured', optionalAuth, ctrl.featured);
 
 // ─── Seller (antes de /:id para não ser capturado) ───────────────
 router.get('/mine', authenticate, isSeller, ctrl.myProducts);
+router.post('/generate-description', authenticate, isSeller, uploadLimiter, ctrl.generateDescription);
 router.post('/', authenticate, isSeller, uploadLimiter, upload.array('images', 20), productValidation, ctrl.create);
 router.put('/:id', authenticate, isSeller, uploadLimiter, upload.array('images', 20), ctrl.update);
 router.patch('/:id/toggle', authenticate, isSeller, ctrl.toggle);
