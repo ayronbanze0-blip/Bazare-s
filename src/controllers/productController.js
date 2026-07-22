@@ -5,6 +5,7 @@ const { validationResult } = require('express-validator');
 const { ok, created, badRequest, forbidden, notFound, serverError, validationError } = require('../utils/response');
 const { paginate, paginateMeta, sanitize } = require('../utils/helpers');
 const uploadSvc = require('../services/uploadService');
+const aiSvc = require('../services/aiService');
 const logger = require('../utils/logger');
 
 const prisma = require('../config/database');
@@ -127,6 +128,24 @@ const create = async (req, res) => {
     if (!bazar.active) return forbidden(res, 'O seu Bazar está inactivo.');
 
     const { name, description, price, category, stock, condition, size, color, location, deliveryMethod } = req.body;
+
+    // ─── Moderação por IA ────────────────────────────────────────
+    // Corre antes de gravar. Se a IA estiver indisponível, moderateProduct
+    // devolve blocked=false (falha aberta) — não deixamos a plataforma
+    // parada por causa de um problema no serviço externo de IA.
+    const moderation = await aiSvc.moderateProduct({ name, description, category, price });
+    if (moderation.blocked) {
+      return badRequest(res, `Anúncio recusado pela moderação: ${moderation.reason}`);
+    }
+
+    // Verificação de duplicados: mesmo vendedor, nome muito parecido,
+    // ainda activo. Isto é uma query directa, não depende da IA.
+    const possibleDuplicate = await prisma.product.findFirst({
+      where: { sellerId: req.user.id, active: true, name: { equals: sanitize(name), mode: 'insensitive' } }
+    });
+    if (possibleDuplicate) {
+      return badRequest(res, 'Já tens um produto activo com este nome. Edita o existente ou usa um nome diferente.');
+    }
 
     const product = await prisma.product.create({
       data: {
@@ -531,6 +550,36 @@ const related = async (req, res) => {
   }
 };
 
-module.exports = { list, getOne, featured, related, trackView, create, update, deleteImage, reorderImages, toggle, toggleStock, remove, myProducts, toggleFavorite, myFavorites, attachFavorites };
+// ─── POST /api/products/generate-description ─────────────────────
+// Usado pelo botão "Gerar com IA" no formulário de criação de produto.
+// Não grava nada — só devolve sugestões que o vendedor pode editar
+// antes de submeter o formulário normal.
+const generateDescription = async (req, res) => {
+  try {
+    const { name, category, keywords, condition } = req.body;
+    if (!name || !name.trim()) return badRequest(res, 'Indica pelo menos o nome do produto.');
+
+    const result = await aiSvc.generateProductDescription({
+      name: sanitize(name),
+      category,
+      keywords: keywords ? sanitize(keywords) : '',
+      condition
+    });
+
+    if (!result.ok) return badRequest(res, result.error || 'Não foi possível gerar a descrição.');
+
+    return ok(res, {
+      description: result.description,
+      suggestedCategory: result.suggestedCategory,
+      suggestedTitle: result.suggestedTitle
+    });
+  } catch (err) {
+    logger.error(`[Products.generateDescription] ${err.message}`);
+    return serverError(res);
+  }
+};
+
+module.exports = { list, getOne, featured, related, trackView, create, update, deleteImage, reorderImages, toggle, toggleStock, remove, myProducts, toggleFavorite, myFavorites, attachFavorites, generateDescription };
+
 
 
