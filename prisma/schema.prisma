@@ -14,7 +14,7 @@ model User {
   id                String    @id @default(uuid())
   name              String
   email             String    @unique
-  passwordHash      String?
+  passwordHash      String
   role              Role      @default(BUYER)
   phone             String?
   location          String?
@@ -28,14 +28,12 @@ model User {
   emailVerifiedAt   DateTime?
   lastLoginAt       DateTime?
 
-  // Login social (Google / Facebook / Apple). provider fica null para
-  // contas criadas com email+password. providerId é o ID único que cada
-  // plataforma devolve para a conta do utilizador.
-  provider          String?
-  providerId        String?
-
   // Seller verification badge
   verifiedSeller    Boolean   @default(false)
+
+  // Conta de sistema do BazarBot (assistente de suporte por IA).
+  // Só deve existir UMA linha com isBazarBot=true.
+  isBazarBot        Boolean   @default(false)
 
   // Onboarding pós-registo (ecrã "o que pretende fazer / já tem loja /
   // onde ouviu falar"). onboardedAt fica null até a pessoa completar o
@@ -94,7 +92,6 @@ model User {
   @@index([email])
   @@index([role])
   @@index([revendedorId])
-  @@unique([provider, providerId])
 }
 
 enum Role {
@@ -218,6 +215,11 @@ model Product {
   active         Boolean  @default(true)
   featured       Boolean  @default(false)
 
+  // Moderação por IA — corre antes da publicação. APPROVED por
+  // omissão para produtos criados antes desta funcionalidade existir.
+  moderationStatus ModerationStatus @default(APPROVED)
+  moderationReason String?
+
   // Stats
   rating         Float    @default(0)
   ratingCount    Int      @default(0)
@@ -248,6 +250,11 @@ model Product {
   @@index([active, sales])
   @@index([active, views])
   @@index([featured, active, sales])
+}
+
+enum ModerationStatus {
+  APPROVED
+  BLOCKED
 }
 
 model ProductImage {
@@ -457,7 +464,10 @@ model Message {
   chat      Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
   senderId  String
   sender    User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
-  text      String   @db.Text
+  text      String   @default("") @db.Text
+  imageUrl  String?
+  imagePublicId String?
+  fromBot   Boolean  @default(false)
   read      Boolean  @default(false)
   readAt    DateTime?
   createdAt DateTime @default(now())
