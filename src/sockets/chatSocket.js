@@ -4,11 +4,23 @@ const jwt = require('jsonwebtoken');
 const logger = require('../utils/logger');
 const { sanitize } = require('../utils/helpers');
 const notifSvc = require('../services/notificationService');
+const aiSvc = require('../services/aiService');
 
 // Singleton partilhado — ver nota em controllers/chatController.js
 const prisma = require('../config/database');
 
 const onlineUsers = new Map();
+
+// Cache do id do BazarBot — mesma lógica que em chatController.js. Os dois
+// processos (HTTP e socket) correm no mesmo servidor Node, mas mantemos o
+// cache separado para não acoplar os dois ficheiros um ao outro.
+let bazarBotUserIdCache = null;
+const getBazarBotUserId = async (prisma) => {
+  if (bazarBotUserIdCache) return bazarBotUserIdCache;
+  const bot = await prisma.user.findFirst({ where: { isBazarBot: true }, select: { id: true } });
+  if (bot) bazarBotUserIdCache = bot.id;
+  return bazarBotUserIdCache;
+};
 
 const setupSocket = (io) => {
   io.use((socket, next) => {
@@ -70,7 +82,33 @@ const setupSocket = (io) => {
         const recipientId = chat.userAId === userId ? chat.userBId : chat.userAId;
         io.to(`user:${recipientId}`).emit('chat:unread', { chatId, message });
 
-        notifSvc.newMessage(recipientId, socket.user.name, text);
+        const botId = await getBazarBotUserId(prisma);
+        if (botId && recipientId === botId) {
+          // BazarBot responde por este mesmo canal — não bloqueia o emit acima.
+          (async () => {
+            try {
+              const recent = await prisma.message.findMany({
+                where: { chatId },
+                orderBy: { createdAt: 'desc' },
+                take: 6,
+                select: { text: true, fromBot: true }
+              });
+              const history = recent.reverse().map(m => ({ text: m.text, fromBot: m.fromBot }));
+              const reply = await aiSvc.bazarBotReply(text, history);
+              const botMessage = await prisma.message.create({
+                data: { chatId, senderId: botId, text: reply.text, fromBot: true },
+                include: { sender: { select: { id: true, name: true, avatarUrl: true } } }
+              });
+              await prisma.chat.update({ where: { id: chatId }, data: { updatedAt: new Date() } });
+              io.to(`chat:${chatId}`).emit('message:new', botMessage);
+              io.to(`user:${userId}`).emit('chat:unread', { chatId });
+            } catch (err) {
+              logger.error(`[Socket bazarBotReply] ${err.message}`);
+            }
+          })();
+        } else {
+          notifSvc.newMessage(recipientId, socket.user.name, text);
+        }
       } catch (err) {
         logger.error(`[Socket message:send] ${err.message}`);
         socket.emit('error', { message: 'Falha ao enviar mensagem.' });
@@ -118,3 +156,4 @@ const setupSocket = (io) => {
 const isOnline = (userId) => onlineUsers.has(userId) && onlineUsers.get(userId).size > 0;
 
 module.exports = { setupSocket, isOnline };
+
