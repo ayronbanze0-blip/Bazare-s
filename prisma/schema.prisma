@@ -14,13 +14,19 @@ model User {
   id                String    @id @default(uuid())
   name              String
   email             String    @unique
-  passwordHash      String
+  passwordHash      String?
   role              Role      @default(BUYER)
   phone             String?
   location          String?
   bio               String?
   avatarUrl         String?
   coverUrl          String?
+
+  // Login social (Google / Facebook / Apple). Fica null para contas
+  // normais de email+password. O par (provider, providerId) identifica
+  // a conta do lado do fornecedor (ex: o "sub" do token do Google).
+  provider          String?
+  providerId        String?
 
   // Auth
   verified          Boolean   @default(false)
@@ -92,6 +98,7 @@ model User {
   @@index([email])
   @@index([role])
   @@index([revendedorId])
+  @@unique([provider, providerId])
 }
 
 enum Role {
