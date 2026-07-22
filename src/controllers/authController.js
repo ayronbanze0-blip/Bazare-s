@@ -172,6 +172,11 @@ const login = async (req, res) => {
       return unauthorized(res, 'Conta suspensa. Contacte o suporte em bazares09@gmail.com');
     }
 
+    if (!user.passwordHash) {
+      await logAttempt(false);
+      return unauthorized(res, `Esta conta usa login com ${user.provider === 'google' ? 'Google' : user.provider === 'facebook' ? 'Facebook' : 'Apple'}. Usa esse botão para entrar.`);
+    }
+
     const validPw = await bcrypt.compare(password, user.passwordHash);
     if (!validPw) {
       await logAttempt(false);
@@ -659,5 +664,6 @@ module.exports = {
   verifyEmail, resendVerification,
   googleLogin, facebookLogin, appleLogin
 };
+
 
 
