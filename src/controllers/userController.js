@@ -130,6 +130,7 @@ const changePassword = async (req, res) => {
     if (currentPassword === newPassword) return badRequest(res, 'A nova palavra-passe não pode ser igual à actual.');
 
     const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (!user.passwordHash) return badRequest(res, 'Esta conta usa login social e ainda não tem palavra-passe definida — usa "Esqueci-me da password" para criar uma.');
     const valid = await bcrypt.compare(currentPassword, user.passwordHash);
     if (!valid) return badRequest(res, 'Palavra-passe actual incorrecta.');
 
@@ -347,4 +348,5 @@ const onboarding = async (req, res) => {
 };
 
 module.exports = { myStats, updateProfile, updateCover, changePassword, publicProfile, sendThumb, deleteAccount, onboarding };
+
 
