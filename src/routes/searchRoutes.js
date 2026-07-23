@@ -98,7 +98,7 @@ router.get('/smart', async (req, res) => {
         where,
         take,
         skip,
-        orderBy: [{ featured: 'desc' }, { sales: 'desc' }, { createdAt: 'desc' }],
+        orderBy: [{ seller: { isPremium: 'desc' } }, { featured: 'desc' }, { sales: 'desc' }, { createdAt: 'desc' }],
         include: { images: { take: 1, orderBy: { order: 'asc' } }, bazar: { select: { id: true, name: true, slug: true } } }
       }),
       prisma.product.count({ where })

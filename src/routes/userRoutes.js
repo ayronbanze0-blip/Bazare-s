@@ -12,6 +12,7 @@ router.put('/me', authenticate, uploadLimiter, upload.single('avatar'), ctrl.upd
 router.put('/me/cover', authenticate, uploadLimiter, upload.single('cover'), ctrl.updateCover);
 router.put('/me/password', authenticate, ctrl.changePassword);
 router.put('/me/onboarding', authenticate, ctrl.onboarding);
+router.post('/me/request-verification', authenticate, ctrl.requestVerification);
 router.delete('/me', authenticate, ctrl.deleteAccount);
 router.post('/:id/thumb', authenticate, ctrl.sendThumb);
 
