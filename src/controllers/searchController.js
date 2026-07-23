@@ -48,7 +48,10 @@ const search = async (req, res) => {
           where: productWhere,
           take,
           skip,
-          orderBy: [{ featured: 'desc' }, { sales: 'desc' }, { createdAt: 'desc' }],
+          // Vendedores Premium aparecem primeiro, depois destaques do
+          // admin (featured), depois por vendas/recência — a mesma
+          // lógica usada em productController.list.
+          orderBy: [{ seller: { isPremium: 'desc' } }, { featured: 'desc' }, { sales: 'desc' }, { createdAt: 'desc' }],
           include: {
             images: { take: 1, orderBy: { order: 'asc' } },
             bazar: { select: { id: true, name: true, slug: true } }

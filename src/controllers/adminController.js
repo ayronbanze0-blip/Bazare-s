@@ -50,12 +50,13 @@ const overview = async (req, res) => {
 // ─── List users with filters ─────────────────────────────────────
 const listUsers = async (req, res) => {
   try {
-    const { role, q, active, page = 1, limit = 30 } = req.query;
+    const { role, q, active, pendingVerification, page = 1, limit = 30 } = req.query;
     const { take, skip } = paginate(page, limit);
 
     const where = {
       ...(role && { role: role.toUpperCase() }),
       ...(active !== undefined && { active: active === 'true' }),
+      ...(pendingVerification === 'true' && { verifiedSeller: false, verificationRequestedAt: { not: null } }),
       ...(q && {
         OR: [
           { name: { contains: q, mode: 'insensitive' } },
@@ -64,12 +65,19 @@ const listUsers = async (req, res) => {
       })
     };
 
+    // Na fila de verificação, contas Premium aparecem sempre primeiro
+    // (prioridade), e dentro de cada grupo o pedido mais antigo primeiro.
+    const orderBy = pendingVerification === 'true'
+      ? [{ isPremium: 'desc' }, { verificationRequestedAt: 'asc' }]
+      : { createdAt: 'desc' };
+
     const [users, total] = await Promise.all([
       prisma.user.findMany({
-        where, take, skip, orderBy: { createdAt: 'desc' },
+        where, take, skip, orderBy,
         select: {
           id: true, name: true, email: true, role: true, active: true, verified: true,
-          verifiedSeller: true, rating: true, ratingCount: true, cancelCount: true,
+          verifiedSeller: true, isPremium: true, verificationRequestedAt: true,
+          rating: true, ratingCount: true, cancelCount: true,
           createdAt: true, lastLoginAt: true,
           bazar: { select: { id: true, name: true, totalSales: true, pendingFees: true } },
           revendedor: { select: { id: true, name: true } },

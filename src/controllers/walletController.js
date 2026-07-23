@@ -6,6 +6,7 @@ const notifSvc = require('../services/notificationService');
 const logger = require('../utils/logger');
 const walletService = require('../services/walletService');
 const zumboPay = require('../services/zumboPayService');
+const premiumService = require('../services/premiumService');
 
 const prisma = require('../config/database');
 
@@ -281,6 +282,52 @@ const zumboPayWebhook = async (req, res) => {
     }
 
     const payment = await prisma.commissionPayment.findFirst({ where: { gatewayReference: reference } });
+
+    // A mesma referência nunca pertence às duas tabelas ao mesmo tempo
+    // (sourceId tem prefixo diferente — "commission-" vs "premium-"),
+    // por isso só procuramos em PremiumSubscription quando não há
+    // CommissionPayment correspondente.
+    if (!payment) {
+      const subscription = await prisma.premiumSubscription.findFirst({ where: { gatewayReference: reference } });
+
+      if (subscription && type === 'payment.succeeded' && subscription.status !== 'PAGA') {
+        const claim = await prisma.premiumSubscription.updateMany({
+          where: { id: subscription.id, status: { not: 'PAGA' } },
+          data: { status: 'PAGA', paidAt: new Date() }
+        });
+
+        if (claim.count > 0) {
+          const periodEnd = await prisma.$transaction(async (tx) => {
+            const end = await premiumService.activateOrExtend(tx, subscription.userId);
+            await tx.premiumSubscription.update({
+              where: { id: subscription.id },
+              data: { periodEnd: end, periodStart: new Date() }
+            });
+            return end;
+          });
+
+          notifSvc.push(subscription.userId, {
+            type: 'SUCCESS', title: 'Conta Premium activada! ⭐',
+            message: `Pagamento de ${subscription.amount.toLocaleString('pt-MZ')} MT confirmado. Premium válido até ${periodEnd.toLocaleDateString('pt-MZ')}.`,
+            link: '/premium'
+          });
+        }
+      }
+
+      if (subscription && type === 'payment.failed' && subscription.status !== 'PAGA') {
+        await prisma.premiumSubscription.update({
+          where: { id: subscription.id },
+          data: { status: 'FALHADA', failReason: event?.data?.message || 'Pagamento falhou.' }
+        });
+        notifSvc.push(subscription.userId, {
+          type: 'ERROR', title: 'Pagamento Premium falhou',
+          message: `O pagamento de ${subscription.amount.toLocaleString('pt-MZ')} MT não foi concluído. Tente novamente.`,
+          link: '/premium'
+        });
+      }
+
+      return res.status(200).json({ received: true });
+    }
 
     if (payment && type === 'payment.succeeded' && payment.status !== 'PAGA') {
       const platformAdmin = await walletService.getPlatformAdmin(prisma);

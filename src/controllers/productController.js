@@ -6,6 +6,7 @@ const { ok, created, badRequest, forbidden, notFound, serverError, validationErr
 const { paginate, paginateMeta, sanitize } = require('../utils/helpers');
 const uploadSvc = require('../services/uploadService');
 const aiSvc = require('../services/aiService');
+const premiumService = require('../services/premiumService');
 const logger = require('../utils/logger');
 
 const prisma = require('../config/database');
@@ -49,15 +50,19 @@ const list = async (req, res) => {
       ...(maxPrice && { price: { ...((minPrice && { gte: parseFloat(minPrice) }) || {}), lte: parseFloat(maxPrice) } })
     };
 
+    // No sort 'new' (o mais usado — é o default da listagem e da página
+    // inicial), vendedores Premium aparecem primeiro. Nos outros sorts
+    // explícitos (preço, avaliação, etc.) respeitamos a escolha do
+    // utilizador sem reordenar por cima.
     const orderBy = {
-      new: { createdAt: 'desc' },
+      new: [{ seller: { isPremium: 'desc' } }, { createdAt: 'desc' }],
       old: { createdAt: 'asc' },
       'price-asc': { price: 'asc' },
       'price-desc': { price: 'desc' },
       rating: { rating: 'desc' },
       sales: { sales: 'desc' },
       views: { views: 'desc' }
-    }[sort] || { createdAt: 'desc' };
+    }[sort] || [{ seller: { isPremium: 'desc' } }, { createdAt: 'desc' }];
 
     const [products, total] = await Promise.all([
       prisma.product.findMany({
@@ -86,7 +91,10 @@ const getOne = async (req, res) => {
       include: {
         images: { orderBy: { order: 'asc' } },
         bazar: {
-          select: { id: true, name: true, slug: true, bannerUrl: true, phone: true, location: true }
+          select: {
+            id: true, name: true, slug: true, bannerUrl: true, phone: true, location: true,
+            seller: { select: { verifiedSeller: true, isPremium: true } }
+          }
         },
         reviews: {
           take: 10, orderBy: { createdAt: 'desc' },
@@ -558,6 +566,11 @@ const generateDescription = async (req, res) => {
   try {
     const { name, category, keywords, condition } = req.body;
     if (!name || !name.trim()) return badRequest(res, 'Indica pelo menos o nome do produto.');
+
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (!premiumService.isActive(user)) {
+      return forbidden(res, 'A geração de descrições com IA é exclusiva da Conta Premium.');
+    }
 
     const result = await aiSvc.generateProductDescription({
       name: sanitize(name),

@@ -172,11 +172,6 @@ const login = async (req, res) => {
       return unauthorized(res, 'Conta suspensa. Contacte o suporte em bazares09@gmail.com');
     }
 
-    if (!user.passwordHash) {
-      await logAttempt(false);
-      return unauthorized(res, `Esta conta usa login com ${user.provider === 'google' ? 'Google' : user.provider === 'facebook' ? 'Facebook' : 'Apple'}. Usa esse botão para entrar.`);
-    }
-
     const validPw = await bcrypt.compare(password, user.passwordHash);
     if (!validPw) {
       await logAttempt(false);
@@ -625,10 +620,12 @@ const resetPassword = async (req, res) => {
   }
 };
 
+const premiumService = require('../services/premiumService');
+
 // ─── GET CURRENT USER ─────────────────────────────────────────────
 const me = async (req, res) => {
   try {
-    const user = await prisma.user.findUnique({
+    let user = await prisma.user.findUnique({
       where: { id: req.user.id },
       select: {
         id: true, name: true, email: true, role: true,
@@ -638,6 +635,7 @@ const me = async (req, res) => {
         rating: true, ratingCount: true, cancelCount: true,
         revendedorId: true, createdAt: true, lastLoginAt: true,
         onboardedAt: true,
+        isPremium: true, premiumSince: true, premiumExpiresAt: true,
         bazar: { select: { id: true, name: true, slug: true, active: true } },
         _count: {
           select: {
@@ -650,6 +648,14 @@ const me = async (req, res) => {
       }
     });
     if (!user || !user.active) return unauthorized(res, 'Utilizador não encontrado.');
+
+    // Rebaixa aqui, no ponto mais frequentemente chamado do app (carregado
+    // a cada refresh de página), em vez de depender de um cron job.
+    if (user.isPremium && !premiumService.isActive(user)) {
+      await premiumService.downgradeIfExpired(prisma, user);
+      user.isPremium = false;
+    }
+
     return ok(res, { user });
   } catch (err) {
     logger.error(`[Me] ${err.message}`);
@@ -664,6 +670,5 @@ module.exports = {
   verifyEmail, resendVerification,
   googleLogin, facebookLogin, appleLogin
 };
-
 
 

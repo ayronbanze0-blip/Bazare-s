@@ -6,6 +6,7 @@ const { ok, created, badRequest, forbidden, notFound, serverError, validationErr
 const { paginate, paginateMeta, calcFee } = require('../utils/helpers');
 const notifSvc = require('../services/notificationService');
 const emailSvc = require('../services/emailService');
+const premiumService = require('../services/premiumService');
 const logger = require('../utils/logger');
 
 const prisma = require('../config/database');
@@ -64,10 +65,24 @@ const placeOrder = async (req, res) => {
 
     const createdOrders = [];
 
+    // Uma única query para saber quais destes vendedores têm Premium
+    // activo — usado para aplicar a taxa reduzida (ver premiumService).
+    const sellerIds = Object.keys(sellerGroups);
+    const premiumSellers = await prisma.user.findMany({
+      where: { id: { in: sellerIds }, isPremium: true },
+      select: { id: true, premiumExpiresAt: true }
+    });
+    const premiumSellerIds = new Set(
+      premiumSellers
+        .filter(u => u.premiumExpiresAt && new Date(u.premiumExpiresAt) > new Date())
+        .map(u => u.id)
+    );
+
     await prisma.$transaction(async (tx) => {
       for (const group of Object.values(sellerGroups)) {
         const subtotal = group.items.reduce((s, i) => s + i.product.price * i.qty, 0);
-        const feeRate = group.bazar.feeRate || 2;
+        const baseFeeRate = group.bazar.feeRate || 2;
+        const feeRate = premiumService.effectiveFeeRate(baseFeeRate, premiumSellerIds.has(group.sellerId));
         const feeAmount = calcFee(subtotal, feeRate);
 
         const order = await tx.order.create({
@@ -271,8 +286,12 @@ const updateStatus = async (req, res) => {
 
     // On ENTREGUE: calculate fee, update bazar, create transaction, bump product sales
     if (status === 'ENTREGUE') {
-      const bazar = await prisma.bazar.findUnique({ where: { id: order.bazarId } });
-      const fee = calcFee(order.total, bazar?.feeRate || 2);
+      const [bazar, seller] = await Promise.all([
+        prisma.bazar.findUnique({ where: { id: order.bazarId } }),
+        prisma.user.findUnique({ where: { id: order.sellerId }, select: { isPremium: true, premiumExpiresAt: true } })
+      ]);
+      const sellerPremiumActive = premiumService.isActive(seller);
+      const fee = calcFee(order.total, premiumService.effectiveFeeRate(bazar?.feeRate || 2, sellerPremiumActive));
       const orderItems = await prisma.orderItem.findMany({ where: { orderId: order.id } });
       const itemsLabel = orderItems.map(i => `${i.name} ×${i.qty}`).join(', ') || order.id;
 

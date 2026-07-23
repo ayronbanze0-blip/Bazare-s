@@ -130,7 +130,6 @@ const changePassword = async (req, res) => {
     if (currentPassword === newPassword) return badRequest(res, 'A nova palavra-passe não pode ser igual à actual.');
 
     const user = await prisma.user.findUnique({ where: { id: req.user.id } });
-    if (!user.passwordHash) return badRequest(res, 'Esta conta usa login social e ainda não tem palavra-passe definida — usa "Esqueci-me da password" para criar uma.');
     const valid = await bcrypt.compare(currentPassword, user.passwordHash);
     if (!valid) return badRequest(res, 'Palavra-passe actual incorrecta.');
 
@@ -156,6 +155,7 @@ const publicProfile = async (req, res) => {
       select: {
         id: true, name: true, bio: true, avatarUrl: true, coverUrl: true,
         role: true, rating: true, ratingCount: true, verifiedSeller: true,
+        isPremium: true,
         thumbsUp: true, thumbsDown: true,
         createdAt: true,
         bazar: {
@@ -347,6 +347,28 @@ const onboarding = async (req, res) => {
   }
 };
 
-module.exports = { myStats, updateProfile, updateCover, changePassword, publicProfile, sendThumb, deleteAccount, onboarding };
+// ─── POST /api/users/me/request-verification ──────────────────────
+// Pedido de verificação de vendedor. Não verifica automaticamente —
+// só marca a data do pedido para entrar na fila do admin. Contas
+// Premium aparecem primeiro nessa fila (ver adminController.listUsers).
+const requestVerification = async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (!user) return notFound(res);
+    if (user.verifiedSeller) return badRequest(res, 'A sua conta já está verificada.');
+    if (user.verificationRequestedAt) {
+      const daysSince = (Date.now() - new Date(user.verificationRequestedAt).getTime()) / 86400000;
+      if (daysSince < 7) return badRequest(res, 'Já tem um pedido de verificação em análise. Aguarde a resposta da equipa Bazares.');
+    }
 
+    await prisma.user.update({ where: { id: user.id }, data: { verificationRequestedAt: new Date() } });
+    logger.info(`[Users.requestVerification] ${user.email} pediu verificação${user.isPremium ? ' (Premium — prioridade)' : ''}.`);
+    return ok(res, {}, 'Pedido enviado! A equipa Bazares vai rever a sua conta em breve.');
+  } catch (err) {
+    logger.error(`[Users.requestVerification] ${err.message}`);
+    return serverError(res);
+  }
+};
+
+module.exports = { myStats, updateProfile, updateCover, changePassword, publicProfile, sendThumb, deleteAccount, onboarding, requestVerification };
 

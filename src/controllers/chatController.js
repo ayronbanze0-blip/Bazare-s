@@ -5,6 +5,7 @@ const { sanitize } = require('../utils/helpers');
 const notifSvc = require('../services/notificationService');
 const aiSvc = require('../services/aiService');
 const uploadSvc = require('../services/uploadService');
+const premiumService = require('../services/premiumService');
 const logger = require('../utils/logger');
 
 // Usa o singleton partilhado — instanciar 'new PrismaClient()' aqui abria
@@ -275,6 +276,11 @@ const suggestReply = async (req, res) => {
     const chat = await prisma.chat.findUnique({ where: { id: chatId } });
     if (!chat) return notFound(res, 'Conversa não encontrada.');
     if (chat.userAId !== req.user.id && chat.userBId !== req.user.id) return forbidden(res);
+
+    const me = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (!premiumService.isActive(me)) {
+      return forbidden(res, 'O assistente de atendimento com IA é exclusivo da Conta Premium.');
+    }
 
     const recent = await prisma.message.findMany({
       where: { chatId },

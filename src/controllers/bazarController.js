@@ -5,6 +5,7 @@ const { validationResult } = require('express-validator');
 const { ok, created, badRequest, forbidden, notFound, conflict, serverError, validationError } = require('../utils/response');
 const { paginate, paginateMeta, sanitize, uniqueSlug, startOfMonth, getBadgeTier } = require('../utils/helpers');
 const uploadSvc = require('../services/uploadService');
+const premiumService = require('../services/premiumService');
 const logger = require('../utils/logger');
 
 const prisma = require('../config/database');
@@ -24,9 +25,10 @@ const list = async (req, res) => {
 
     const [bazars, total] = await Promise.all([
       prisma.bazar.findMany({
-        where, take, skip, orderBy: { createdAt: 'desc' },
+        where, take, skip,
+        orderBy: [{ seller: { isPremium: 'desc' } }, { createdAt: 'desc' }],
         include: {
-          seller: { select: { id: true, name: true, rating: true, ratingCount: true, verifiedSeller: true } },
+          seller: { select: { id: true, name: true, rating: true, ratingCount: true, verifiedSeller: true, isPremium: true } },
           _count: { select: { products: { where: { active: true } } } }
         }
       }),
@@ -47,7 +49,7 @@ const getOne = async (req, res) => {
     const bazar = await prisma.bazar.findFirst({
       where: { OR: [{ id: idOrSlug }, { slug: idOrSlug }], active: true },
       include: {
-        seller: { select: { id: true, name: true, rating: true, ratingCount: true, verifiedSeller: true, avatarUrl: true } },
+        seller: { select: { id: true, name: true, rating: true, ratingCount: true, verifiedSeller: true, avatarUrl: true, isPremium: true } },
         products: {
           where: { active: true },
           orderBy: { createdAt: 'desc' },
@@ -113,9 +115,25 @@ const update = async (req, res) => {
     if (!bazar) return notFound(res, 'Bazar não encontrado.');
     if (bazar.sellerId !== req.user.id && req.user.role !== 'ADMIN') return forbidden(res);
 
-    const { name, description, category, phone, location } = req.body;
+    const { name, description, category, phone, location, promoTitle, promoSubtitle, promoColor } = req.body;
     let slug = bazar.slug;
     if (name && name !== bazar.name) slug = await uniqueSlug(prisma, name, 'bazar', bazar.id);
+
+    // Banner promocional personalizado — exclusivo Premium. Se a conta
+    // não está (ou já não está) activa, ignoramos silenciosamente estes
+    // campos em vez de rejeitar o pedido inteiro — o resto da edição do
+    // bazar deve continuar a funcionar normalmente.
+    let promoData = {};
+    if (promoTitle !== undefined || promoSubtitle !== undefined || promoColor !== undefined) {
+      const me = await prisma.user.findUnique({ where: { id: req.user.id } });
+      if (premiumService.isActive(me)) {
+        promoData = {
+          ...(promoTitle !== undefined && { promoTitle: promoTitle ? sanitize(promoTitle).slice(0, 60) : null }),
+          ...(promoSubtitle !== undefined && { promoSubtitle: promoSubtitle ? sanitize(promoSubtitle).slice(0, 100) : null }),
+          ...(promoColor !== undefined && { promoColor: promoColor && /^#[0-9A-Fa-f]{6}$/.test(promoColor) ? promoColor : null })
+        };
+      }
+    }
 
     const updated = await prisma.bazar.update({
       where: { id: bazar.id },
@@ -124,7 +142,8 @@ const update = async (req, res) => {
         ...(description && { description: sanitize(description) }),
         ...(category && { category }),
         ...(phone !== undefined && { phone }),
-        ...(location !== undefined && { location })
+        ...(location !== undefined && { location }),
+        ...promoData
       }
     });
 
