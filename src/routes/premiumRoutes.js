@@ -7,6 +7,7 @@ const { authenticate, isAdmin } = require('../middleware/auth');
 // ─── ME ──────────────────────────────────────────────────────────
 router.get('/me', authenticate, ctrl.myStatus);
 router.post('/subscribe', authenticate, ctrl.subscribe);
+router.post('/redeem', authenticate, ctrl.redeemCode);
 router.get('/subscriptions/:id', authenticate, ctrl.subscriptionStatus);
 router.post('/subscriptions/:id/cancel', authenticate, ctrl.cancelSubscription);
 router.get('/analytics', authenticate, ctrl.analytics);
@@ -20,5 +21,8 @@ router.delete('/quick-replies/:id', authenticate, ctrl.deleteQuickReply);
 router.get('/admin/subscriptions', authenticate, isAdmin, ctrl.adminList);
 router.post('/admin/:userId/grant', authenticate, isAdmin, ctrl.adminGrant);
 router.post('/admin/:userId/revoke', authenticate, isAdmin, ctrl.adminRevoke);
+router.post('/admin/codes', authenticate, isAdmin, ctrl.adminCreateCodes);
+router.get('/admin/codes', authenticate, isAdmin, ctrl.adminListCodes);
+router.post('/admin/codes/:id/revoke', authenticate, isAdmin, ctrl.adminRevokeCode);
 
 module.exports = router;
