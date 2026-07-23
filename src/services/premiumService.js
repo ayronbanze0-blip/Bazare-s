@@ -17,6 +17,7 @@
  * a taxa de um bazar que já negociou algo melhor com o admin.
  */
 
+const crypto = require('crypto');
 const logger = require('../utils/logger');
 
 const PREMIUM_PRICE_MT = parseFloat(process.env.PREMIUM_PRICE_MT) || 500;
@@ -53,13 +54,13 @@ const downgradeIfExpired = async (prisma, user) => {
 // ─── Activa/estende o período premium por +30 dias a partir de hoje,
 // ou a partir do fim do período actual se ainda estiver activo (para
 // não perder dias já pagos ao renovar antes do fim). ─────────────────
-const activateOrExtend = async (tx, userId) => {
+const activateOrExtend = async (tx, userId, periodDays = PREMIUM_PERIOD_DAYS) => {
   const user = await tx.user.findUnique({ where: { id: userId } });
   const now = new Date();
   const base = (user.isPremium && user.premiumExpiresAt && new Date(user.premiumExpiresAt) > now)
     ? new Date(user.premiumExpiresAt)
     : now;
-  const periodEnd = new Date(base.getTime() + PREMIUM_PERIOD_DAYS * 24 * 60 * 60 * 1000);
+  const periodEnd = new Date(base.getTime() + periodDays * 24 * 60 * 60 * 1000);
 
   await tx.user.update({
     where: { id: userId },
@@ -71,6 +72,18 @@ const activateOrExtend = async (tx, userId) => {
   });
 
   return periodEnd;
+};
+
+// ─── Códigos Premium (gerados pelo admin) ──────────────────────────
+// Formato "BAZ-XXXX-XXXX" (letras maiúsculas + dígitos), fácil de
+// ditar/ler ao telefone ou escrever num cartão físico de bazar. Evita
+// caracteres ambíguos (0/O, 1/I/L) para reduzir erros de digitação.
+const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+const generateCode = () => {
+  const part = () => Array.from({ length: 4 }, () =>
+    CODE_ALPHABET[crypto.randomInt(CODE_ALPHABET.length)]
+  ).join('');
+  return `BAZ-${part()}-${part()}`;
 };
 
 const effectiveFeeRate = (bazarFeeRate, sellerIsPremiumActive) => {
@@ -110,5 +123,6 @@ module.exports = {
   downgradeIfExpired,
   activateOrExtend,
   effectiveFeeRate,
-  buildEnhancedPhotoUrl
+  buildEnhancedPhotoUrl,
+  generateCode
 };
