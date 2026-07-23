@@ -107,6 +107,41 @@ const subscribe = async (req, res) => {
   }
 };
 
+// ─── ME: Resgatar código Premium gerado pelo admin ──────────────────
+const redeemCode = async (req, res) => {
+  try {
+    const raw = (req.body.code || '').trim().toUpperCase();
+    if (!raw) return badRequest(res, 'Indique o código Premium.');
+
+    const record = await prisma.premiumCode.findUnique({ where: { code: raw } });
+    if (!record) return notFound(res, 'Código inválido. Verifique se copiou correctamente.');
+
+    if (record.status === 'USADO') return badRequest(res, 'Este código já foi utilizado.');
+    if (record.status === 'REVOGADO') return badRequest(res, 'Este código foi revogado e já não pode ser usado.');
+    if (record.status === 'EXPIRADO' || (record.expiresAt && new Date(record.expiresAt) < new Date())) {
+      if (record.status !== 'EXPIRADO') {
+        await prisma.premiumCode.update({ where: { id: record.id }, data: { status: 'EXPIRADO' } });
+      }
+      return badRequest(res, 'Este código expirou.');
+    }
+
+    const periodEnd = await prisma.$transaction(async (tx) => {
+      const end = await premiumService.activateOrExtend(tx, req.user.id, record.months * 30);
+      await tx.premiumCode.update({
+        where: { id: record.id },
+        data: { status: 'USADO', usedById: req.user.id, usedAt: new Date() }
+      });
+      return end;
+    });
+
+    logger.info(`[Premium.redeemCode] Código ${record.code} resgatado por ${req.user.email} (+${record.months} mês(es)).`);
+    return ok(res, { premiumExpiresAt: periodEnd, months: record.months }, 'Código resgatado! A sua Conta Premium está activa.');
+  } catch (err) {
+    logger.error(`[Premium.redeemCode] ${err.message}`);
+    return serverError(res);
+  }
+};
+
 // ─── ME: Consultar estado de uma tentativa de pagamento ────────────
 const subscriptionStatus = async (req, res) => {
   try {
@@ -408,8 +443,79 @@ const adminRevoke = async (req, res) => {
   }
 };
 
+// Gera 1 ou mais códigos Premium de uma vez (ex: lote para uma feira
+// ou parceria). "months" define quantos meses cada código concede.
+const adminCreateCodes = async (req, res) => {
+  try {
+    const { months = 1, quantity = 1, note, expiresAt } = req.body;
+    const n = Math.min(Math.max(parseInt(quantity) || 1, 1), 100);
+    const m = Math.min(Math.max(parseInt(months) || 1, 1), 24);
+    if (!n || !m) return badRequest(res, 'Indique quantidade e duração válidas.');
+
+    const codes = [];
+    for (let i = 0; i < n; i++) {
+      let code;
+      // Colisão é praticamente impossível (32^8 combinações), mas
+      // confirma-se mesmo assim antes de gravar em lote.
+      do { code = premiumService.generateCode(); }
+      while (await prisma.premiumCode.findUnique({ where: { code } }));
+      codes.push({
+        code, months: m, note: note?.trim() || null,
+        createdById: req.user.id,
+        expiresAt: expiresAt ? new Date(expiresAt) : null
+      });
+    }
+
+    await prisma.premiumCode.createMany({ data: codes });
+    logger.info(`[Admin] ${n} código(s) Premium (${m} mês/es cada) gerados por ${req.user.email}.`);
+    return ok(res, { codes: codes.map(c => c.code) }, `${n} código(s) Premium gerado(s).`);
+  } catch (err) {
+    logger.error(`[Premium.adminCreateCodes] ${err.message}`);
+    return serverError(res);
+  }
+};
+
+const adminListCodes = async (req, res) => {
+  try {
+    const { status, q, page = 1, limit = 30 } = req.query;
+    const { take, skip } = paginate(page, limit);
+    const where = {
+      ...(status ? { status } : {}),
+      ...(q ? { code: { contains: q.trim().toUpperCase() } } : {})
+    };
+    const [codes, total] = await Promise.all([
+      prisma.premiumCode.findMany({
+        where, take, skip, orderBy: { createdAt: 'desc' },
+        include: {
+          createdBy: { select: { name: true, email: true } },
+          usedBy: { select: { name: true, email: true } }
+        }
+      }),
+      prisma.premiumCode.count({ where })
+    ]);
+    return ok(res, { codes, meta: paginateMeta(total, page, limit) });
+  } catch (err) {
+    logger.error(`[Premium.adminListCodes] ${err.message}`);
+    return serverError(res);
+  }
+};
+
+const adminRevokeCode = async (req, res) => {
+  try {
+    const record = await prisma.premiumCode.findUnique({ where: { id: req.params.id } });
+    if (!record) return notFound(res);
+    if (record.status === 'USADO') return badRequest(res, 'Este código já foi usado — não pode ser revogado.');
+
+    await prisma.premiumCode.update({ where: { id: record.id }, data: { status: 'REVOGADO' } });
+    return ok(res, {}, 'Código revogado.');
+  } catch (err) {
+    logger.error(`[Premium.adminRevokeCode] ${err.message}`);
+    return serverError(res);
+  }
+};
+
 module.exports = {
-  myStatus, subscribe, subscriptionStatus, cancelSubscription, analytics,
+  myStatus, subscribe, subscriptionStatus, cancelSubscription, redeemCode, analytics,
   enhancePhoto, priceSuggestion, listQuickReplies, createQuickReply, deleteQuickReply,
-  adminList, adminGrant, adminRevoke
+  adminList, adminGrant, adminRevoke, adminCreateCodes, adminListCodes, adminRevokeCode
 };
