@@ -71,6 +71,7 @@ model User {
 
   // Relations
   bazar             Bazar?
+  products          Product[]
   orders            Order[]   @relation("BuyerOrders")
   sellerOrders      Order[]   @relation("SellerOrders")
   reviewsGiven      Review[]  @relation("ReviewsByUser")
