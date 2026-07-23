@@ -71,7 +71,6 @@ model User {
 
   // Relations
   bazar             Bazar?
-  products          Product[]
   orders            Order[]   @relation("BuyerOrders")
   sellerOrders      Order[]   @relation("SellerOrders")
   reviewsGiven      Review[]  @relation("ReviewsByUser")
@@ -103,6 +102,8 @@ model User {
   // Premium
   premiumSubscriptions PremiumSubscription[]
   quickReplies         QuickReply[]
+  premiumCodesCreated  PremiumCode[]          @relation("PremiumCodeCreator")
+  premiumCodesRedeemed PremiumCode[]          @relation("PremiumCodeRedeemer")
 
   @@index([email])
   @@index([role])
@@ -223,7 +224,6 @@ model Product {
   bazarId        String
   bazar          Bazar    @relation(fields: [bazarId], references: [id], onDelete: Cascade)
   sellerId       String
-  seller         User     @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   name           String
   description    String   @db.Text
   price          Float
@@ -781,6 +781,37 @@ enum PremiumSubStatus {
   PAGA
   FALHADA
   CANCELADA
+}
+
+// Código Premium gerado pelo admin (cortesias, parcerias, suporte) —
+// uma alternativa ao pagamento via STK push. Um código dá direito a
+// N meses de Premium e só pode ser resgatado uma vez; o resgate passa
+// pelo mesmo premiumService.activateOrExtend usado no pagamento, por
+// isso soma-se correctamente a um período já activo.
+model PremiumCode {
+  id          String            @id @default(uuid())
+  code        String            @unique
+  months      Int               @default(1)
+  note        String?           // ex: "Parceria feira de Maputo Jul/2026"
+  createdById String
+  createdBy   User              @relation("PremiumCodeCreator", fields: [createdById], references: [id])
+  status      PremiumCodeStatus @default(ACTIVO)
+  usedById    String?
+  usedBy      User?             @relation("PremiumCodeRedeemer", fields: [usedById], references: [id])
+  usedAt      DateTime?
+  expiresAt   DateTime?         // opcional — se não usado até esta data, deixa de ser resgatável
+  createdAt   DateTime          @default(now())
+
+  @@index([code])
+  @@index([status])
+  @@index([createdById])
+}
+
+enum PremiumCodeStatus {
+  ACTIVO
+  USADO
+  REVOGADO
+  EXPIRADO
 }
 
 // Respostas rápidas personalizadas do vendedor no chat (exclusivo
