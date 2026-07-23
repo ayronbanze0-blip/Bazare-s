@@ -222,6 +222,7 @@ model Product {
   bazarId        String
   bazar          Bazar    @relation(fields: [bazarId], references: [id], onDelete: Cascade)
   sellerId       String
+  seller         User     @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   name           String
   description    String   @db.Text
   price          Float
