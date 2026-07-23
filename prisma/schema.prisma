@@ -14,19 +14,13 @@ model User {
   id                String    @id @default(uuid())
   name              String
   email             String    @unique
-  passwordHash      String?
+  passwordHash      String
   role              Role      @default(BUYER)
   phone             String?
   location          String?
   bio               String?
   avatarUrl         String?
   coverUrl          String?
-
-  // Login social (Google / Facebook / Apple). Fica null para contas
-  // normais de email+password. O par (provider, providerId) identifica
-  // a conta do lado do fornecedor (ex: o "sub" do token do Google).
-  provider          String?
-  providerId        String?
 
   // Auth
   verified          Boolean   @default(false)
@@ -36,6 +30,16 @@ model User {
 
   // Seller verification badge
   verifiedSeller    Boolean   @default(false)
+  verificationRequestedAt DateTime?
+
+  // Conta Premium — assinatura mensal (selo, destaque na pesquisa,
+  // taxa reduzida, analytics avançado). isPremium é a flag rápida usada
+  // em todas as leituras; premiumExpiresAt é a fonte de verdade — se
+  // já passou, tratamos como não-premium mesmo que isPremium ainda
+  // esteja true (ver premiumService.isActive / lazy downgrade).
+  isPremium         Boolean   @default(false)
+  premiumSince      DateTime?
+  premiumExpiresAt  DateTime?
 
   // Conta de sistema do BazarBot (assistente de suporte por IA).
   // Só deve existir UMA linha com isBazarBot=true.
@@ -95,10 +99,14 @@ model User {
   reviewedDeposits    DepositRequest[]      @relation("DepositReviewedBy")
   reviewedWithdrawals WithdrawalRequest[]   @relation("WithdrawalReviewedBy")
 
+  // Premium
+  premiumSubscriptions PremiumSubscription[]
+  quickReplies         QuickReply[]
+
   @@index([email])
   @@index([role])
   @@index([revendedorId])
-  @@unique([provider, providerId])
+  @@index([isPremium])
 }
 
 enum Role {
@@ -182,6 +190,11 @@ model Bazar {
   bannerUrl   String?
   logoUrl     String?
   active      Boolean  @default(true)
+
+  // Banner promocional personalizado (exclusivo Conta Premium)
+  promoTitle    String?
+  promoSubtitle String?
+  promoColor    String?  // hex, ex: "#16A34A" — usado como cor de fundo do banner promocional
 
   // Financial
   feeRate       Float   @default(2.0)
@@ -733,6 +746,53 @@ enum CommissionMethod {
   WALLET
   ZUMBOPAY
   MANUAL
+}
+
+// ─────────────────────────────────────────────
+// CONTA PREMIUM
+// ─────────────────────────────────────────────
+// Um registo por ciclo de cobrança (mensal). O estado "actual" do
+// utilizador vive em User.isPremium/premiumExpiresAt — esta tabela é
+// o histórico/rasto de cada tentativa de pagamento via STK push.
+model PremiumSubscription {
+  id               String            @id @default(uuid())
+  userId           String
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amount           Float
+  periodStart      DateTime?
+  periodEnd        DateTime?
+  status           PremiumSubStatus  @default(PROCESSANDO)
+  msisdn           String?           // telefone usado no STK push
+  gatewayReference String?           // referência devolvida pela ZumboPay
+  gatewayChannel   String?           // "mpesa" | "emola"
+  failReason       String?
+  createdAt        DateTime          @default(now())
+  paidAt           DateTime?
+
+  @@index([userId])
+  @@index([status])
+  @@index([gatewayReference])
+}
+
+enum PremiumSubStatus {
+  PROCESSANDO
+  PAGA
+  FALHADA
+  CANCELADA
+}
+
+// Respostas rápidas personalizadas do vendedor no chat (exclusivo
+// Conta Premium). Só texto pronto a inserir — nada de automação aqui.
+model QuickReply {
+  id        String   @id @default(uuid())
+  sellerId  String
+  seller    User     @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  label     String   // curto, mostrado no botão (ex: "Prazo de entrega")
+  text      String   @db.Text // texto completo inserido no campo de mensagem
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([sellerId])
 }
 
 enum CommissionStatus {
