@@ -78,4 +78,41 @@ const remove = async (req, res) => {
   }
 };
 
-module.exports = { list, markRead, markAllRead, remove };
+// ─── Registar/actualizar o token FCM deste dispositivo ──────────────
+// Chamado sempre que o token muda (a Firebase pode rodá-lo a qualquer
+// momento) — por isso é um upsert, não um create simples. O mesmo
+// token nunca pode ficar preso a um utilizador antigo (ex.: logout +
+// login com outra conta no mesmo telemóvel), daí o upsert reatribuir
+// userId/lastSeenAt mesmo quando o token já existia.
+const registerDevice = async (req, res) => {
+  try {
+    const { token, platform } = req.body;
+    if (!token) return badRequest(res, 'Token do dispositivo em falta.');
+
+    await prisma.deviceToken.upsert({
+      where: { token },
+      update: { userId: req.user.id, platform: platform || null, lastSeenAt: new Date() },
+      create: { userId: req.user.id, token, platform: platform || null }
+    });
+
+    return ok(res, {}, 'Dispositivo registado para notificações push.');
+  } catch (err) {
+    logger.error(`[Notifications.registerDevice] ${err.message}`);
+    return serverError(res);
+  }
+};
+
+// ─── Remover o token deste dispositivo (logout, ou desactivar push) ─
+const unregisterDevice = async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token) return badRequest(res, 'Token do dispositivo em falta.');
+    await prisma.deviceToken.deleteMany({ where: { token, userId: req.user.id } });
+    return ok(res, {}, 'Dispositivo removido das notificações push.');
+  } catch (err) {
+    logger.error(`[Notifications.unregisterDevice] ${err.message}`);
+    return serverError(res);
+  }
+};
+
+module.exports = { list, markRead, markAllRead, remove, registerDevice, unregisterDevice };
