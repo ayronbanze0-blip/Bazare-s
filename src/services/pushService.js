@@ -95,6 +95,7 @@ const sendToTokens = async (tokens, { title, body, link }) => {
     res.responses.forEach((r, i) => {
       if (r.success) return;
       const code = r.error?.code || '';
+      logger.warn(`[Push] Falha no token ...${tokens[i].slice(-12)}: ${code} — ${r.error?.message || ''}`);
       if (code === 'messaging/registration-token-not-registered' || code === 'messaging/invalid-registration-token') {
         invalidTokens.push(tokens[i]);
       }
