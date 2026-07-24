@@ -118,9 +118,13 @@ const sendToUser = async (prisma, userId, { title, body, link }) => {
   if (!isConfigured()) return;
   try {
     const devices = await prisma.deviceToken.findMany({ where: { userId }, select: { token: true } });
-    if (!devices.length) return;
+    if (!devices.length) {
+      logger.info(`[Push] Utilizador ${userId} não tem dispositivos registados — nada a enviar.`);
+      return;
+    }
 
-    const { invalidTokens } = await sendToTokens(devices.map(d => d.token), { title, body, link });
+    const { successCount, invalidTokens } = await sendToTokens(devices.map(d => d.token), { title, body, link });
+    logger.info(`[Push] Enviado para ${userId}: ${successCount}/${devices.length} dispositivo(s) com sucesso.`);
 
     if (invalidTokens.length) {
       await prisma.deviceToken.deleteMany({ where: { token: { in: invalidTokens } } });
