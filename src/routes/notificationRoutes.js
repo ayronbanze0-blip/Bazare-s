@@ -8,5 +8,7 @@ router.get('/', authenticate, ctrl.list);
 router.patch('/:id/read', authenticate, ctrl.markRead);
 router.patch('/read-all', authenticate, ctrl.markAllRead);
 router.delete('/:id', authenticate, ctrl.remove);
+router.post('/device-token', authenticate, ctrl.registerDevice);
+router.delete('/device-token', authenticate, ctrl.unregisterDevice);
 
 module.exports = router;
