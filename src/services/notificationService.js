@@ -1,6 +1,7 @@
 'use strict';
 
 const logger = require('../utils/logger');
+const pushService = require('./pushService');
 
 let prismaClient;
 let ioClient;
@@ -31,6 +32,10 @@ const push = async (userId, { type = 'INFO', title, message, link = null }) => {
         createdAt: notif.createdAt
       });
     }
+    // Push nativo (FCM) — "fire and forget": não bloqueia nem faz
+    // falhar o resto do fluxo (ex.: criação da encomenda) se a
+    // Firebase estiver indisponível ou não configurada.
+    pushService.sendToUser(prismaClient, userId, { title, body: message, link }).catch(() => {});
     return notif;
   } catch (err) {
     logger.error(`[Notif] Failed to push for user ${userId}: ${err.message}`);
