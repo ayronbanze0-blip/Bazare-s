@@ -15,6 +15,7 @@ const bazarValidation = [
 router.get('/', ctrl.list);
 router.get('/me', authenticate, isSeller, ctrl.myBazar);
 router.get('/:idOrSlug', optionalAuth, ctrl.getOne);
+router.post('/:idOrSlug/whatsapp-click', ctrl.trackWhatsappClick);
 router.post('/', authenticate, isSeller, bazarValidation, ctrl.create);
 router.put('/me', authenticate, isSeller, upload.fields([{ name: 'banner', maxCount: 1 }, { name: 'logo', maxCount: 1 }]), ctrl.update);
 

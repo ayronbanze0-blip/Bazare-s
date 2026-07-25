@@ -28,6 +28,8 @@ router.patch('/:id/stock', authenticate, isSeller, ctrl.toggleStock);
 router.patch('/:id/images/reorder', authenticate, isSeller, ctrl.reorderImages);
 router.delete('/:id', authenticate, isSeller, ctrl.remove);
 router.delete('/images/:imageId', authenticate, isSeller, ctrl.deleteImage);
+router.post('/:id/pin', authenticate, isSeller, ctrl.pin);       // Destaque do dia (Premium)
+router.delete('/:id/pin', authenticate, isSeller, ctrl.unpin);
 
 // ─── Buyer (antes de /:id pelo mesmo motivo) ─────────────────────
 router.get('/favorites', authenticate, ctrl.myFavorites);
