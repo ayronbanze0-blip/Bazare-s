@@ -2,6 +2,11 @@
 
 require('dotenv').config();
 
+// ─── Sentry (TEM de ser o 1º require depois do dotenv — antes de
+// './app' e de tudo o resto, para conseguir capturar erros de
+// qualquer módulo carregado a seguir) ──────────────────────────────
+const Sentry = require('./config/sentry');
+
 const http = require('http');
 const { Server } = require('socket.io');
 const app = require('./app');
@@ -99,9 +104,11 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 
 process.on('unhandledRejection', (reason) => {
   logger.error(`Unhandled Rejection: ${reason}`);
+  Sentry.captureException(reason instanceof Error ? reason : new Error(String(reason)));
 });
 process.on('uncaughtException', (err) => {
   logger.error(`Uncaught Exception: ${err.message}`);
+  Sentry.captureException(err);
   process.exit(1);
 });
 
