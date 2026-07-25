@@ -33,4 +33,3 @@ if (dsn) {
 }
 
 module.exports = Sentry;
-
