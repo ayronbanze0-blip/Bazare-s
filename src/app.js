@@ -114,6 +114,14 @@ app.get('/', (req, res) => {
   });
 });
 
+// ─── Teste manual do Sentry ───────────────────────────────────────
+// Visita /sentry-test uma vez para confirmar que o backend está a
+// reportar erros. Não precisa de autenticação de propósito — é só
+// para verificação rápida, não expõe nenhum dado.
+app.get('/sentry-test', () => {
+  throw new Error('Bazares — teste manual do Sentry (backend)');
+});
+
 // ─── 404 & Error Handling ─────────────────────────────────────────
 app.use(notFoundHandler);
 app.use(errorHandler);
