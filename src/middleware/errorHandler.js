@@ -1,5 +1,6 @@
 'use strict';
 
+const Sentry = require('../config/sentry');
 const logger = require('../utils/logger');
 const { notFound } = require('../utils/response');
 
@@ -70,7 +71,14 @@ const errorHandler = (err, req, res, next) => {
     return res.status(422).json({ success: false, message: err.message });
   }
 
-  // Default 500
+  // Default 500 — chegar aqui significa que nenhum dos casos conhecidos
+  // acima tratou o erro, ou seja, é inesperado. Só estes vão para o
+  // Sentry (os 4xx já tratados acima são esperados e não gastam quota).
+  Sentry.captureException(err, {
+    extra: { requestId: req.id, url: req.originalUrl, method: req.method },
+    user: req.user?.id ? { id: req.user.id } : undefined
+  });
+
   const msg = process.env.NODE_ENV === 'production'
     ? 'Erro interno do servidor.'
     : err.message;
