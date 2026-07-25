@@ -35,6 +35,14 @@ const list = async (req, res) => {
     const { q, category, bazarId, sellerId, minPrice, maxPrice, sort = 'new', page = 1, limit = 20 } = req.query;
     const { take, skip } = paginate(page, limit);
 
+    // Limpa "destaques do dia" (Premium) expirados — barato (índice em
+    // `featured`, normalmente 0 linhas afectadas) e garante que o selo
+    // "Destaque" nunca fica pendurado depois das 24h combinadas.
+    await prisma.product.updateMany({
+      where: { featured: true, featuredUntil: { lt: new Date() } },
+      data: { featured: false, featuredUntil: null }
+    });
+
     const where = {
       active: true,
       ...(q && {
@@ -54,15 +62,18 @@ const list = async (req, res) => {
     // inicial), vendedores Premium aparecem primeiro. Nos outros sorts
     // explícitos (preço, avaliação, etc.) respeitamos a escolha do
     // utilizador sem reordenar por cima.
+    // "Destaque do dia" (Premium): produto fixado pelo vendedor aparece
+    // sempre primeiro, em qualquer critério de ordenação escolhido.
+    const featuredFirst = { featured: 'desc' };
     const orderBy = {
-      new: [{ seller: { isPremium: 'desc' } }, { createdAt: 'desc' }],
-      old: { createdAt: 'asc' },
-      'price-asc': { price: 'asc' },
-      'price-desc': { price: 'desc' },
-      rating: { rating: 'desc' },
-      sales: { sales: 'desc' },
-      views: { views: 'desc' }
-    }[sort] || [{ seller: { isPremium: 'desc' } }, { createdAt: 'desc' }];
+      new: [featuredFirst, { seller: { isPremium: 'desc' } }, { createdAt: 'desc' }],
+      old: [featuredFirst, { createdAt: 'asc' }],
+      'price-asc': [featuredFirst, { price: 'asc' }],
+      'price-desc': [featuredFirst, { price: 'desc' }],
+      rating: [featuredFirst, { rating: 'desc' }],
+      sales: [featuredFirst, { sales: 'desc' }],
+      views: [featuredFirst, { views: 'desc' }]
+    }[sort] || [featuredFirst, { seller: { isPremium: 'desc' } }, { createdAt: 'desc' }];
 
     const [products, total] = await Promise.all([
       prisma.product.findMany({
@@ -512,6 +523,12 @@ const trackView = async (req, res) => {
 // Produtos marcados como destaque pelo admin — para o banner/carousel da homepage.
 const featured = async (req, res) => {
   try {
+    // Limpa "destaques do dia" (Premium) já expirados antes de listar,
+    // para que nunca apareça um produto pinado há mais de 24h.
+    await prisma.product.updateMany({
+      where: { featured: true, featuredUntil: { lt: new Date() } },
+      data: { featured: false, featuredUntil: null }
+    });
     const products = await prisma.product.findMany({
       where: { featured: true, active: true },
       take: 12,
@@ -592,7 +609,63 @@ const generateDescription = async (req, res) => {
   }
 };
 
-module.exports = { list, getOne, featured, related, trackView, create, update, deleteImage, reorderImages, toggle, toggleStock, remove, myProducts, toggleFavorite, myFavorites, attachFavorites, generateDescription };
+// ─── POST /api/products/:id/pin ────────────────────────────────────
+// "Destaque do dia" — exclusivo Conta Premium. Fixa 1 produto no topo
+// do bazar e das pesquisas por 24h. Fixar um novo produto substitui
+// automaticamente o destaque anterior do mesmo vendedor.
+const pin = async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (!premiumService.isActive(user)) {
+      return forbidden(res, 'O "Destaque do dia" é exclusivo da Conta Premium.');
+    }
+
+    const product = await prisma.product.findFirst({
+      where: { id: req.params.id, sellerId: req.user.id }
+    });
+    if (!product) return notFound(res, 'Produto não encontrado.');
+
+    const featuredUntil = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+    await prisma.$transaction([
+      // Só pode haver 1 destaque activo por vendedor de cada vez.
+      prisma.product.updateMany({
+        where: { sellerId: req.user.id, featured: true, id: { not: product.id } },
+        data: { featured: false, featuredUntil: null }
+      }),
+      prisma.product.update({
+        where: { id: product.id },
+        data: { featured: true, featuredUntil }
+      })
+    ]);
+
+    return ok(res, { featured: true, featuredUntil });
+  } catch (err) {
+    logger.error(`[Products.pin] ${err.message}`);
+    return serverError(res);
+  }
+};
+
+// ─── DELETE /api/products/:id/pin ──────────────────────────────────
+const unpin = async (req, res) => {
+  try {
+    const product = await prisma.product.findFirst({
+      where: { id: req.params.id, sellerId: req.user.id }
+    });
+    if (!product) return notFound(res, 'Produto não encontrado.');
+
+    await prisma.product.update({
+      where: { id: product.id },
+      data: { featured: false, featuredUntil: null }
+    });
+    return ok(res, { featured: false });
+  } catch (err) {
+    logger.error(`[Products.unpin] ${err.message}`);
+    return serverError(res);
+  }
+};
+
+module.exports = { list, getOne, featured, related, trackView, create, update, deleteImage, reorderImages, toggle, toggleStock, remove, myProducts, toggleFavorite, myFavorites, attachFavorites, generateDescription, pin, unpin };
 
 
 

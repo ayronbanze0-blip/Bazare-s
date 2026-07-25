@@ -225,7 +225,8 @@ const analytics = async (req, res) => {
       topProducts,
       categoryBreakdown: Object.entries(byCategory).map(([category, sales]) => ({ category, sales })),
       totalOrders30d: orders.length,
-      totalRevenue30d: orders.reduce((sum, o) => sum + o.total, 0)
+      totalRevenue30d: orders.reduce((sum, o) => sum + o.total, 0),
+      whatsappClicks: bazar.whatsappClicks
     });
   } catch (err) {
     logger.error(`[Premium.analytics] ${err.message}`);

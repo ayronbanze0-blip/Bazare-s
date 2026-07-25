@@ -218,7 +218,22 @@ const myBazar = async (req, res) => {
   }
 };
 
-module.exports = { list, getOne, create, update, myBazar };
+// ─── POST /api/bazars/:idOrSlug/whatsapp-click ─────────────────────
+// Fire-and-forget, sem auth: conta cliques no botão "Contactar via
+// WhatsApp" para alimentar a estatística de contactos (Conta Premium).
+const trackWhatsappClick = async (req, res) => {
+  try {
+    await prisma.bazar.updateMany({
+      where: { OR: [{ id: req.params.idOrSlug }, { slug: req.params.idOrSlug }] },
+      data: { whatsappClicks: { increment: 1 } }
+    });
+  } catch (err) {
+    logger.error(`[Bazar.trackWhatsappClick] ${err.message}`);
+  }
+  return ok(res, {});
+};
+
+module.exports = { list, getOne, create, update, myBazar, trackWhatsappClick };
 
 
 
