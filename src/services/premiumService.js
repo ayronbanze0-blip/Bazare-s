@@ -67,7 +67,10 @@ const activateOrExtend = async (tx, userId, periodDays = PREMIUM_PERIOD_DAYS) =>
     data: {
       isPremium: true,
       premiumSince: user.premiumSince || now,
-      premiumExpiresAt: periodEnd
+      premiumExpiresAt: periodEnd,
+      // Selo de Vendedor Verificado — atribuído automaticamente ao activar
+      // Premium (não é removido ao expirar, tal como o resto do histórico).
+      verifiedSeller: true
     }
   });
 

@@ -81,13 +81,24 @@ const sendToTokens = async (tokens, { title, body, link }) => {
   if (!firebaseApp || !tokens?.length) return { successCount: 0, invalidTokens: [] };
 
   try {
+    // IMPORTANTE: nunca incluir aqui um payload "notification" (nem
+    // "webpush.notification"). Quando uma mensagem FCM tem um payload
+    // de notificação, o browser mostra-a automaticamente assim que a
+    // push chega — ANTES do nosso service worker correr. Como o nosso
+    // firebase-messaging-sw.js também mostra a notificação manualmente
+    // em onBackgroundMessage, isso resultava em 2 notificações por
+    // envio. Enviando só "data" (strings), só o nosso código mostra a
+    // notificação — uma única vez.
     const res = await admin.messaging().sendEachForMulticast({
       tokens,
-      notification: { title, body },
-      data: link ? { link } : {},
+      data: {
+        title: title || 'Bazares',
+        body: body || '',
+        icon: '/icons/icon-192.png',
+        ...(link ? { link } : {})
+      },
       webpush: {
-        fcmOptions: link ? { link } : undefined,
-        notification: { icon: '/icons/icon-192.png' }
+        fcmOptions: link ? { link } : undefined
       }
     });
 
