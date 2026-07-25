@@ -202,6 +202,9 @@ model Bazar {
   promoSubtitle String?
   promoColor    String?  // hex, ex: "#16A34A" — usado como cor de fundo do banner promocional
 
+  // Estatística Premium: quantos cliques recebeu o botão "Contactar via WhatsApp"
+  whatsappClicks Int     @default(0)
+
   // Financial
   feeRate       Float   @default(2.0)
   pendingFees   Float   @default(0)
@@ -241,6 +244,11 @@ model Product {
   deliveryMethod String   @default("Combinado")
   active         Boolean  @default(true)
   featured       Boolean  @default(false)
+  // "Destaque do dia" — Conta Premium: vendedor pode fixar 1 produto no
+  // topo do seu bazar/pesquisa por 24h. featured=true enquanto activo;
+  // featuredUntil marca quando expira (limpo de forma lazy no pin() e
+  // no featured()).
+  featuredUntil  DateTime?
 
   // Moderação por IA — corre antes da publicação. APPROVED por
   // omissão para produtos criados antes desta funcionalidade existir.
