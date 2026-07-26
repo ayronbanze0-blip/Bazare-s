@@ -81,6 +81,9 @@ model User {
   chatsAsB          Chat[]    @relation("ChatUserB")
   messagesSent      Message[]
   favorites         Favorite[]
+  following         Follow[]
+  comments          Comment[]
+  announcements     Announcement[]
   cartItems         CartItem[]
   tokens            RefreshToken[]
   verificationCodes VerificationCode[]
@@ -217,6 +220,8 @@ model Bazar {
   products    Product[]
   orders      Order[]
   transactions Transaction[]
+  followers   Follow[]
+  announcements Announcement[]
 
   @@index([category])
   @@index([active])
@@ -268,6 +273,7 @@ model Product {
   orderItems     OrderItem[]
   reviews        Review[]
   favorites      Favorite[]
+  comments       Comment[]
   cartItems      CartItem[]
   reports        Report[]
 
@@ -332,6 +338,57 @@ model Favorite {
 
   @@unique([userId, productId])
   @@index([userId])
+}
+
+// ─────────────────────────────────────────────
+// FOLLOW (seguir um bazar/vendedor — notificado quando publica)
+// ─────────────────────────────────────────────
+model Follow {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bazarId   String
+  bazar     Bazar    @relation(fields: [bazarId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, bazarId])
+  @@index([userId])
+  @@index([bazarId])
+}
+
+// ─────────────────────────────────────────────
+// COMMENTS (comentários abertos em cada produto)
+// ─────────────────────────────────────────────
+model Comment {
+  id        String   @id @default(uuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  text      String   @db.Text
+  createdAt DateTime @default(now())
+
+  @@index([productId])
+  @@index([userId])
+}
+
+// ─────────────────────────────────────────────
+// ANNOUNCEMENTS ("anúncios" — posts estilo rede social,
+// sem preço/stock, exclusivo de vendedores Premium)
+// ─────────────────────────────────────────────
+model Announcement {
+  id            String   @id @default(uuid())
+  bazarId       String
+  bazar         Bazar    @relation(fields: [bazarId], references: [id], onDelete: Cascade)
+  sellerId      String
+  seller        User     @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  text          String   @db.Text
+  imageUrl      String?
+  imagePublicId String?
+  createdAt     DateTime @default(now())
+
+  @@index([bazarId])
+  @@index([sellerId])
 }
 
 // ─────────────────────────────────────────────
