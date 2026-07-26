@@ -3,7 +3,7 @@
 const { validationResult } = require('express-validator');
 
 const { ok, created, badRequest, forbidden, notFound, serverError, validationError } = require('../utils/response');
-const { paginate, paginateMeta, calcFee } = require('../utils/helpers');
+const { paginate, paginateMeta, calcFee, parseLatLng } = require('../utils/helpers');
 const notifSvc = require('../services/notificationService');
 const emailSvc = require('../services/emailService');
 const premiumService = require('../services/premiumService');
@@ -31,7 +31,8 @@ const placeOrder = async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return validationError(res, errors.array());
 
-  const { items, buyerName, buyerPhone, address, payment, size, color, notes } = req.body;
+  const { items, buyerName, buyerPhone, address, latitude, longitude, payment, size, color, notes } = req.body;
+  const geo = parseLatLng(latitude, longitude);
 
   if (!items || !items.length) return badRequest(res, 'Nenhum item na encomenda.');
 
@@ -93,6 +94,8 @@ const placeOrder = async (req, res) => {
             buyerName: buyerName || req.user.name,
             buyerPhone,
             address,
+            latitude: geo?.latitude ?? null,
+            longitude: geo?.longitude ?? null,
             payment: payment || 'Pagamento na entrega',
             size: size || null,
             color: color || null,

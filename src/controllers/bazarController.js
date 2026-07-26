@@ -3,13 +3,14 @@
 const { validationResult } = require('express-validator');
 
 const { ok, created, badRequest, forbidden, notFound, conflict, serverError, validationError } = require('../utils/response');
-const { paginate, paginateMeta, sanitize, uniqueSlug, startOfMonth, getBadgeTier } = require('../utils/helpers');
+const { paginate, paginateMeta, sanitize, uniqueSlug, startOfMonth, getBadgeTier, parseLatLng } = require('../utils/helpers');
 const uploadSvc = require('../services/uploadService');
 const premiumService = require('../services/premiumService');
 const logger = require('../utils/logger');
 
 const prisma = require('../config/database');
 const { attachFavorites } = require('./productController');
+const { attachProductEngagement } = require('../services/feedEngagementService');
 
 // ─── PUBLIC: List bazars ─────────────────────────────────────────
 const list = async (req, res) => {
@@ -60,7 +61,7 @@ const getOne = async (req, res) => {
     });
 
     if (!bazar) return notFound(res, 'Bazar não encontrado.');
-    bazar.products = await attachFavorites(bazar.products, req.user?.id);
+    bazar.products = await attachProductEngagement(await attachFavorites(bazar.products, req.user?.id), req.user?.id);
     bazar.followerCount = bazar._count.followers;
     bazar.isFollowing = req.user
       ? !!(await prisma.follow.findUnique({ where: { userId_bazarId: { userId: req.user.id, bazarId: bazar.id } } }))
@@ -81,8 +82,9 @@ const create = async (req, res) => {
     const existing = await prisma.bazar.findUnique({ where: { sellerId: req.user.id } });
     if (existing) return conflict(res, 'Já possui um Bazar criado.');
 
-    const { name, description, category, phone, location } = req.body;
+    const { name, description, category, phone, location, latitude, longitude } = req.body;
     const slug = await uniqueSlug(prisma, name, 'bazar');
+    const geo = parseLatLng(latitude, longitude);
 
     let bazar;
     try {
@@ -95,6 +97,8 @@ const create = async (req, res) => {
           category,
           phone: phone || null,
           location: location || null,
+          latitude: geo?.latitude ?? null,
+          longitude: geo?.longitude ?? null,
           feeRate: parseFloat(process.env.DEFAULT_FEE_RATE) || 2.0
         }
       });
@@ -120,9 +124,14 @@ const update = async (req, res) => {
     if (!bazar) return notFound(res, 'Bazar não encontrado.');
     if (bazar.sellerId !== req.user.id && req.user.role !== 'ADMIN') return forbidden(res);
 
-    const { name, description, category, phone, location, promoTitle, promoSubtitle, promoColor } = req.body;
+    const { name, description, category, phone, location, latitude, longitude, promoTitle, promoSubtitle, promoColor } = req.body;
     let slug = bazar.slug;
     if (name && name !== bazar.name) slug = await uniqueSlug(prisma, name, 'bazar', bazar.id);
+
+    // Coordenadas são opcionais e independentes uma da outra vindas do
+    // corpo do pedido: só actualizamos quando o par é válido, para nunca
+    // gravar uma latitude sem longitude (ou vice-versa) por engano.
+    const geo = (latitude !== undefined || longitude !== undefined) ? parseLatLng(latitude, longitude) : undefined;
 
     // Banner promocional personalizado — exclusivo Premium. Se a conta
     // não está (ou já não está) activa, ignoramos silenciosamente estes
@@ -148,6 +157,7 @@ const update = async (req, res) => {
         ...(category && { category }),
         ...(phone !== undefined && { phone }),
         ...(location !== undefined && { location }),
+        ...(geo !== undefined && { latitude: geo?.latitude ?? null, longitude: geo?.longitude ?? null }),
         ...promoData
       }
     });

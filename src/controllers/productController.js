@@ -3,11 +3,12 @@
 const { validationResult } = require('express-validator');
 
 const { ok, created, badRequest, forbidden, notFound, serverError, validationError } = require('../utils/response');
-const { paginate, paginateMeta, sanitize } = require('../utils/helpers');
+const { paginate, paginateMeta, sanitize, parseLatLng, haversineKm } = require('../utils/helpers');
 const uploadSvc = require('../services/uploadService');
 const aiSvc = require('../services/aiService');
 const premiumService = require('../services/premiumService');
 const notificationSvc = require('../services/notificationService');
+const { attachProductEngagement } = require('../services/feedEngagementService');
 const logger = require('../utils/logger');
 
 const prisma = require('../config/database');
@@ -33,8 +34,9 @@ async function attachFavorites(products, userId) {
 // ─── PUBLIC: List products ───────────────────────────────────────
 const list = async (req, res) => {
   try {
-    const { q, category, bazarId, sellerId, minPrice, maxPrice, sort = 'new', page = 1, limit = 20 } = req.query;
+    const { q, category, bazarId, sellerId, minPrice, maxPrice, sort = 'new', page = 1, limit = 20, lat, lng } = req.query;
     const { take, skip } = paginate(page, limit);
+    const geo = sort === 'distance' ? parseLatLng(lat, lng) : null;
 
     // Limpa "destaques do dia" (Premium) expirados — barato (índice em
     // `featured`, normalmente 0 linhas afectadas) e garante que o selo
@@ -58,6 +60,31 @@ const list = async (req, res) => {
       ...(minPrice && { price: { gte: parseFloat(minPrice) } }),
       ...(maxPrice && { price: { ...((minPrice && { gte: parseFloat(minPrice) }) || {}), lte: parseFloat(maxPrice) } })
     };
+
+    // ─── "Perto de mim" ────────────────────────────────────────────
+    // Só produtos cujo bazar tem localização exacta definida entram
+    // nesta ordenação. Calculamos a distância (Haversine) em JS sobre
+    // o conjunto já filtrado por texto/categoria/preço — não precisa
+    // de PostGIS ao volume actual da loja. Se o pool ficar muito grande
+    // no futuro, isto passa a valer a pena mover para SQL puro.
+    if (geo) {
+      const pool = await prisma.product.findMany({
+        where: { ...where, bazar: { latitude: { not: null }, longitude: { not: null } } },
+        include: {
+          images: { orderBy: { order: 'asc' }, take: 1 },
+          bazar: { select: { id: true, name: true, slug: true, latitude: true, longitude: true } },
+          _count: { select: { reviews: true, favorites: true } }
+        },
+        take: 3000 // limite de segurança sobre o pool candidato à ordenação por distância
+      });
+      const withDistance = pool
+        .map(p => ({ ...p, distanceKm: haversineKm(geo.latitude, geo.longitude, p.bazar.latitude, p.bazar.longitude) }))
+        .sort((a, b) => a.distanceKm - b.distanceKm);
+      const total = withDistance.length;
+      const products = withDistance.slice(skip, skip + take);
+      const withFav = await attachFavorites(products, req.user?.id);
+      return ok(res, { products: await attachProductEngagement(withFav, req.user?.id), meta: paginateMeta(total, page, limit) });
+    }
 
     // No sort 'new' (o mais usado — é o default da listagem e da página
     // inicial), vendedores Premium aparecem primeiro. Nos outros sorts
@@ -88,7 +115,7 @@ const list = async (req, res) => {
       prisma.product.count({ where })
     ]);
 
-    return ok(res, { products: await attachFavorites(products, req.user?.id), meta: paginateMeta(total, page, limit) });
+    return ok(res, { products: await attachProductEngagement(await attachFavorites(products, req.user?.id), req.user?.id), meta: paginateMeta(total, page, limit) });
   } catch (err) {
     logger.error(`[Products.list] ${err.message}`);
     return serverError(res);
@@ -465,7 +492,7 @@ const myFavorites = async (req, res) => {
     // "favorites" aqui fazia a página aparecer sempre vazia, mesmo com
     // favoritos guardados (o contador do dashboard, que conta directamente
     // na tabela Favorite, continuava certo — só esta listagem estava presa).
-    return ok(res, { products: favs.map(f => f.product) });
+    return ok(res, { products: await attachProductEngagement(favs.map(f => f.product), req.user.id) });
   } catch (err) {
     logger.error(`[Products.myFavorites] ${err.message}`);
     return serverError(res);
@@ -545,7 +572,7 @@ const featured = async (req, res) => {
         bazar: { select: { id: true, name: true, slug: true } }
       }
     });
-    return ok(res, { products: await attachFavorites(products, req.user?.id) });
+    return ok(res, { products: await attachProductEngagement(await attachFavorites(products, req.user?.id), req.user?.id) });
   } catch (err) {
     logger.error(`[Products.featured] ${err.message}`);
     return serverError(res);
@@ -575,7 +602,7 @@ const related = async (req, res) => {
         bazar: { select: { name: true, slug: true } }
       }
     });
-    return ok(res, { products: await attachFavorites(products, req.user?.id) });
+    return ok(res, { products: await attachProductEngagement(await attachFavorites(products, req.user?.id), req.user?.id) });
   } catch (err) {
     logger.error(`[Products.related] ${err.message}`);
     return serverError(res);
