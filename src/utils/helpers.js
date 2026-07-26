@@ -135,8 +135,37 @@ const getBadgeTier = (monthlySales = 0) => {
   return { tier: 'BRONZE', label: 'Bronze', icon: '🥉', rank: 1 };
 };
 
+/**
+ * Valida e normaliza um par de coordenadas vindas do corpo de um pedido
+ * (checkout com pin, localização da banca). Devolve { latitude, longitude }
+ * com números válidos, ou null se o par não for utilizável — nunca lança,
+ * porque a coordenada é sempre opcional (o texto da morada continua a
+ * funcionar sem ela).
+ */
+const parseLatLng = (lat, lng) => {
+  const la = parseFloat(lat);
+  const ln = parseFloat(lng);
+  if (!Number.isFinite(la) || !Number.isFinite(ln)) return null;
+  if (la < -90 || la > 90 || ln < -180 || ln > 180) return null;
+  return { latitude: la, longitude: ln };
+};
+
+/**
+ * Distância em quilómetros entre dois pontos (fórmula de Haversine).
+ * Usada na ordenação "perto de mim" — feita em JS sobre um conjunto já
+ * filtrado, não precisa de extensão PostGIS para o volume actual da loja.
+ */
+const haversineKm = (lat1, lng1, lat2, lng2) => {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+
 module.exports = {
   toSlug, uniqueSlug, sanitize, genToken, genCode,
   expiresAt, fmtMT, paginate, paginateMeta, pick, omit, calcFee,
-  startOfWeek, startOfMonth, getBadgeTier
+  startOfWeek, startOfMonth, getBadgeTier, parseLatLng, haversineKm
 };
