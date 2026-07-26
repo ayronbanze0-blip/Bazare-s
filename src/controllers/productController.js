@@ -6,6 +6,7 @@ const { ok, created, badRequest, forbidden, notFound, serverError, validationErr
 const { paginate, paginateMeta, sanitize, parseLatLng, haversineKm } = require('../utils/helpers');
 const uploadSvc = require('../services/uploadService');
 const aiSvc = require('../services/aiService');
+const { uniqueProductSlug } = require('../utils/slugify');
 const premiumService = require('../services/premiumService');
 const notificationSvc = require('../services/notificationService');
 const { attachProductEngagement } = require('../services/feedEngagementService');
@@ -125,8 +126,11 @@ const list = async (req, res) => {
 // ─── PUBLIC: Get single product ──────────────────────────────────
 const getOne = async (req, res) => {
   try {
+    // Aceita tanto o novo slug ("/produto/iphone-13-abc12") como o id
+    // antigo (UUID), para não partir links já partilhados/indexados.
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.params.id);
     const product = await prisma.product.findFirst({
-      where: { id: req.params.id, active: true },
+      where: { [isUuid ? 'id' : 'slug']: req.params.id, active: true },
       include: {
         images: { orderBy: { order: 'asc' } },
         bazar: {
@@ -194,11 +198,20 @@ const create = async (req, res) => {
       return badRequest(res, 'Já tens um produto activo com este nome. Edita o existente ou usa um nome diferente.');
     }
 
+    const slug = await uniqueProductSlug(
+      { name: sanitize(name), location: location || req.user.location },
+      async (candidate) => {
+        const existing = await prisma.product.findUnique({ where: { slug: candidate }, select: { id: true } });
+        return !!existing;
+      }
+    );
+
     const product = await prisma.product.create({
       data: {
         bazarId: bazar.id,
         sellerId: req.user.id,
         name: sanitize(name),
+        slug,
         description: sanitize(description),
         price: parseFloat(price),
         category,
