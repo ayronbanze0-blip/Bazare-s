@@ -7,6 +7,7 @@ const { paginate, paginateMeta, sanitize } = require('../utils/helpers');
 const uploadSvc = require('../services/uploadService');
 const aiSvc = require('../services/aiService');
 const premiumService = require('../services/premiumService');
+const notificationSvc = require('../services/notificationService');
 const logger = require('../utils/logger');
 
 const prisma = require('../config/database');
@@ -218,6 +219,12 @@ const create = async (req, res) => {
     });
 
     logger.info(`[Products] Created: ${product.name} by ${req.user.email}`);
+
+    // Avisa quem segue este bazar — fire-and-forget: nunca deve
+    // atrasar nem falhar a resposta de criação do produto.
+    notificationSvc.newProductFromFollowed(bazar.id, req.user.name, product.name)
+      .catch((e) => logger.error(`[Products.create] Notificação de seguidores falhou: ${e.message}`));
+
     const message = imageUploadErrors.length > 0
       ? `Produto criado, mas ${imageUploadErrors.length} imagem(ns) falharam ao enviar.`
       : 'Produto criado com sucesso.';

@@ -54,12 +54,17 @@ const getOne = async (req, res) => {
           where: { active: true },
           orderBy: { createdAt: 'desc' },
           include: { images: { orderBy: { order: 'asc' }, take: 1 } }
-        }
+        },
+        _count: { select: { followers: true } }
       }
     });
 
     if (!bazar) return notFound(res, 'Bazar não encontrado.');
     bazar.products = await attachFavorites(bazar.products, req.user?.id);
+    bazar.followerCount = bazar._count.followers;
+    bazar.isFollowing = req.user
+      ? !!(await prisma.follow.findUnique({ where: { userId_bazarId: { userId: req.user.id, bazarId: bazar.id } } }))
+      : false;
     return ok(res, { bazar });
   } catch (err) {
     logger.error(`[Bazars.getOne] ${err.message}`);
@@ -233,7 +238,38 @@ const trackWhatsappClick = async (req, res) => {
   return ok(res, {});
 };
 
-module.exports = { list, getOne, create, update, myBazar, trackWhatsappClick };
+// ─── POST /api/bazars/:idOrSlug/follow — alterna seguir/deixar de seguir ──
+const toggleFollow = async (req, res) => {
+  try {
+    const bazar = await prisma.bazar.findFirst({
+      where: { OR: [{ id: req.params.idOrSlug }, { slug: req.params.idOrSlug }], active: true },
+      select: { id: true, sellerId: true }
+    });
+    if (!bazar) return notFound(res, 'Bazar não encontrado.');
+    if (bazar.sellerId === req.user.id) return badRequest(res, 'Não pode seguir o seu próprio bazar.');
+
+    const existing = await prisma.follow.findUnique({
+      where: { userId_bazarId: { userId: req.user.id, bazarId: bazar.id } }
+    });
+
+    let following;
+    if (existing) {
+      await prisma.follow.delete({ where: { id: existing.id } });
+      following = false;
+    } else {
+      await prisma.follow.create({ data: { userId: req.user.id, bazarId: bazar.id } });
+      following = true;
+    }
+
+    const followerCount = await prisma.follow.count({ where: { bazarId: bazar.id } });
+    return ok(res, { following, followerCount });
+  } catch (err) {
+    logger.error(`[Bazar.toggleFollow] ${err.message}`);
+    return serverError(res);
+  }
+};
+
+module.exports = { list, getOne, create, update, myBazar, trackWhatsappClick, toggleFollow };
 
 
 
