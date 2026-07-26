@@ -84,6 +84,8 @@ model User {
   following         Follow[]
   comments          Comment[]
   announcements     Announcement[]
+  stories           Story[]
+  storyViews        StoryView[]
   feedReactions     FeedReaction[]
   feedShares        FeedShare[]
   cartItems         CartItem[]
@@ -226,6 +228,7 @@ model Bazar {
   transactions Transaction[]
   followers   Follow[]
   announcements Announcement[]
+  stories     Story[]
 
   @@index([category])
   @@index([active])
@@ -242,6 +245,10 @@ model Product {
   sellerId       String
   seller         User     @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   name           String
+  // URL amigável para SEO (ex: "iphone-13-128gb-maputo-a1b2"). Nullable
+  // porque produtos antigos são preenchidos por um script de backfill;
+  // produtos novos recebem-no sempre no create().
+  slug           String?  @unique
   description    String   @db.Text
   price          Float
   category       String
@@ -285,6 +292,7 @@ model Product {
   @@index([category])
   @@index([active])
   @@index([sellerId])
+  @@index([slug])
   // Compostos — cobrem os filtros+ordenação reais de list() em
   // productController (active sempre presente + 1 filtro + orderBy).
   @@index([active, category, createdAt])
@@ -398,6 +406,44 @@ model Announcement {
 
   @@index([bazarId])
   @@index([sellerId])
+}
+
+// ─────────────────────────────────────────────
+// STORIES ("histórias" — posts que desaparecem 24h depois de
+// publicados, ao estilo Instagram/WhatsApp Status). Exclusivo de
+// vendedores Premium, tal como os Anúncios. Não há job de limpeza:
+// simplesmente filtramos por `expiresAt > now()` em todas as
+// consultas — as linhas expiradas ficam na tabela mas nunca aparecem.
+// ─────────────────────────────────────────────
+model Story {
+  id            String   @id @default(uuid())
+  bazarId       String
+  bazar         Bazar    @relation(fields: [bazarId], references: [id], onDelete: Cascade)
+  sellerId      String
+  seller        User     @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  imageUrl      String
+  imagePublicId String?
+  text          String?  @db.Text
+  createdAt     DateTime @default(now())
+  expiresAt     DateTime
+
+  views         StoryView[]
+
+  @@index([bazarId])
+  @@index([sellerId])
+  @@index([expiresAt])
+}
+
+model StoryView {
+  id        String   @id @default(uuid())
+  storyId   String
+  story     Story    @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([storyId, userId])
+  @@index([storyId])
 }
 
 // ─────────────────────────────────────────────
