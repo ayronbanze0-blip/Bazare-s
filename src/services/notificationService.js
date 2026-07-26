@@ -136,5 +136,6 @@ const broadcastToRole = async (role, notification) => {
 
 module.exports = {
   init, push, orderReceived, orderStatusChanged,
-  newMessage, feeAlert, accountSuspended, accountVerified, broadcastToRole
+  newMessage, feeAlert, accountSuspended, accountVerified, broadcastToRole,
+  newProductFromFollowed
 };
