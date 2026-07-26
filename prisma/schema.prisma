@@ -84,6 +84,8 @@ model User {
   following         Follow[]
   comments          Comment[]
   announcements     Announcement[]
+  feedReactions     FeedReaction[]
+  feedShares        FeedShare[]
   cartItems         CartItem[]
   tokens            RefreshToken[]
   verificationCodes VerificationCode[]
@@ -196,6 +198,8 @@ model Bazar {
   category    String
   phone       String?
   location    String?
+  latitude    Float?
+  longitude   Float?
   bannerUrl   String?
   logoUrl     String?
   active      Boolean  @default(true)
@@ -360,15 +364,18 @@ model Follow {
 // COMMENTS (comentários abertos em cada produto)
 // ─────────────────────────────────────────────
 model Comment {
-  id        String   @id @default(uuid())
-  productId String
-  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  text      String   @db.Text
-  createdAt DateTime @default(now())
+  id             String        @id @default(uuid())
+  productId      String?
+  product        Product?      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  announcementId String?
+  announcement   Announcement? @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  text           String        @db.Text
+  createdAt      DateTime      @default(now())
 
   @@index([productId])
+  @@index([announcementId])
   @@index([userId])
 }
 
@@ -387,8 +394,49 @@ model Announcement {
   imagePublicId String?
   createdAt     DateTime @default(now())
 
+  comments      Comment[]
+
   @@index([bazarId])
   @@index([sellerId])
+}
+
+// ─────────────────────────────────────────────
+// FEED (página "Home" — reações, partilhas)
+// Um item do feed é um Product (destaque) ou um Announcement.
+// Como os dois tipos partilham a mesma interação (reagir/partilhar),
+// usamos um par (targetType, targetId) em vez de duas tabelas
+// duplicadas — mais simples de agregar e ordenar no feed.
+// ─────────────────────────────────────────────
+enum FeedTargetType {
+  PRODUCT
+  ANNOUNCEMENT
+}
+
+model FeedReaction {
+  id         String         @id @default(uuid())
+  userId     String
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  targetType FeedTargetType
+  targetId   String
+  value      Int            // 1 = polegar para cima, -1 = polegar para baixo
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  @@unique([userId, targetType, targetId])
+  @@index([targetType, targetId])
+}
+
+model FeedShare {
+  id         String         @id @default(uuid())
+  userId     String
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  targetType FeedTargetType
+  targetId   String
+  createdAt  DateTime       @default(now())
+
+  @@unique([userId, targetType, targetId])
+  @@index([targetType, targetId])
+  @@index([userId])
 }
 
 // ─────────────────────────────────────────────
@@ -430,6 +478,8 @@ model Order {
   buyerName   String
   buyerPhone  String
   address     String
+  latitude    Float?
+  longitude   Float?
   payment     String
   size        String?
   color       String?
