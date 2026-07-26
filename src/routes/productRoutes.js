@@ -3,6 +3,7 @@
 const router = require('express').Router();
 const { body } = require('express-validator');
 const ctrl = require('../controllers/productController');
+const commentCtrl = require('../controllers/commentController');
 const { authenticate, isSeller, optionalAuth } = require('../middleware/auth');
 const { uploadLimiter } = require('../middleware/rateLimiter');
 const { upload } = require('../services/uploadService');
@@ -12,6 +13,10 @@ const productValidation = [
   body('description').trim().isLength({ min: 10 }).withMessage('Descrição deve ter no mínimo 10 caracteres.'),
   body('price').isFloat({ gt: 0 }).withMessage('Preço deve ser maior que zero.'),
   body('category').notEmpty().withMessage('Categoria obrigatória.')
+];
+
+const commentValidation = [
+  body('text').trim().isLength({ min: 1, max: 500 }).withMessage('Comentário deve ter entre 1 e 500 caracteres.')
 ];
 
 // ─── Public ───────────────────────────────────────────────────────
@@ -34,6 +39,11 @@ router.delete('/:id/pin', authenticate, isSeller, ctrl.unpin);
 // ─── Buyer (antes de /:id pelo mesmo motivo) ─────────────────────
 router.get('/favorites', authenticate, ctrl.myFavorites);
 router.post('/:productId/favorite', authenticate, ctrl.toggleFavorite);
+
+// ─── Comentários ──────────────────────────────────────────────────
+router.get('/:id/comments', optionalAuth, commentCtrl.list);
+router.post('/:id/comments', authenticate, commentValidation, commentCtrl.create);
+router.delete('/:id/comments/:commentId', authenticate, commentCtrl.remove);
 
 // ─── Public — lookup genérico (deve ser o último) ────────────────
 router.get('/:id', optionalAuth, ctrl.getOne);
