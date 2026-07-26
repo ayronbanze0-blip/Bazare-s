@@ -100,6 +100,14 @@ app.use(morgan(
 app.set('trust proxy', 1);
 
 // ─── Rate Limiting (general) ─────────────────────────────────────
+// ─── SEO (sitemap.xml, robots.txt) ────────────────────────────────
+// Montado na raiz (não em /api) porque são ficheiros que os motores
+// de busca esperam encontrar em /sitemap.xml e /robots.txt. O
+// domínio da API é diferente do domínio do site — o frontend faz
+// proxy destes dois caminhos para aqui via _redirects (ver repo do
+// frontend), para que apareçam sob o domínio público correcto.
+app.use('/', require('./routes/seoRoutes'));
+
 app.use('/api', apiLimiter);
 
 // ─── Routes ────────────────────────────────────────────────────────
