@@ -94,6 +94,33 @@ const accountVerified = (userId) =>
     link: '/profile'
   });
 
+/**
+ * Avisa todos os seguidores de um bazar quando um produto novo é
+ * publicado. Fire-and-forget do lado de quem chama — aqui dentro
+ * cada notificação individual também não deve travar as outras se
+ * uma falhar (ex.: token push inválido de um utilizador).
+ */
+const newProductFromFollowed = async (bazarId, sellerName, productName) => {
+  if (!prismaClient) return;
+  try {
+    const followers = await prismaClient.follow.findMany({
+      where: { bazarId },
+      select: { userId: true }
+    });
+    if (followers.length === 0) return;
+    await Promise.all(followers.map((f) =>
+      push(f.userId, {
+        type: 'INFO',
+        title: `${sellerName} publicou um novo produto`,
+        message: productName,
+        link: `bazar.html?id=${bazarId}`
+      }).catch(() => {})
+    ));
+  } catch (err) {
+    logger.error(`[Notif] newProductFromFollowed falhou: ${err.message}`);
+  }
+};
+
 const broadcastToRole = async (role, notification) => {
   if (!prismaClient) return;
   try {

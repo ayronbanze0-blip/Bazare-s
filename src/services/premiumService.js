@@ -12,16 +12,26 @@
  * PREMIUM_PRICE_MT — preço mensal em Meticais. Ajustável via variável
  * de ambiente no Render sem precisar de novo deploy.
  * PREMIUM_FEE_RATE — taxa de comissão (%) aplicada a vendedores Premium,
- * em vez do feeRate normal do bazar (2% por defeito). Só é aplicada
- * quando é mais baixa que a feeRate actual do bazar, para não subir
- * a taxa de um bazar que já negociou algo melhor com o admin.
+ * em vez do feeRate normal do bazar (2% por defeito). Por omissão é 0%
+ * (isenção total) — só é aplicada quando é mais baixa que a feeRate
+ * actual do bazar, para não subir a taxa de um bazar que já negociou
+ * algo melhor com o admin (na prática, com 0%, isso nunca acontece).
  */
 
 const crypto = require('crypto');
 const logger = require('../utils/logger');
 
-const PREMIUM_PRICE_MT = parseFloat(process.env.PREMIUM_PRICE_MT) || 500;
-const PREMIUM_FEE_RATE = parseFloat(process.env.PREMIUM_FEE_RATE) || 1.0;
+const PREMIUM_PRICE_MT = (() => {
+  const v = parseFloat(process.env.PREMIUM_PRICE_MT);
+  return Number.isNaN(v) ? 500 : v;
+})();
+// NB: NÃO usar "|| 1.0" aqui — 0 é um valor válido e intencional
+// (isenção total de taxa para Premium), mas em JS "0 || 1.0" dá 1.0
+// porque 0 é falsy. Isto silenciava PREMIUM_FEE_RATE=0 no Render.
+const PREMIUM_FEE_RATE = (() => {
+  const v = parseFloat(process.env.PREMIUM_FEE_RATE);
+  return Number.isNaN(v) ? 0 : v;
+})();
 const PREMIUM_PERIOD_DAYS = 30;
 
 // ─── Estado efectivo de premium (fonte de verdade = premiumExpiresAt) ─
