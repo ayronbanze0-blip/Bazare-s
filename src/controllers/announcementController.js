@@ -2,7 +2,6 @@
 
 const { ok, created, notFound, forbidden, serverError, badRequest } = require('../utils/response');
 const { sanitize, paginate, paginateMeta } = require('../utils/helpers');
-const premiumService = require('../services/premiumService');
 const uploadSvc = require('../services/uploadService');
 const logger = require('../utils/logger');
 const prisma = require('../config/database');
@@ -35,17 +34,12 @@ const list = async (req, res) => {
   }
 };
 
-// ─── SELLER (Premium): Post an announcement ──────────────────────
+// ─── SELLER: Post an announcement ─────────────────────────────────
 const create = async (req, res) => {
   try {
     const bazar = await resolveBazar(req.params.idOrSlug);
     if (!bazar) return notFound(res, 'Bazar não encontrado.');
     if (bazar.sellerId !== req.user.id) return forbidden(res);
-
-    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
-    if (!premiumService.isActive(user)) {
-      return forbidden(res, 'Publicar anúncios é exclusivo da Conta Premium.');
-    }
 
     const text = sanitize(req.body.text || '');
     if (!text || text.length < 3) return badRequest(res, 'Escreva algo para publicar.');
