@@ -22,7 +22,8 @@ const list = async (req, res) => {
       prisma.announcement.findMany({
         where: { bazarId: bazar.id },
         take, skip,
-        orderBy: { createdAt: 'desc' }
+        orderBy: { createdAt: 'desc' },
+        include: { images: { orderBy: { order: 'asc' } } }
       }),
       prisma.announcement.count({ where: { bazarId: bazar.id } })
     ]);
@@ -45,17 +46,38 @@ const create = async (req, res) => {
     if (!text || text.length < 3) return badRequest(res, 'Escreva algo para publicar.');
     if (text.length > 500) return badRequest(res, 'Máximo de 500 caracteres.');
 
-    let imageUrl = null, imagePublicId = null;
-    if (req.file) {
-      const up = await uploadSvc.uploadToCloud(req.file.path, 'bazares/announcements');
-      if (up.ok) { imageUrl = up.url; imagePublicId = up.publicId; }
-    }
-
     const announcement = await prisma.announcement.create({
-      data: { bazarId: bazar.id, sellerId: req.user.id, text, imageUrl, imagePublicId }
+      data: { bazarId: bazar.id, sellerId: req.user.id, text }
     });
 
-    return created(res, { announcement }, 'Anúncio publicado.');
+    // Suporta várias fotos por anúncio (campo multipart "images", até 6).
+    let imageUploadErrors = [];
+    if (req.files && req.files.length > 0) {
+      const uploadResults = await uploadSvc.uploadMany(req.files, 'bazares/announcements');
+      const validImages = uploadResults.filter(r => r.ok);
+      imageUploadErrors = uploadResults.filter(r => !r.ok).map(r => r.error);
+      if (validImages.length > 0) {
+        await prisma.announcementImage.createMany({
+          data: validImages.map((r, i) => ({
+            announcementId: announcement.id,
+            url: r.url,
+            publicId: r.publicId,
+            order: i
+          }))
+        });
+      }
+    }
+
+    const full = await prisma.announcement.findUnique({
+      where: { id: announcement.id },
+      include: { images: { orderBy: { order: 'asc' } } }
+    });
+
+    return created(
+      res,
+      { announcement: full, imageUploadErrors: imageUploadErrors.length ? imageUploadErrors : undefined },
+      'Anúncio publicado.'
+    );
   } catch (err) {
     logger.error(`[Announcements.create] ${err.message}`);
     return serverError(res);
@@ -65,13 +87,19 @@ const create = async (req, res) => {
 // ─── SELLER/ADMIN: Delete an announcement ────────────────────────
 const remove = async (req, res) => {
   try {
-    const announcement = await prisma.announcement.findUnique({ where: { id: req.params.announcementId } });
+    const announcement = await prisma.announcement.findUnique({
+      where: { id: req.params.announcementId },
+      include: { images: true }
+    });
     if (!announcement) return notFound(res, 'Anúncio não encontrado.');
     if (announcement.sellerId !== req.user.id && req.user.role !== 'ADMIN') return forbidden(res);
 
     if (announcement.imagePublicId) {
       uploadSvc.deleteFromCloud(announcement.imagePublicId).catch(() => {});
     }
+    announcement.images.forEach(img => {
+      if (img.publicId) uploadSvc.deleteFromCloud(img.publicId).catch(() => {});
+    });
     await prisma.announcement.delete({ where: { id: announcement.id } });
     return ok(res, {}, 'Anúncio removido.');
   } catch (err) {

@@ -35,7 +35,7 @@ const list = async (req, res) => {
       if (!byBazar.has(key)) byBazar.set(key, { bazar: s.bazar, seller: s.seller, stories: [], hasUnseen: false });
       const group = byBazar.get(key);
       const seen = req.user ? (s.views?.length > 0) : false;
-      group.stories.push({ id: s.id, imageUrl: s.imageUrl, text: s.text, createdAt: s.createdAt, expiresAt: s.expiresAt, seen });
+      group.stories.push({ id: s.id, imageUrl: s.imageUrl, videoUrl: s.videoUrl, text: s.text, createdAt: s.createdAt, expiresAt: s.expiresAt, seen });
       if (!seen) group.hasUnseen = true;
     }
     // Bazares com história por ver aparecem primeiro (como no Instagram).
@@ -55,9 +55,23 @@ const create = async (req, res) => {
     if (!bazar) return notFound(res, 'Bazar não encontrado.');
     if (bazar.sellerId !== req.user.id) return forbidden(res);
 
-    if (!req.file) return badRequest(res, 'A história precisa de uma foto.');
-    const up = await uploadSvc.uploadToCloud(req.file.path, 'bazares/stories');
-    if (!up.ok) return badRequest(res, 'Falha ao enviar a imagem.');
+    // Uma história é imagem OU vídeo — nunca ambos. Vem em campos
+    // multipart separados ('image' / 'video'), consoante o tipo
+    // escolhido pelo vendedor em historia.html.
+    const imageFile = req.files?.image?.[0];
+    const videoFile = req.files?.video?.[0];
+    if (!imageFile && !videoFile) return badRequest(res, 'A história precisa de uma foto ou vídeo.');
+
+    let imageUrl = null, imagePublicId = null, videoUrl = null, videoPublicId = null;
+    if (imageFile) {
+      const up = await uploadSvc.uploadToCloud(imageFile.path, 'bazares/stories');
+      if (!up.ok) return badRequest(res, 'Falha ao enviar a imagem.');
+      imageUrl = up.url; imagePublicId = up.publicId;
+    } else {
+      const up = await uploadSvc.uploadVideoToCloud(videoFile.path, 'bazares/stories');
+      if (!up.ok) return badRequest(res, 'Falha ao enviar o vídeo.');
+      videoUrl = up.url; videoPublicId = up.publicId;
+    }
 
     const text = (req.body.text || '').trim().slice(0, 200) || null;
     const now = new Date();
@@ -65,8 +79,7 @@ const create = async (req, res) => {
       data: {
         bazarId: bazar.id,
         sellerId: req.user.id,
-        imageUrl: up.url,
-        imagePublicId: up.publicId,
+        imageUrl, imagePublicId, videoUrl, videoPublicId,
         text,
         createdAt: now,
         expiresAt: new Date(now.getTime() + STORY_TTL_MS)
@@ -179,6 +192,7 @@ const remove = async (req, res) => {
     if (story.sellerId !== req.user.id && req.user.role !== 'ADMIN') return forbidden(res);
 
     if (story.imagePublicId) uploadSvc.deleteFromCloud(story.imagePublicId).catch(() => {});
+    if (story.videoPublicId) uploadSvc.deleteFromCloud(story.videoPublicId).catch(() => {});
     await prisma.story.delete({ where: { id: story.id } });
     return ok(res, {}, 'História removida.');
   } catch (err) {
