@@ -20,6 +20,7 @@ router.use('/reviews', require('./reviewRoutes'));
 router.use('/wallet', require('./walletRoutes'));
 router.use('/premium', require('./premiumRoutes'));
 router.use('/feed', require('./feedRoutes'));
+router.use('/reels', require('./reelRoutes'));
 
 // Verifica também a ligação à base de dados — se a DB estiver em baixo,
 // o Railway deve marcar a instância como não saudável (503), em vez de
