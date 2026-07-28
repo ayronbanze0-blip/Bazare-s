@@ -380,6 +380,8 @@ model Comment {
   product        Product?      @relation(fields: [productId], references: [id], onDelete: Cascade)
   announcementId String?
   announcement   Announcement? @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  reelId         String?
+  reel           Reel?         @relation(fields: [reelId], references: [id], onDelete: Cascade)
   userId         String
   user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   text           String        @db.Text
@@ -387,6 +389,7 @@ model Comment {
 
   @@index([productId])
   @@index([announcementId])
+  @@index([reelId])
   @@index([userId])
 }
 
@@ -476,6 +479,8 @@ model Reel {
   views         Int      @default(0)
   createdAt     DateTime @default(now())
 
+  comments      Comment[]
+
   @@index([bazarId])
   @@index([sellerId])
   @@index([createdAt])
@@ -503,6 +508,7 @@ model StoryView {
 enum FeedTargetType {
   PRODUCT
   ANNOUNCEMENT
+  REEL
 }
 
 model FeedReaction {
