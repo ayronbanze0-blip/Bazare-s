@@ -85,6 +85,7 @@ model User {
   comments          Comment[]
   announcements     Announcement[]
   stories           Story[]
+  reels             Reel[]
   storyViews        StoryView[]
   feedReactions     FeedReaction[]
   feedShares        FeedShare[]
@@ -229,6 +230,7 @@ model Bazar {
   followers   Follow[]
   announcements Announcement[]
   stories     Story[]
+  reels       Reel[]
 
   @@index([category])
   @@index([active])
@@ -287,6 +289,7 @@ model Product {
   comments       Comment[]
   cartItems      CartItem[]
   reports        Report[]
+  reels          Reel[]
 
   @@index([bazarId])
   @@index([category])
@@ -398,14 +401,29 @@ model Announcement {
   sellerId      String
   seller        User     @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   text          String   @db.Text
+  // Campos legados de imagem única — mantidos (não usados na criação
+  // desde o suporte a múltiplas imagens) para não perder dados de
+  // anúncios antigos já gravados antes desta migração.
   imageUrl      String?
   imagePublicId String?
   createdAt     DateTime @default(now())
 
   comments      Comment[]
+  images        AnnouncementImage[]
 
   @@index([bazarId])
   @@index([sellerId])
+}
+
+model AnnouncementImage {
+  id             String       @id @default(uuid())
+  announcementId String
+  announcement   Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  url            String
+  publicId       String?
+  order          Int          @default(0)
+
+  @@index([announcementId])
 }
 
 // ─────────────────────────────────────────────
@@ -421,8 +439,13 @@ model Story {
   bazar         Bazar    @relation(fields: [bazarId], references: [id], onDelete: Cascade)
   sellerId      String
   seller        User     @relation(fields: [sellerId], references: [id], onDelete: Cascade)
-  imageUrl      String
+  // Uma história tem imagem OU vídeo (nunca ambos) — nula consoante o
+  // tipo de ficheiro enviado. Mantido opcional (em vez de obrigatório)
+  // desde que histórias em vídeo passaram a ser suportadas.
+  imageUrl      String?
   imagePublicId String?
+  videoUrl      String?
+  videoPublicId String?
   text          String?  @db.Text
   createdAt     DateTime @default(now())
   expiresAt     DateTime
@@ -432,6 +455,30 @@ model Story {
   @@index([bazarId])
   @@index([sellerId])
   @@index([expiresAt])
+}
+
+// ─────────────────────────────────────────────
+// REELS (vídeos curtos, ao estilo TikTok/Instagram/Facebook Reels).
+// Publicados por vendedores a partir do seu Bazar, opcionalmente
+// ligados a um Produto para permitir "ver produto" a partir do reel.
+// ─────────────────────────────────────────────
+model Reel {
+  id            String   @id @default(uuid())
+  bazarId       String
+  bazar         Bazar    @relation(fields: [bazarId], references: [id], onDelete: Cascade)
+  sellerId      String
+  seller        User     @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  videoUrl      String
+  videoPublicId String?
+  text          String?  @db.Text
+  productId     String?
+  product       Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  views         Int      @default(0)
+  createdAt     DateTime @default(now())
+
+  @@index([bazarId])
+  @@index([sellerId])
+  @@index([createdAt])
 }
 
 model StoryView {
