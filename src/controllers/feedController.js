@@ -124,7 +124,9 @@ const share = async (req, res) => {
 
     const exists = targetType === 'PRODUCT'
       ? await prisma.product.findUnique({ where: { id: targetId }, select: { id: true } })
-      : await prisma.announcement.findUnique({ where: { id: targetId }, select: { id: true } });
+      : targetType === 'ANNOUNCEMENT'
+      ? await prisma.announcement.findUnique({ where: { id: targetId }, select: { id: true } })
+      : await prisma.reel.findUnique({ where: { id: targetId }, select: { id: true } });
     if (!exists) return notFound(res, 'Conteúdo não encontrado.');
 
     await prisma.feedShare.upsert({
@@ -148,7 +150,11 @@ const listComments = async (req, res) => {
     if (!assertType(targetType)) return badRequest(res, 'Tipo inválido.');
     const { page = 1, limit = 20 } = req.query;
     const { take, skip } = paginate(page, limit);
-    const where = targetType === 'PRODUCT' ? { productId: targetId } : { announcementId: targetId };
+    const where = targetType === 'PRODUCT'
+      ? { productId: targetId }
+      : targetType === 'ANNOUNCEMENT'
+      ? { announcementId: targetId }
+      : { reelId: targetId };
 
     const [comments, total] = await Promise.all([
       prisma.comment.findMany({
@@ -176,14 +182,22 @@ const createComment = async (req, res) => {
 
     const exists = targetType === 'PRODUCT'
       ? await prisma.product.findUnique({ where: { id: targetId }, select: { id: true } })
-      : await prisma.announcement.findUnique({ where: { id: targetId }, select: { id: true } });
+      : targetType === 'ANNOUNCEMENT'
+      ? await prisma.announcement.findUnique({ where: { id: targetId }, select: { id: true } })
+      : await prisma.reel.findUnique({ where: { id: targetId }, select: { id: true } });
     if (!exists) return notFound(res, 'Conteúdo não encontrado.');
+
+    const targetField = targetType === 'PRODUCT'
+      ? { productId: targetId }
+      : targetType === 'ANNOUNCEMENT'
+      ? { announcementId: targetId }
+      : { reelId: targetId };
 
     const comment = await prisma.comment.create({
       data: {
         userId: req.user.id,
         text: sanitize(req.body.text),
-        ...(targetType === 'PRODUCT' ? { productId: targetId } : { announcementId: targetId })
+        ...targetField
       },
       include: { user: { select: { id: true, name: true, avatarUrl: true, isPremium: true } } }
     });
@@ -202,11 +216,12 @@ const removeComment = async (req, res) => {
       where: { id: req.params.commentId },
       include: {
         product: { select: { sellerId: true } },
-        announcement: { select: { sellerId: true } }
+        announcement: { select: { sellerId: true } },
+        reel: { select: { sellerId: true } }
       }
     });
     if (!comment) return notFound(res, 'Comentário não encontrado.');
-    const ownerId = comment.product?.sellerId || comment.announcement?.sellerId;
+    const ownerId = comment.product?.sellerId || comment.announcement?.sellerId || comment.reel?.sellerId;
     const canDelete = comment.userId === req.user.id || ownerId === req.user.id || req.user.role === 'ADMIN';
     if (!canDelete) return forbidden(res, 'Sem permissão para apagar este comentário.');
 
