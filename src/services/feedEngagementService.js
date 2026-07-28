@@ -2,7 +2,7 @@
 
 const prisma = require('../config/database');
 
-const VALID_TYPES = ['PRODUCT', 'ANNOUNCEMENT'];
+const VALID_TYPES = ['PRODUCT', 'ANNOUNCEMENT', 'REEL'];
 
 /**
  * Junta contagens de reações/partilhas/comentários e a reação do
@@ -16,7 +16,7 @@ const VALID_TYPES = ['PRODUCT', 'ANNOUNCEMENT'];
  */
 const attachEngagement = async (items, userId) => {
   if (items.length === 0) return items;
-  const byType = { PRODUCT: [], ANNOUNCEMENT: [] };
+  const byType = { PRODUCT: [], ANNOUNCEMENT: [], REEL: [] };
   items.forEach((it) => byType[it.targetType].push(it.targetId));
   const activeTypes = VALID_TYPES.filter((t) => byType[t].length);
   if (activeTypes.length === 0) return items;
@@ -33,8 +33,8 @@ const attachEngagement = async (items, userId) => {
       _count: true
     }),
     prisma.comment.groupBy({
-      by: ['productId', 'announcementId'],
-      where: { OR: [{ productId: { in: byType.PRODUCT } }, { announcementId: { in: byType.ANNOUNCEMENT } }] },
+      by: ['productId', 'announcementId', 'reelId'],
+      where: { OR: [{ productId: { in: byType.PRODUCT } }, { announcementId: { in: byType.ANNOUNCEMENT } }, { reelId: { in: byType.REEL } }] },
       _count: true
     }),
     userId ? prisma.feedReaction.findMany({ where: { userId, OR: activeTypes.map((t) => ({ targetType: t, targetId: { in: byType[t] } })) } }) : [],
@@ -52,6 +52,7 @@ const attachEngagement = async (items, userId) => {
   comments.forEach((c) => {
     if (c.productId) commentMap[key('PRODUCT', c.productId)] = c._count;
     if (c.announcementId) commentMap[key('ANNOUNCEMENT', c.announcementId)] = c._count;
+    if (c.reelId) commentMap[key('REEL', c.reelId)] = c._count;
   });
   const myReactionMap = {};
   myReactions.forEach((r) => { myReactionMap[key(r.targetType, r.targetId)] = r.value; });
