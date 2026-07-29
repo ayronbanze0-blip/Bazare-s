@@ -34,7 +34,7 @@ router.post(
 );
 
 // Reels: vídeo (campo "video"), legenda opcional e produto associado opcional.
-router.get('/:idOrSlug/reels', reelCtrl.list);
+router.get('/:idOrSlug/reels', optionalAuth, reelCtrl.list);
 router.post('/:idOrSlug/reels', authenticate, isSeller, uploadVideo.single('video'), reelCtrl.create);
 router.delete('/:idOrSlug/reels/:reelId', authenticate, isSeller, reelCtrl.remove);
 
