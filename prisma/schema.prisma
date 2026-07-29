@@ -471,8 +471,10 @@ model Reel {
   bazar         Bazar    @relation(fields: [bazarId], references: [id], onDelete: Cascade)
   sellerId      String
   seller        User     @relation(fields: [sellerId], references: [id], onDelete: Cascade)
-  videoUrl      String
+  videoUrl      String?
   videoPublicId String?
+  imageUrl      String?
+  imagePublicId String?
   text          String?  @db.Text
   productId     String?
   product       Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
