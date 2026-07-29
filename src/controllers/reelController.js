@@ -63,14 +63,18 @@ const listGlobal = async (req, res) => {
   }
 };
 
-// ─── SELLER: Publicar um Reel ──────────────────────────────────────
+// ─── SELLER: Publicar um Reel (vídeo OU foto) ─────────────────────
 const create = async (req, res) => {
   try {
     const bazar = await resolveBazar(req.params.idOrSlug);
     if (!bazar) return notFound(res, 'Bazar não encontrado.');
     if (bazar.sellerId !== req.user.id) return forbidden(res);
 
-    if (!req.file) return badRequest(res, 'O Reel precisa de um vídeo.');
+    // Um Reel é vídeo OU foto — nunca ambos. Vem em campos multipart
+    // separados ('video' / 'image'), consoante o que o vendedor escolher.
+    const videoFile = req.files?.video?.[0];
+    const imageFile = req.files?.image?.[0];
+    if (!videoFile && !imageFile) return badRequest(res, 'O Reel precisa de um vídeo ou uma foto.');
 
     let productId = null;
     if (req.body.productId) {
@@ -78,16 +82,23 @@ const create = async (req, res) => {
       if (product && product.sellerId === req.user.id) productId = product.id;
     }
 
-    const up = await uploadSvc.uploadVideoToCloud(req.file.path, 'bazares/reels');
-    if (!up.ok) return badRequest(res, up.error || 'Falha ao enviar o vídeo.');
+    let videoUrl = null, videoPublicId = null, imageUrl = null, imagePublicId = null;
+    if (videoFile) {
+      const up = await uploadSvc.uploadVideoToCloud(videoFile.path, 'bazares/reels');
+      if (!up.ok) return badRequest(res, up.error || 'Falha ao enviar o vídeo.');
+      videoUrl = up.url; videoPublicId = up.publicId;
+    } else {
+      const up = await uploadSvc.uploadToCloud(imageFile.path, 'bazares/reels');
+      if (!up.ok) return badRequest(res, 'Falha ao enviar a foto.');
+      imageUrl = up.url; imagePublicId = up.publicId;
+    }
 
     const text = (req.body.text || '').trim().slice(0, 500) || null;
     const reel = await prisma.reel.create({
       data: {
         bazarId: bazar.id,
         sellerId: req.user.id,
-        videoUrl: up.url,
-        videoPublicId: up.publicId,
+        videoUrl, videoPublicId, imageUrl, imagePublicId,
         text,
         productId
       },
@@ -101,6 +112,27 @@ const create = async (req, res) => {
   }
 };
 
+// ─── SELLER: Editar a legenda de um Reel ──────────────────────────
+const update = async (req, res) => {
+  try {
+    const reel = await prisma.reel.findUnique({ where: { id: req.params.reelId } });
+    if (!reel) return notFound(res, 'Reel não encontrado.');
+    if (reel.sellerId !== req.user.id) return forbidden(res);
+
+    const text = (req.body.text || '').trim().slice(0, 500) || null;
+    const updated = await prisma.reel.update({
+      where: { id: reel.id },
+      data: { text },
+      include: { product: { select: { id: true, name: true, slug: true, price: true } } }
+    });
+
+    return ok(res, { reel: updated }, 'Reel actualizado.');
+  } catch (err) {
+    logger.error(`[Reels.update] ${err.message}`);
+    return serverError(res);
+  }
+};
+
 // ─── SELLER/ADMIN: Apagar um Reel ─────────────────────────────────
 const remove = async (req, res) => {
   try {
@@ -109,6 +141,7 @@ const remove = async (req, res) => {
     if (reel.sellerId !== req.user.id && req.user.role !== 'ADMIN') return forbidden(res);
 
     if (reel.videoPublicId) uploadSvc.deleteFromCloud(reel.videoPublicId).catch(() => {});
+    if (reel.imagePublicId) uploadSvc.deleteFromCloud(reel.imagePublicId).catch(() => {});
     await prisma.reel.delete({ where: { id: reel.id } });
     return ok(res, {}, 'Reel removido.');
   } catch (err) {
@@ -117,4 +150,4 @@ const remove = async (req, res) => {
   }
 };
 
-module.exports = { list, listGlobal, create, remove };
+module.exports = { list, listGlobal, create, update, remove };

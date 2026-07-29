@@ -84,6 +84,30 @@ const create = async (req, res) => {
   }
 };
 
+// ─── SELLER: Editar o texto de um anúncio ─────────────────────────
+const update = async (req, res) => {
+  try {
+    const announcement = await prisma.announcement.findUnique({ where: { id: req.params.announcementId } });
+    if (!announcement) return notFound(res, 'Anúncio não encontrado.');
+    if (announcement.sellerId !== req.user.id) return forbidden(res);
+
+    const text = sanitize(req.body.text || '');
+    if (!text || text.length < 3) return badRequest(res, 'Escreva algo para publicar.');
+    if (text.length > 500) return badRequest(res, 'Máximo de 500 caracteres.');
+
+    const updated = await prisma.announcement.update({
+      where: { id: announcement.id },
+      data: { text },
+      include: { images: { orderBy: { order: 'asc' } } }
+    });
+
+    return ok(res, { announcement: updated }, 'Anúncio actualizado.');
+  } catch (err) {
+    logger.error(`[Announcements.update] ${err.message}`);
+    return serverError(res);
+  }
+};
+
 // ─── SELLER/ADMIN: Delete an announcement ────────────────────────
 const remove = async (req, res) => {
   try {
@@ -108,4 +132,4 @@ const remove = async (req, res) => {
   }
 };
 
-module.exports = { list, create, remove };
+module.exports = { list, create, update, remove };
