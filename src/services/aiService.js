@@ -227,10 +227,35 @@ Sugere UMA resposta curta, educada e útil que o vendedor pode enviar tal como e
   return { ok: true, suggestion: result.text.trim() };
 };
 
+// ─────────────────────────────────────────────────────────────────
+// 6. Legenda curta para Stories / Reels / Anúncios
+// ─────────────────────────────────────────────────────────────────
+const KIND_LABELS = {
+  STORY: 'uma história (Story) que desaparece em 24 horas',
+  REEL: 'um Reel (publicação em vídeo ou foto curta)',
+  ANNOUNCEMENT: 'um anúncio de loja'
+};
+
+const generateCaption = async ({ kind, storeName, keywords }) => {
+  const kindLabel = KIND_LABELS[kind] || 'uma publicação';
+  const prompt = `Escreve UMA legenda curta e cativante em português de Moçambique, para ${kindLabel} de uma loja chamada "${storeName}" no marketplace Bazares.
+${keywords ? `Contexto/palavras-chave dadas pelo vendedor: "${keywords}"` : 'Sem contexto adicional — escreve algo genérico mas convidativo, a incentivar quem vir a visitar a loja ou ver os produtos.'}
+Tom simpático e directo, sem exagero nem clichés. No máximo 2 frases curtas. Podes usar 1 emoji, no máximo.
+Devolve APENAS o texto da legenda — sem aspas, sem JSON, sem explicações antes ou depois.`;
+
+  const result = await callGemini({ prompt });
+  if (!result.ok) return result;
+
+  const caption = result.text.trim().replace(/^["'“]+|["'”]+$/g, '');
+  if (!caption) return { ok: false, error: 'Não consegui gerar uma legenda. Tenta outra vez.' };
+  return { ok: true, caption };
+};
+
 module.exports = {
   generateProductDescription,
   moderateProduct,
   interpretSearchQuery,
   bazarBotReply,
-  suggestSellerReply
+  suggestSellerReply,
+  generateCaption
 };
