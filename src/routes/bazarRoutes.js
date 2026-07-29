@@ -7,7 +7,7 @@ const announcementCtrl = require('../controllers/announcementController');
 const storyCtrl = require('../controllers/storyController');
 const reelCtrl = require('../controllers/reelController');
 const { authenticate, isSeller, optionalAuth } = require('../middleware/auth');
-const { upload, uploadMedia, uploadVideo } = require('../services/uploadService');
+const { upload, uploadMedia } = require('../services/uploadService');
 
 const bazarValidation = [
   body('name').trim().isLength({ min: 3, max: 100 }).withMessage('Nome deve ter entre 3 e 100 caracteres.'),
@@ -23,6 +23,7 @@ router.post('/:idOrSlug/follow', authenticate, ctrl.toggleFollow);
 router.get('/:idOrSlug/announcements', announcementCtrl.list);
 // Até 6 fotos por anúncio (campo multipart "images"), como pedido em anuncio.html.
 router.post('/:idOrSlug/announcements', authenticate, isSeller, upload.array('images', 6), announcementCtrl.create);
+router.put('/:idOrSlug/announcements/:announcementId', authenticate, isSeller, announcementCtrl.update);
 router.delete('/:idOrSlug/announcements/:announcementId', authenticate, isSeller, announcementCtrl.remove);
 
 // Histórias: imagem OU vídeo no mesmo endpoint (campos "image" / "video").
@@ -33,9 +34,15 @@ router.post(
   storyCtrl.create
 );
 
-// Reels: vídeo (campo "video"), legenda opcional e produto associado opcional.
+// Reels: vídeo OU foto (campos "video" / "image"), legenda opcional e produto associado opcional.
 router.get('/:idOrSlug/reels', optionalAuth, reelCtrl.list);
-router.post('/:idOrSlug/reels', authenticate, isSeller, uploadVideo.single('video'), reelCtrl.create);
+router.post(
+  '/:idOrSlug/reels',
+  authenticate, isSeller,
+  uploadMedia.fields([{ name: 'video', maxCount: 1 }, { name: 'image', maxCount: 1 }]),
+  reelCtrl.create
+);
+router.put('/:idOrSlug/reels/:reelId', authenticate, isSeller, reelCtrl.update);
 router.delete('/:idOrSlug/reels/:reelId', authenticate, isSeller, reelCtrl.remove);
 
 router.post('/', authenticate, isSeller, bazarValidation, ctrl.create);
