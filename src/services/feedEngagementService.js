@@ -73,17 +73,17 @@ const attachEngagement = async (items, userId) => {
 };
 
 /**
- * Conveniência para listagens de produtos "normais" (não itens de
- * feed): recebe um array de produtos (cada um com .id) e devolve os
- * mesmos produtos com likeCount/dislikeCount/shareCount/commentCount/
- * myReaction anexados directamente — sem embrulhar em targetType/Id.
+ * Conveniência para listagens "normais" (não itens de feed): recebe um
+ * array de itens (cada um com .id) e devolve os mesmos itens com
+ * likeCount/dislikeCount/shareCount/commentCount/myReaction anexados
+ * directamente — sem embrulhar em targetType/Id.
  */
-const attachProductEngagement = async (products, userId) => {
-  if (!products || products.length === 0) return products;
-  const wrapped = products.map((p) => ({ targetType: 'PRODUCT', targetId: p.id }));
+const attachDirectEngagement = async (list, userId, targetType) => {
+  if (!list || list.length === 0) return list;
+  const wrapped = list.map((it) => ({ targetType, targetId: it.id }));
   const withEngagement = await attachEngagement(wrapped, userId);
-  return products.map((p, i) => ({
-    ...p,
+  return list.map((it, i) => ({
+    ...it,
     likeCount: withEngagement[i].likeCount,
     dislikeCount: withEngagement[i].dislikeCount,
     shareCount: withEngagement[i].shareCount,
@@ -92,4 +92,7 @@ const attachProductEngagement = async (products, userId) => {
   }));
 };
 
-module.exports = { attachEngagement, attachProductEngagement, VALID_TYPES };
+const attachProductEngagement = (products, userId) => attachDirectEngagement(products, userId, 'PRODUCT');
+const attachReelEngagement = (reels, userId) => attachDirectEngagement(reels, userId, 'REEL');
+
+module.exports = { attachEngagement, attachProductEngagement, attachReelEngagement, attachDirectEngagement, VALID_TYPES };
