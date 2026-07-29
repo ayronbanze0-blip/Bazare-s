@@ -3,6 +3,7 @@
 const { ok, created, notFound, forbidden, serverError, badRequest } = require('../utils/response');
 const { sanitize, paginate, paginateMeta } = require('../utils/helpers');
 const uploadSvc = require('../services/uploadService');
+const { attachReelEngagement } = require('../services/feedEngagementService');
 const logger = require('../utils/logger');
 const prisma = require('../config/database');
 
@@ -28,7 +29,7 @@ const list = async (req, res) => {
       prisma.reel.count({ where: { bazarId: bazar.id } })
     ]);
 
-    return ok(res, { reels, meta: paginateMeta(total, page, limit) });
+    return ok(res, { reels: await attachReelEngagement(reels, req.user?.id), meta: paginateMeta(total, page, limit) });
   } catch (err) {
     logger.error(`[Reels.list] ${err.message}`);
     return serverError(res);
@@ -36,9 +37,8 @@ const list = async (req, res) => {
 };
 
 // ─── PUBLIC: Global reels feed (mais recentes primeiro) ───────────
-// Usado por uma futura página de Reels entre bazares (reels.html
-// mostra hoje produtos por vendas; isto fica pronto para quando essa
-// página passar a consumir vídeos reais).
+// Usado pela página de Reels entre bazares (reels.html junta estes
+// vídeos reais aos produtos mais vendidos no mesmo carrossel).
 const listGlobal = async (req, res) => {
   try {
     const { page = 1, limit = 10 } = req.query;
@@ -56,7 +56,7 @@ const listGlobal = async (req, res) => {
       prisma.reel.count()
     ]);
 
-    return ok(res, { reels, meta: paginateMeta(total, page, limit) });
+    return ok(res, { reels: await attachReelEngagement(reels, req.user?.id), meta: paginateMeta(total, page, limit) });
   } catch (err) {
     logger.error(`[Reels.listGlobal] ${err.message}`);
     return serverError(res);
