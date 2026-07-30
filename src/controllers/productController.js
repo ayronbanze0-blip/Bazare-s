@@ -9,7 +9,7 @@ const aiSvc = require('../services/aiService');
 const { uniqueProductSlug } = require('../utils/slugify');
 const premiumService = require('../services/premiumService');
 const notificationSvc = require('../services/notificationService');
-const { attachProductEngagement } = require('../services/feedEngagementService');
+const { attachProductEngagement, attachFollowState } = require('../services/feedEngagementService');
 const logger = require('../utils/logger');
 
 const prisma = require('../config/database');
@@ -116,7 +116,8 @@ const list = async (req, res) => {
       prisma.product.count({ where })
     ]);
 
-    return ok(res, { products: await attachProductEngagement(await attachFavorites(products, req.user?.id), req.user?.id), meta: paginateMeta(total, page, limit) });
+    const withEngagement = await attachProductEngagement(await attachFavorites(products, req.user?.id), req.user?.id);
+    return ok(res, { products: await attachFollowState(withEngagement, req.user?.id), meta: paginateMeta(total, page, limit) });
   } catch (err) {
     logger.error(`[Products.list] ${err.message}`);
     return serverError(res);

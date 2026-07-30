@@ -3,7 +3,7 @@
 const { ok, created, notFound, forbidden, serverError, badRequest } = require('../utils/response');
 const { sanitize, paginate, paginateMeta } = require('../utils/helpers');
 const uploadSvc = require('../services/uploadService');
-const { attachReelEngagement } = require('../services/feedEngagementService');
+const { attachReelEngagement, attachFollowState } = require('../services/feedEngagementService');
 const logger = require('../utils/logger');
 const prisma = require('../config/database');
 
@@ -56,7 +56,7 @@ const listGlobal = async (req, res) => {
       prisma.reel.count()
     ]);
 
-    return ok(res, { reels: await attachReelEngagement(reels, req.user?.id), meta: paginateMeta(total, page, limit) });
+    return ok(res, { reels: await attachFollowState(await attachReelEngagement(reels, req.user?.id), req.user?.id), meta: paginateMeta(total, page, limit) });
   } catch (err) {
     logger.error(`[Reels.listGlobal] ${err.message}`);
     return serverError(res);

@@ -4,6 +4,7 @@ const { ok, created, notFound, badRequest, forbidden, serverError, validationErr
 const { sanitize, paginate, paginateMeta } = require('../utils/helpers');
 const { validationResult } = require('express-validator');
 const { attachEngagement, VALID_TYPES } = require('../services/feedEngagementService');
+const commentService = require('../services/commentService');
 const logger = require('../utils/logger');
 const prisma = require('../config/database');
 
@@ -143,27 +144,24 @@ const share = async (req, res) => {
   }
 };
 
+const targetWhere = (targetType, targetId) => targetType === 'PRODUCT'
+  ? { productId: targetId }
+  : targetType === 'ANNOUNCEMENT'
+  ? { announcementId: targetId }
+  : { reelId: targetId };
+
 // ─── GET /api/feed/:targetType/:targetId/comments ────────────────
+// Devolve comentários de topo com as respostas embutidas (até 3 por
+// comentário) e likeCount/likedByMe de cada um — estilo Facebook.
 const listComments = async (req, res) => {
   try {
     const { targetType, targetId } = req.params;
     if (!assertType(targetType)) return badRequest(res, 'Tipo inválido.');
     const { page = 1, limit = 20 } = req.query;
     const { take, skip } = paginate(page, limit);
-    const where = targetType === 'PRODUCT'
-      ? { productId: targetId }
-      : targetType === 'ANNOUNCEMENT'
-      ? { announcementId: targetId }
-      : { reelId: targetId };
+    const where = targetWhere(targetType, targetId);
 
-    const [comments, total] = await Promise.all([
-      prisma.comment.findMany({
-        where, take, skip, orderBy: { createdAt: 'desc' },
-        include: { user: { select: { id: true, name: true, avatarUrl: true, isPremium: true } } }
-      }),
-      prisma.comment.count({ where })
-    ]);
-
+    const { comments, total } = await commentService.listThreaded(where, req.user?.id, { take, skip });
     return ok(res, { comments, meta: paginateMeta(total, page, limit) });
   } catch (err) {
     logger.error(`[Feed.listComments] ${err.message}`);
@@ -171,7 +169,23 @@ const listComments = async (req, res) => {
   }
 };
 
+// ─── GET /api/feed/comments/:commentId/replies ───────────────────
+// Carregar o resto das respostas de um comentário ("ver mais N respostas").
+const listReplies = async (req, res) => {
+  try {
+    const { page = 1, limit = 20 } = req.query;
+    const { take, skip } = paginate(page, limit);
+    const { replies, total } = await commentService.listReplies(req.params.commentId, req.user?.id, { take, skip });
+    return ok(res, { replies, meta: paginateMeta(total, page, limit) });
+  } catch (err) {
+    logger.error(`[Feed.listReplies] ${err.message}`);
+    return serverError(res);
+  }
+};
+
 // ─── POST /api/feed/:targetType/:targetId/comments ───────────────
+// body: { text, parentId? } — parentId presente = é uma resposta a
+// outro comentário (thread de 1 nível, como Facebook/Instagram).
 const createComment = async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return validationError(res, errors.array());
@@ -187,24 +201,39 @@ const createComment = async (req, res) => {
       : await prisma.reel.findUnique({ where: { id: targetId }, select: { id: true } });
     if (!exists) return notFound(res, 'Conteúdo não encontrado.');
 
-    const targetField = targetType === 'PRODUCT'
-      ? { productId: targetId }
-      : targetType === 'ANNOUNCEMENT'
-      ? { announcementId: targetId }
-      : { reelId: targetId };
+    let parentId = null;
+    if (req.body.parentId) {
+      const parent = await prisma.comment.findUnique({ where: { id: req.body.parentId }, select: { id: true, parentId: true, ...targetWhere(targetType, targetId) } });
+      if (!parent) return notFound(res, 'Comentário original não encontrado.');
+      parentId = parent.parentId || parent.id; // respostas a respostas viram irmãs, thread de 1 nível
+    }
 
     const comment = await prisma.comment.create({
       data: {
         userId: req.user.id,
         text: sanitize(req.body.text),
-        ...targetField
+        parentId,
+        ...targetWhere(targetType, targetId)
       },
       include: { user: { select: { id: true, name: true, avatarUrl: true, isPremium: true } } }
     });
 
-    return created(res, { comment }, 'Comentário publicado.');
+    return created(res, { comment: { ...comment, likeCount: 0, likedByMe: false, replies: [] } }, 'Comentário publicado.');
   } catch (err) {
     logger.error(`[Feed.createComment] ${err.message}`);
+    return serverError(res);
+  }
+};
+
+// ─── POST /api/feed/comments/:commentId/like ─────────────────────
+const likeComment = async (req, res) => {
+  try {
+    const comment = await prisma.comment.findUnique({ where: { id: req.params.commentId }, select: { id: true } });
+    if (!comment) return notFound(res, 'Comentário não encontrado.');
+    const result = await commentService.toggleLike(req.params.commentId, req.user.id);
+    return ok(res, result);
+  } catch (err) {
+    logger.error(`[Feed.likeComment] ${err.message}`);
     return serverError(res);
   }
 };
@@ -233,4 +262,4 @@ const removeComment = async (req, res) => {
   }
 };
 
-module.exports = { list, react, share, listComments, createComment, removeComment, engagement };
+module.exports = { list, react, share, listComments, listReplies, createComment, removeComment, likeComment, engagement };
