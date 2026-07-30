@@ -89,6 +89,7 @@ model User {
   storyViews        StoryView[]
   feedReactions     FeedReaction[]
   feedShares        FeedShare[]
+  commentLikes      CommentLike[]
   cartItems         CartItem[]
   tokens            RefreshToken[]
   verificationCodes VerificationCode[]
@@ -387,10 +388,34 @@ model Comment {
   text           String        @db.Text
   createdAt      DateTime      @default(now())
 
+  // Resposta a outro comentário (thread com 1 nível, estilo Facebook —
+  // uma resposta nunca tem respostas próprias, só pertence a um "pai").
+  parentId       String?
+  parent         Comment?      @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies        Comment[]     @relation("CommentReplies")
+
+  likes          CommentLike[]
+
   @@index([productId])
   @@index([announcementId])
   @@index([reelId])
   @@index([userId])
+  @@index([parentId])
+}
+
+// ─────────────────────────────────────────────
+// COMMENT LIKES ("gosto" num comentário, estilo Facebook)
+// ─────────────────────────────────────────────
+model CommentLike {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  commentId String
+  comment   Comment  @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, commentId])
+  @@index([commentId])
 }
 
 // ─────────────────────────────────────────────
