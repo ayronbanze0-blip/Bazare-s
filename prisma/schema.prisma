@@ -772,6 +772,7 @@ enum NotificationType {
   CHAT
   REVIEW
   SYSTEM
+  SOCIAL
 }
 
 // ─────────────────────────────────────────────
