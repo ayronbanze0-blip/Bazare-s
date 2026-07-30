@@ -15,6 +15,8 @@ router.post('/:targetType/:targetId/react', authenticate, ctrl.react);
 router.post('/:targetType/:targetId/share', authenticate, ctrl.share);
 router.get('/:targetType/:targetId/comments', optionalAuth, ctrl.listComments);
 router.post('/:targetType/:targetId/comments', authenticate, commentValidation, ctrl.createComment);
+router.get('/comments/:commentId/replies', optionalAuth, ctrl.listReplies);
+router.post('/comments/:commentId/like', authenticate, ctrl.likeComment);
 router.delete('/comments/:commentId', authenticate, ctrl.removeComment);
 
 module.exports = router;

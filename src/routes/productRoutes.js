@@ -43,6 +43,8 @@ router.post('/:productId/favorite', authenticate, ctrl.toggleFavorite);
 // ─── Comentários ──────────────────────────────────────────────────
 router.get('/:id/comments', optionalAuth, commentCtrl.list);
 router.post('/:id/comments', authenticate, commentValidation, commentCtrl.create);
+router.get('/:id/comments/:commentId/replies', optionalAuth, commentCtrl.listReplies);
+router.post('/:id/comments/:commentId/like', authenticate, commentCtrl.like);
 router.delete('/:id/comments/:commentId', authenticate, commentCtrl.remove);
 
 // ─── Public — lookup genérico (deve ser o último) ────────────────
