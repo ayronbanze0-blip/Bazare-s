@@ -95,4 +95,16 @@ const attachDirectEngagement = async (list, userId, targetType) => {
 const attachProductEngagement = (products, userId) => attachDirectEngagement(products, userId, 'PRODUCT');
 const attachReelEngagement = (reels, userId) => attachDirectEngagement(reels, userId, 'REEL');
 
-module.exports = { attachEngagement, attachProductEngagement, attachReelEngagement, attachDirectEngagement, VALID_TYPES };
+// Anexa bazar.isFollowing a uma lista de itens que tragam .bazar.id
+// (reels/produtos do feed global) — para o botão "Seguir" já nascer
+// no estado certo, sem precisar de um pedido extra por cartão.
+const attachFollowState = async (items, userId) => {
+  if (!userId || !items.length) return items;
+  const bazarIds = [...new Set(items.map((it) => it.bazar?.id).filter(Boolean))];
+  if (!bazarIds.length) return items;
+  const follows = await prisma.follow.findMany({ where: { userId, bazarId: { in: bazarIds } }, select: { bazarId: true } });
+  const followedSet = new Set(follows.map((f) => f.bazarId));
+  return items.map((it) => it.bazar ? { ...it, bazar: { ...it.bazar, isFollowing: followedSet.has(it.bazar.id) } } : it);
+};
+
+module.exports = { attachEngagement, attachProductEngagement, attachReelEngagement, attachDirectEngagement, attachFollowState, VALID_TYPES };
