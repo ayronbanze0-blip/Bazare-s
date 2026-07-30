@@ -134,8 +134,43 @@ const broadcastToRole = async (role, notification) => {
   }
 };
 
+// ─────────────────────────────────────────────
+// ACTIVIDADE SOCIAL (seguir, comentar, responder, gostar de comentário)
+// ─────────────────────────────────────────────
+const newFollower = (sellerId, followerName, bazarId) =>
+  push(sellerId, {
+    type: 'SOCIAL',
+    title: 'Novo seguidor',
+    message: `${followerName} começou a seguir o teu bazar.`,
+    link: `bazar.html?id=${bazarId}`
+  });
+
+const commentOnContent = (ownerId, commenterName, snippet, link) =>
+  push(ownerId, {
+    type: 'SOCIAL',
+    title: `${commenterName} comentou`,
+    message: snippet.slice(0, 80),
+    link
+  });
+
+const commentReply = (parentAuthorId, replierName, snippet, link) =>
+  push(parentAuthorId, {
+    type: 'SOCIAL',
+    title: `${replierName} respondeu ao teu comentário`,
+    message: snippet.slice(0, 80),
+    link
+  });
+
+const commentLiked = (authorId, likerName, snippet, link) =>
+  push(authorId, {
+    type: 'SOCIAL',
+    title: `${likerName} gostou do teu comentário`,
+    message: snippet.slice(0, 80),
+    link
+  });
+
 module.exports = {
   init, push, orderReceived, orderStatusChanged,
   newMessage, feeAlert, accountSuspended, accountVerified, broadcastToRole,
-  newProductFromFollowed
+  newProductFromFollowed, newFollower, commentOnContent, commentReply, commentLiked
 };

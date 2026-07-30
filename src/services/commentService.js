@@ -1,6 +1,7 @@
 'use strict';
 
 const prisma = require('../config/database');
+const notifSvc = require('./notificationService');
 
 const USER_SELECT = { id: true, name: true, avatarUrl: true, isPremium: true };
 
@@ -95,9 +96,27 @@ const toggleLike = async (commentId, userId) => {
     await prisma.commentLike.delete({ where: { id: existing.id } });
   } else {
     await prisma.commentLike.create({ data: { userId, commentId } });
+    notifyCommentLiked(commentId, userId).catch(() => {});
   }
   const likeCount = await prisma.commentLike.count({ where: { commentId } });
   return { liked: !existing, likeCount };
+};
+
+const notifyCommentLiked = async (commentId, likerId) => {
+  const comment = await prisma.comment.findUnique({
+    where: { id: commentId },
+    select: {
+      userId: true, text: true,
+      productId: true, product: { select: { slug: true } },
+      announcementId: true, reelId: true
+    }
+  });
+  if (!comment || comment.userId === likerId) return;
+  const liker = await prisma.user.findUnique({ where: { id: likerId }, select: { name: true } });
+  const link = comment.productId ? `product.html?id=${comment.product?.slug || comment.productId}`
+    : comment.announcementId ? `home.html?announcement=${comment.announcementId}`
+    : `reels.html?reel=${comment.reelId}`;
+  await notifSvc.commentLiked(comment.userId, liker?.name || 'Alguém', comment.text, link);
 };
 
 module.exports = { listThreaded, listReplies, toggleLike, USER_SELECT };
