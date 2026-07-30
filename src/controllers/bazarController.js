@@ -6,6 +6,7 @@ const { ok, created, badRequest, forbidden, notFound, conflict, serverError, val
 const { paginate, paginateMeta, sanitize, uniqueSlug, startOfMonth, getBadgeTier, parseLatLng } = require('../utils/helpers');
 const uploadSvc = require('../services/uploadService');
 const premiumService = require('../services/premiumService');
+const notifSvc = require('../services/notificationService');
 const logger = require('../utils/logger');
 
 const prisma = require('../config/database');
@@ -269,6 +270,7 @@ const toggleFollow = async (req, res) => {
     } else {
       await prisma.follow.create({ data: { userId: req.user.id, bazarId: bazar.id } });
       following = true;
+      notifSvc.newFollower(bazar.sellerId, req.user.name, bazar.id).catch(() => {});
     }
 
     const followerCount = await prisma.follow.count({ where: { bazarId: bazar.id } });

@@ -5,6 +5,7 @@ const { sanitize, paginate, paginateMeta } = require('../utils/helpers');
 const { validationResult } = require('express-validator');
 const { attachEngagement, VALID_TYPES } = require('../services/feedEngagementService');
 const commentService = require('../services/commentService');
+const notifSvc = require('../services/notificationService');
 const logger = require('../utils/logger');
 const prisma = require('../config/database');
 
@@ -195,17 +196,19 @@ const createComment = async (req, res) => {
     if (!assertType(targetType)) return badRequest(res, 'Tipo inválido.');
 
     const exists = targetType === 'PRODUCT'
-      ? await prisma.product.findUnique({ where: { id: targetId }, select: { id: true } })
+      ? await prisma.product.findUnique({ where: { id: targetId }, select: { id: true, name: true, slug: true, bazar: { select: { sellerId: true } } } })
       : targetType === 'ANNOUNCEMENT'
-      ? await prisma.announcement.findUnique({ where: { id: targetId }, select: { id: true } })
-      : await prisma.reel.findUnique({ where: { id: targetId }, select: { id: true } });
+      ? await prisma.announcement.findUnique({ where: { id: targetId }, select: { id: true, bazar: { select: { sellerId: true, name: true } } } })
+      : await prisma.reel.findUnique({ where: { id: targetId }, select: { id: true, bazar: { select: { sellerId: true, name: true } } } });
     if (!exists) return notFound(res, 'Conteúdo não encontrado.');
 
     let parentId = null;
+    let parentAuthorId = null;
     if (req.body.parentId) {
-      const parent = await prisma.comment.findUnique({ where: { id: req.body.parentId }, select: { id: true, parentId: true, ...targetWhere(targetType, targetId) } });
+      const parent = await prisma.comment.findUnique({ where: { id: req.body.parentId }, select: { id: true, parentId: true, userId: true, ...targetWhere(targetType, targetId) } });
       if (!parent) return notFound(res, 'Comentário original não encontrado.');
       parentId = parent.parentId || parent.id; // respostas a respostas viram irmãs, thread de 1 nível
+      parentAuthorId = parent.userId;
     }
 
     const comment = await prisma.comment.create({
@@ -217,6 +220,19 @@ const createComment = async (req, res) => {
       },
       include: { user: { select: { id: true, name: true, avatarUrl: true, isPremium: true } } }
     });
+
+    // Notificações — nunca bloqueiam a resposta nem se avisa a si mesmo.
+    const link = targetType === 'PRODUCT' ? `product.html?id=${exists.slug || targetId}`
+      : targetType === 'ANNOUNCEMENT' ? `home.html?announcement=${targetId}`
+      : `reels.html?reel=${targetId}`;
+    if (parentAuthorId && parentAuthorId !== req.user.id) {
+      notifSvc.commentReply(parentAuthorId, req.user.name, req.body.text, link).catch(() => {});
+    } else if (!parentAuthorId) {
+      const ownerId = exists.bazar?.sellerId;
+      if (ownerId && ownerId !== req.user.id) {
+        notifSvc.commentOnContent(ownerId, req.user.name, req.body.text, link).catch(() => {});
+      }
+    }
 
     return created(res, { comment: { ...comment, likeCount: 0, likedByMe: false, replies: [] } }, 'Comentário publicado.');
   } catch (err) {

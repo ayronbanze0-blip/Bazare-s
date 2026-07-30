@@ -4,6 +4,7 @@ const { validationResult } = require('express-validator');
 const { ok, created, notFound, forbidden, serverError, validationError } = require('../utils/response');
 const { sanitize, paginate, paginateMeta } = require('../utils/helpers');
 const commentService = require('../services/commentService');
+const notifSvc = require('../services/notificationService');
 const logger = require('../utils/logger');
 const prisma = require('../config/database');
 
@@ -29,14 +30,16 @@ const create = async (req, res) => {
   if (!errors.isEmpty()) return validationError(res, errors.array());
 
   try {
-    const product = await prisma.product.findUnique({ where: { id: req.params.id }, select: { id: true } });
+    const product = await prisma.product.findUnique({ where: { id: req.params.id }, select: { id: true, name: true, slug: true, bazar: { select: { sellerId: true } } } });
     if (!product) return notFound(res, 'Produto não encontrado.');
 
     let parentId = null;
+    let parentAuthorId = null;
     if (req.body.parentId) {
-      const parent = await prisma.comment.findUnique({ where: { id: req.body.parentId }, select: { id: true, parentId: true, productId: true } });
+      const parent = await prisma.comment.findUnique({ where: { id: req.body.parentId }, select: { id: true, parentId: true, userId: true, productId: true } });
       if (!parent || parent.productId !== req.params.id) return notFound(res, 'Comentário original não encontrado.');
       parentId = parent.parentId || parent.id;
+      parentAuthorId = parent.userId;
     }
 
     const comment = await prisma.comment.create({
@@ -48,6 +51,13 @@ const create = async (req, res) => {
       },
       include: { user: { select: { id: true, name: true, avatarUrl: true, isPremium: true } } }
     });
+
+    const link = `product.html?id=${product.slug || product.id}`;
+    if (parentAuthorId && parentAuthorId !== req.user.id) {
+      notifSvc.commentReply(parentAuthorId, req.user.name, req.body.text, link).catch(() => {});
+    } else if (!parentAuthorId && product.bazar?.sellerId && product.bazar.sellerId !== req.user.id) {
+      notifSvc.commentOnContent(product.bazar.sellerId, req.user.name, req.body.text, link).catch(() => {});
+    }
 
     return created(res, { comment: { ...comment, likeCount: 0, likedByMe: false, replies: [] } }, 'Comentário publicado.');
   } catch (err) {
