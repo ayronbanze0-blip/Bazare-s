@@ -70,11 +70,14 @@ const create = async (req, res) => {
     if (!bazar) return notFound(res, 'Bazar não encontrado.');
     if (bazar.sellerId !== req.user.id) return forbidden(res);
 
-    // Um Reel é vídeo OU foto — nunca ambos. Vem em campos multipart
-    // separados ('video' / 'image'), consoante o que o vendedor escolher.
-    const videoFile = req.files?.video?.[0];
+    // Um Reel é vídeo OU foto — nunca ambos. O vídeo já vem editado e
+    // processado pelo editor de vídeo (Fase 3): em vez de reenviar o
+    // ficheiro, o frontend refere o `processedVideoJobId` devolvido
+    // por POST /api/media/video/process depois de status=DONE. Fotos
+    // continuam a chegar por multipart normal ('image').
+    const jobId = req.body.processedVideoJobId;
     const imageFile = req.files?.image?.[0];
-    if (!videoFile && !imageFile) return badRequest(res, 'O Reel precisa de um vídeo ou uma foto.');
+    if (!jobId && !imageFile) return badRequest(res, 'O Reel precisa de um vídeo (editado) ou de uma foto.');
 
     let productId = null;
     if (req.body.productId) {
@@ -83,10 +86,15 @@ const create = async (req, res) => {
     }
 
     let videoUrl = null, videoPublicId = null, imageUrl = null, imagePublicId = null;
-    if (videoFile) {
-      const up = await uploadSvc.uploadVideoToCloud(videoFile.path, 'bazares/reels');
-      if (!up.ok) return badRequest(res, up.error || 'Falha ao enviar o vídeo.');
-      videoUrl = up.url; videoPublicId = up.publicId;
+    let thumbnailUrl = null, thumbnailPublicId = null, videoDurationSec = null;
+
+    if (jobId) {
+      const job = await prisma.videoJob.findUnique({ where: { id: jobId } });
+      if (!job || job.userId !== req.user.id) return badRequest(res, 'Vídeo processado não encontrado.');
+      if (job.status !== 'DONE') return badRequest(res, 'O vídeo ainda está a ser processado. Aguarda a conclusão antes de publicar.');
+      videoUrl = job.resultUrl; videoPublicId = job.resultPublicId;
+      thumbnailUrl = job.thumbnailUrl; thumbnailPublicId = job.thumbnailPublicId;
+      videoDurationSec = job.durationSec;
     } else {
       const up = await uploadSvc.uploadToCloud(imageFile.path, 'bazares/reels');
       if (!up.ok) return badRequest(res, 'Falha ao enviar a foto.');
@@ -99,6 +107,7 @@ const create = async (req, res) => {
         bazarId: bazar.id,
         sellerId: req.user.id,
         videoUrl, videoPublicId, imageUrl, imagePublicId,
+        thumbnailUrl, thumbnailPublicId, videoDurationSec,
         text,
         productId
       },
@@ -142,6 +151,7 @@ const remove = async (req, res) => {
 
     if (reel.videoPublicId) uploadSvc.deleteFromCloud(reel.videoPublicId).catch(() => {});
     if (reel.imagePublicId) uploadSvc.deleteFromCloud(reel.imagePublicId).catch(() => {});
+    if (reel.thumbnailPublicId) uploadSvc.deleteFromCloud(reel.thumbnailPublicId).catch(() => {});
     await prisma.reel.delete({ where: { id: reel.id } });
     return ok(res, {}, 'Reel removido.');
   } catch (err) {

@@ -9,6 +9,7 @@ const { OAuth2Client } = require('google-auth-library');
 
 const { ok, created, badRequest, unauthorized, conflict, serverError, validationError } = require('../utils/response');
 const { genCode, genToken, expiresAt } = require('../utils/helpers');
+const { uniqueUsername } = require('../utils/slugify');
 const emailSvc = require('../services/emailService');
 const logger = require('../utils/logger');
 // NOTE: emailSvc e genCode/expiresAt continuam a ser usados em
@@ -97,12 +98,21 @@ const register = async (req, res) => {
     // Hash password
     const passwordHash = await bcrypt.hash(password, parseInt(process.env.BCRYPT_ROUNDS) || 12);
 
+    // Alcunha única para o sistema de menções ("@joaomatavel") —
+    // gerada automaticamente a partir do nome, sem pedir nada extra
+    // no formulário de registo.
+    const username = await uniqueUsername(name.trim(), async (candidate) => {
+      const found = await prisma.user.findUnique({ where: { username: candidate }, select: { id: true } });
+      return !!found;
+    });
+
     // Create user — já fica verificado, sem fluxo de verificação por email
     const user = await prisma.user.create({
       data: {
         name: name.trim(),
         email: email.toLowerCase().trim(),
         passwordHash,
+        username,
         role: role.toUpperCase(),
         inviteId,
         revendedorId,
@@ -250,6 +260,11 @@ const findOrCreateSocialUser = async ({ provider, providerId, email, name, avata
     }
   }
 
+  const username = await uniqueUsername((name || 'Utilizador Bazares').trim(), async (candidate) => {
+    const found = await prisma.user.findUnique({ where: { username: candidate }, select: { id: true } });
+    return !!found;
+  });
+
   return prisma.user.create({
     data: {
       name: (name || 'Utilizador Bazares').trim(),
@@ -257,6 +272,7 @@ const findOrCreateSocialUser = async ({ provider, providerId, email, name, avata
         ? email.toLowerCase().trim()
         : `${provider}_${providerId}@social.bazares.local`,
       passwordHash: null,
+      username,
       provider,
       providerId,
       avatarUrl: avatarUrl || null,

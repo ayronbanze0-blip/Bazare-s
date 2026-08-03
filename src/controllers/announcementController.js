@@ -3,6 +3,7 @@
 const { ok, created, notFound, forbidden, serverError, badRequest } = require('../utils/response');
 const { sanitize, paginate, paginateMeta } = require('../utils/helpers');
 const uploadSvc = require('../services/uploadService');
+const mentionSvc = require('../services/mentionService');
 const logger = require('../utils/logger');
 const prisma = require('../config/database');
 
@@ -23,7 +24,7 @@ const list = async (req, res) => {
         where: { bazarId: bazar.id },
         take, skip,
         orderBy: { createdAt: 'desc' },
-        include: { images: { orderBy: { order: 'asc' } } }
+        include: { images: { orderBy: { order: 'asc' } }, mentions: { select: { mentionedUserId: true, mentionedUser: { select: { username: true } } } } }
       }),
       prisma.announcement.count({ where: { bazarId: bazar.id } })
     ]);
@@ -70,8 +71,16 @@ const create = async (req, res) => {
 
     const full = await prisma.announcement.findUnique({
       where: { id: announcement.id },
-      include: { images: { orderBy: { order: 'asc' } } }
+      include: { images: { orderBy: { order: 'asc' } }, mentions: { select: { mentionedUserId: true, mentionedUser: { select: { username: true } } } } }
     });
+
+    mentionSvc.syncMentions({
+      text,
+      authorId: req.user.id,
+      authorName: req.user.name,
+      announcementId: announcement.id,
+      link: `home.html?announcement=${announcement.id}`
+    }).catch(() => {});
 
     return created(
       res,
@@ -98,8 +107,16 @@ const update = async (req, res) => {
     const updated = await prisma.announcement.update({
       where: { id: announcement.id },
       data: { text },
-      include: { images: { orderBy: { order: 'asc' } } }
+      include: { images: { orderBy: { order: 'asc' } }, mentions: { select: { mentionedUserId: true, mentionedUser: { select: { username: true } } } } }
     });
+
+    mentionSvc.syncMentions({
+      text,
+      authorId: req.user.id,
+      authorName: req.user.name,
+      announcementId: announcement.id,
+      link: `home.html?announcement=${announcement.id}`
+    }).catch(() => {});
 
     return ok(res, { announcement: updated }, 'Anúncio actualizado.');
   } catch (err) {

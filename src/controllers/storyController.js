@@ -55,22 +55,30 @@ const create = async (req, res) => {
     if (!bazar) return notFound(res, 'Bazar não encontrado.');
     if (bazar.sellerId !== req.user.id) return forbidden(res);
 
-    // Uma história é imagem OU vídeo — nunca ambos. Vem em campos
-    // multipart separados ('image' / 'video'), consoante o tipo
-    // escolhido pelo vendedor em historia.html.
+    // Uma história é imagem OU vídeo — nunca ambos. O vídeo já vem
+    // editado e processado pelo editor de vídeo (Fase 3): em vez de
+    // reenviar o ficheiro, o frontend refere o `processedVideoJobId`
+    // devolvido por POST /api/media/video/process depois de
+    // status=DONE. Fotos continuam a chegar por multipart normal
+    // ('image').
+    const jobId = req.body.processedVideoJobId;
     const imageFile = req.files?.image?.[0];
-    const videoFile = req.files?.video?.[0];
-    if (!imageFile && !videoFile) return badRequest(res, 'A história precisa de uma foto ou vídeo.');
+    if (!imageFile && !jobId) return badRequest(res, 'A história precisa de uma foto ou de um vídeo (editado).');
 
     let imageUrl = null, imagePublicId = null, videoUrl = null, videoPublicId = null;
+    let thumbnailUrl = null, thumbnailPublicId = null, videoDurationSec = null;
+
     if (imageFile) {
       const up = await uploadSvc.uploadToCloud(imageFile.path, 'bazares/stories');
       if (!up.ok) return badRequest(res, 'Falha ao enviar a imagem.');
       imageUrl = up.url; imagePublicId = up.publicId;
     } else {
-      const up = await uploadSvc.uploadVideoToCloud(videoFile.path, 'bazares/stories');
-      if (!up.ok) return badRequest(res, 'Falha ao enviar o vídeo.');
-      videoUrl = up.url; videoPublicId = up.publicId;
+      const job = await prisma.videoJob.findUnique({ where: { id: jobId } });
+      if (!job || job.userId !== req.user.id) return badRequest(res, 'Vídeo processado não encontrado.');
+      if (job.status !== 'DONE') return badRequest(res, 'O vídeo ainda está a ser processado. Aguarda a conclusão antes de publicar.');
+      videoUrl = job.resultUrl; videoPublicId = job.resultPublicId;
+      thumbnailUrl = job.thumbnailUrl; thumbnailPublicId = job.thumbnailPublicId;
+      videoDurationSec = job.durationSec;
     }
 
     const text = (req.body.text || '').trim().slice(0, 200) || null;
@@ -80,6 +88,7 @@ const create = async (req, res) => {
         bazarId: bazar.id,
         sellerId: req.user.id,
         imageUrl, imagePublicId, videoUrl, videoPublicId,
+        thumbnailUrl, thumbnailPublicId, videoDurationSec,
         text,
         createdAt: now,
         expiresAt: new Date(now.getTime() + STORY_TTL_MS)
@@ -184,6 +193,23 @@ const viewers = async (req, res) => {
   }
 };
 
+// ─── SELLER: Editar a legenda de uma história (antes de expirar) ──
+const updateText = async (req, res) => {
+  try {
+    const story = await prisma.story.findUnique({ where: { id: req.params.storyId } });
+    if (!story) return notFound(res, 'História não encontrada.');
+    if (story.sellerId !== req.user.id) return forbidden(res);
+    if (story.expiresAt < new Date()) return badRequest(res, 'Esta história já expirou.');
+
+    const text = (req.body.text || '').trim().slice(0, 200) || null;
+    const updated = await prisma.story.update({ where: { id: story.id }, data: { text } });
+    return ok(res, { story: updated }, 'História actualizada.');
+  } catch (err) {
+    logger.error(`[Stories.updateText] ${err.message}`);
+    return serverError(res);
+  }
+};
+
 // ─── SELLER/ADMIN: Apagar uma história antes das 24h ──────────────
 const remove = async (req, res) => {
   try {
@@ -193,6 +219,7 @@ const remove = async (req, res) => {
 
     if (story.imagePublicId) uploadSvc.deleteFromCloud(story.imagePublicId).catch(() => {});
     if (story.videoPublicId) uploadSvc.deleteFromCloud(story.videoPublicId).catch(() => {});
+    if (story.thumbnailPublicId) uploadSvc.deleteFromCloud(story.thumbnailPublicId).catch(() => {});
     await prisma.story.delete({ where: { id: story.id } });
     return ok(res, {}, 'História removida.');
   } catch (err) {
@@ -201,4 +228,4 @@ const remove = async (req, res) => {
   }
 };
 
-module.exports = { list, create, markViewed, remove, reply, viewers };
+module.exports = { list, create, markViewed, updateText, remove, reply, viewers };

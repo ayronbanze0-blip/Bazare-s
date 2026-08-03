@@ -5,6 +5,7 @@ const { ok, created, notFound, forbidden, serverError, validationError } = requi
 const { sanitize, paginate, paginateMeta } = require('../utils/helpers');
 const commentService = require('../services/commentService');
 const notifSvc = require('../services/notificationService');
+const mentionSvc = require('../services/mentionService');
 const logger = require('../utils/logger');
 const prisma = require('../config/database');
 
@@ -58,6 +59,14 @@ const create = async (req, res) => {
     } else if (!parentAuthorId && product.bazar?.sellerId && product.bazar.sellerId !== req.user.id) {
       notifSvc.commentOnContent(product.bazar.sellerId, req.user.name, req.body.text, link).catch(() => {});
     }
+
+    mentionSvc.syncMentions({
+      text: comment.text,
+      authorId: req.user.id,
+      authorName: req.user.name,
+      commentId: comment.id,
+      link
+    }).catch(() => {});
 
     return created(res, { comment: { ...comment, likeCount: 0, likedByMe: false, replies: [] } }, 'Comentário publicado.');
   } catch (err) {

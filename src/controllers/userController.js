@@ -370,5 +370,38 @@ const requestVerification = async (req, res) => {
   }
 };
 
-module.exports = { myStats, updateProfile, updateCover, changePassword, publicProfile, sendThumb, deleteAccount, onboarding, requestVerification };
+// ─── GET /api/users/search/mentions?q= ────────────────────────────
+// Autocomplete usado no editor de menções ("@") em comentários e
+// publicações — devolve o mínimo necessário para a lista (avatar,
+// nome, username), a começar por correspondências no início do
+// username (mais relevantes) antes de correspondências no meio.
+const searchMentionable = async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim().toLowerCase().replace(/^@/, '');
+    if (q.length < 1) return ok(res, { users: [] });
+
+    const users = await prisma.user.findMany({
+      where: {
+        active: true,
+        username: { not: null, contains: q, mode: 'insensitive' }
+      },
+      select: { id: true, name: true, username: true, avatarUrl: true, isPremium: true, verifiedSeller: true },
+      take: 20
+    });
+
+    users.sort((a, b) => {
+      const aStarts = a.username.toLowerCase().startsWith(q) ? 0 : 1;
+      const bStarts = b.username.toLowerCase().startsWith(q) ? 0 : 1;
+      if (aStarts !== bStarts) return aStarts - bStarts;
+      return a.username.length - b.username.length;
+    });
+
+    return ok(res, { users: users.slice(0, 8) });
+  } catch (err) {
+    logger.error(`[Users.searchMentionable] ${err.message}`);
+    return serverError(res);
+  }
+};
+
+module.exports = { myStats, updateProfile, updateCover, changePassword, publicProfile, sendThumb, deleteAccount, onboarding, requestVerification, searchMentionable };
 

@@ -6,6 +6,7 @@ const { validationResult } = require('express-validator');
 const { attachEngagement, VALID_TYPES } = require('../services/feedEngagementService');
 const commentService = require('../services/commentService');
 const notifSvc = require('../services/notificationService');
+const mentionSvc = require('../services/mentionService');
 const logger = require('../utils/logger');
 const prisma = require('../config/database');
 
@@ -53,7 +54,8 @@ const list = async (req, res) => {
         take: 60,
         include: {
           bazar: { select: { id: true, name: true, slug: true } },
-          seller: { select: { id: true, name: true, avatarUrl: true, isPremium: true } }
+          seller: { select: { id: true, name: true, avatarUrl: true, isPremium: true } },
+          mentions: { select: { mentionedUserId: true, mentionedUser: { select: { username: true } } } }
         }
       })
     ]);
@@ -234,6 +236,14 @@ const createComment = async (req, res) => {
       }
     }
 
+    mentionSvc.syncMentions({
+      text: comment.text,
+      authorId: req.user.id,
+      authorName: req.user.name,
+      commentId: comment.id,
+      link
+    }).catch(() => {});
+
     return created(res, { comment: { ...comment, likeCount: 0, likedByMe: false, replies: [] } }, 'Comentário publicado.');
   } catch (err) {
     logger.error(`[Feed.createComment] ${err.message}`);
@@ -255,6 +265,44 @@ const likeComment = async (req, res) => {
 };
 
 // ─── DELETE /api/feed/comments/:commentId ────────────────────────
+// ─── PUT /api/feed/comments/:commentId — editar o próprio comentário ─
+const updateComment = async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return validationError(res, errors.array());
+
+  try {
+    const comment = await prisma.comment.findUnique({ where: { id: req.params.commentId } });
+    if (!comment) return notFound(res, 'Comentário não encontrado.');
+    if (comment.userId !== req.user.id) return forbidden(res, 'Só pode editar os seus próprios comentários.');
+
+    const text = sanitize(req.body.text || '');
+    if (!text) return badRequest(res, 'Escreva um comentário.');
+
+    const updated = await prisma.comment.update({
+      where: { id: comment.id },
+      data: { text, editedAt: new Date() },
+      include: { user: { select: { id: true, name: true, avatarUrl: true } } }
+    });
+
+    const link = comment.productId ? `product.html?id=${comment.productId}`
+      : comment.announcementId ? `home.html?announcement=${comment.announcementId}`
+      : `reels.html?reel=${comment.reelId}`;
+
+    mentionSvc.syncMentions({
+      text,
+      authorId: req.user.id,
+      authorName: req.user.name,
+      commentId: comment.id,
+      link
+    }).catch(() => {});
+
+    return ok(res, { comment: updated }, 'Comentário actualizado.');
+  } catch (err) {
+    logger.error(`[Feed.updateComment] ${err.message}`);
+    return serverError(res);
+  }
+};
+
 const removeComment = async (req, res) => {
   try {
     const comment = await prisma.comment.findUnique({
@@ -278,4 +326,4 @@ const removeComment = async (req, res) => {
   }
 };
 
-module.exports = { list, react, share, listComments, listReplies, createComment, removeComment, likeComment, engagement };
+module.exports = { list, react, share, listComments, listReplies, createComment, updateComment, removeComment, likeComment, engagement };
