@@ -169,8 +169,17 @@ const commentLiked = (authorId, likerName, snippet, link) =>
     link
   });
 
+const mentioned = (userId, authorName, link) =>
+  push(userId, {
+    type: 'SOCIAL',
+    title: `${authorName} mencionou-te`,
+    message: `${authorName} mencionou-te numa publicação.`,
+    link
+  });
+
 module.exports = {
   init, push, orderReceived, orderStatusChanged,
   newMessage, feeAlert, accountSuspended, accountVerified, broadcastToRole,
-  newProductFromFollowed, newFollower, commentOnContent, commentReply, commentLiked
+  newProductFromFollowed, newFollower, commentOnContent, commentReply, commentLiked,
+  mentioned
 };

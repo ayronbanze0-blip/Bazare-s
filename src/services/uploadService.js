@@ -73,6 +73,33 @@ const uploadMedia = multer({
   limits: { fileSize: 60 * 1024 * 1024, files: 1 }
 });
 
+// ─── Multer para o EDITOR de vídeo (Fase 3) ───────────────────────
+// Recebe o vídeo bruto (antes de cortar/comprimir no servidor) e,
+// opcionalmente, uma faixa de áudio a adicionar. O vídeo de entrada
+// pode ser maior do que o aceite para publicação directa (60MB)
+// porque ainda vai ser cortado e comprimido pelo FFmpeg antes de
+// seguir para o Cloudinary — só o resultado final é que respeita o
+// limite normal.
+const audioFileFilter = (req, file, cb) => {
+  const allowedExt = /mp3|m4a|aac|wav|ogg/;
+  const allowedMime = /audio\//;
+  const ext = allowedExt.test(path.extname(file.originalname).toLowerCase());
+  const mime = allowedMime.test(file.mimetype);
+  if (ext && mime) cb(null, true);
+  else cb(new Error('Apenas áudio é permitido (mp3, m4a, aac, wav, ogg)'));
+};
+
+const videoEditFileFilter = (req, file, cb) => {
+  if (file.fieldname === 'audio') return audioFileFilter(req, file, cb);
+  return videoFileFilter(req, file, cb);
+};
+
+const uploadVideoEdit = multer({
+  storage,
+  fileFilter: videoEditFileFilter,
+  limits: { fileSize: 150 * 1024 * 1024, files: 2 } // até 150MB de vídeo bruto + 1 áudio
+});
+
 // ─── Erros transitórios (rede/timeout) vs erros definitivos ──────
 // Estes valem a pena repetir; erros de auth/validação da Cloudinary não.
 const isTransientError = (err) => {
@@ -187,6 +214,7 @@ module.exports = {
   upload,
   uploadVideo,
   uploadMedia,
+  uploadVideoEdit,
   uploadToCloud,
   uploadVideoToCloud,
   uploadMany,

@@ -19,6 +19,7 @@ const listThreaded = async (where, userId, { take, skip } = {}) => {
       orderBy: { createdAt: 'desc' },
       include: {
         user: { select: USER_SELECT },
+        mentions: { select: { mentionedUserId: true, mentionedUser: { select: { username: true } } } },
         _count: { select: { likes: true, replies: true } }
       }
     }),
@@ -33,6 +34,7 @@ const listThreaded = async (where, userId, { take, skip } = {}) => {
           orderBy: { createdAt: 'asc' },
           include: {
             user: { select: USER_SELECT },
+            mentions: { select: { mentionedUserId: true, mentionedUser: { select: { username: true } } } },
             _count: { select: { likes: true } }
           }
         })
@@ -75,7 +77,11 @@ const listReplies = async (parentId, userId, { take, skip } = {}) => {
       where: { parentId },
       take, skip,
       orderBy: { createdAt: 'asc' },
-      include: { user: { select: USER_SELECT }, _count: { select: { likes: true } } }
+      include: {
+        user: { select: USER_SELECT },
+        mentions: { select: { mentionedUserId: true, mentionedUser: { select: { username: true } } } },
+        _count: { select: { likes: true } }
+      }
     }),
     prisma.comment.count({ where: { parentId } })
   ]);
