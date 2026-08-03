@@ -10,6 +10,9 @@ const ok = (res, data = {}, message = 'Sucesso', statusCode = 200) =>
 const created = (res, data = {}, message = 'Criado com sucesso') =>
   res.status(201).json({ success: true, message, data });
 
+const accepted = (res, data = {}, message = 'Pedido aceite') =>
+  res.status(202).json({ success: true, message, data });
+
 const noContent = (res) => res.status(204).send();
 
 const badRequest = (res, message = 'Pedido inválido', errors = null) =>
@@ -40,4 +43,4 @@ const validationError = (res, errors) =>
     errors: errors.map(e => ({ field: e.path, message: e.msg }))
   });
 
-module.exports = { ok, created, noContent, badRequest, unauthorized, forbidden, notFound, conflict, tooMany, serverError, validationError };
+module.exports = { ok, created, accepted, noContent, badRequest, unauthorized, forbidden, notFound, conflict, tooMany, serverError, validationError };

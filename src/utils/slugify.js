@@ -39,4 +39,19 @@ async function uniqueProductSlug({ name, location }, checkExists) {
   return `${base}-${randomSuffix(8)}`;
 }
 
-module.exports = { slugify, randomSuffix, uniqueProductSlug };
+// Gera uma alcunha única ("@joaomatavel") a partir do nome, para o
+// sistema de menções. Diferente do slug de produto: sem hífens (fica
+// mais parecido com um "handle" de rede social) e sempre com pelo
+// menos 3 caracteres. `checkExists` é async(username) => boolean.
+async function uniqueUsername(name, checkExists) {
+  let base = slugify(name).replace(/-/g, '').slice(0, 20);
+  if (base.length < 3) base = ('user' + base).slice(0, 20);
+  if (!checkExists || !(await checkExists(base))) return base;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const candidate = `${base}${Math.floor(1000 + Math.random() * 9000)}`.slice(0, 24);
+    if (!(await checkExists(candidate))) return candidate;
+  }
+  return `${base}${randomSuffix(6)}`.slice(0, 30);
+}
+
+module.exports = { slugify, randomSuffix, uniqueProductSlug, uniqueUsername };
