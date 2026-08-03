@@ -16,6 +16,9 @@ router.post('/me/request-verification', authenticate, ctrl.requestVerification);
 router.delete('/me', authenticate, ctrl.deleteAccount);
 router.post('/:id/thumb', authenticate, ctrl.sendThumb);
 
+// ─── Autocomplete de menções ("@") — antes de /:id para não colidir ─
+router.get('/search/mentions', authenticate, ctrl.searchMentionable);
+
 // ─── Public ───────────────────────────────────────────────────────
 // Deve ficar por último para não capturar /me como :id
 router.get('/:id', optionalAuth, ctrl.publicProfile);
