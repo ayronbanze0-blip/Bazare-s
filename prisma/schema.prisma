@@ -14,6 +14,13 @@ model User {
   id                String    @id @default(uuid())
   name              String
   email             String    @unique
+  // Alcunha curta e única usada para menções ("@joaomatavel") em
+  // comentários e publicações. Gerada automaticamente no registo a
+  // partir do nome (ver utils/slugify.js -> uniqueUsername); os
+  // utilizadores criados antes desta funcionalidade são preenchidos
+  // por scripts/backfill-usernames.js. Fica nullable por causa disso
+  // — nunca deve ficar null para contas novas.
+  username          String?   @unique
   passwordHash      String
   role              Role      @default(BUYER)
   phone             String?
@@ -101,6 +108,11 @@ model User {
   thumbVotesGiven   SellerThumbVote[]  @relation("ThumbVoter")
   thumbVotesReceived SellerThumbVote[] @relation("ThumbSeller")
 
+  // Menções ("@utilizador") em comentários e publicações
+  mentionsReceived  Mention[] @relation("MentionsReceived")
+  mentionsAuthored  Mention[] @relation("MentionsAuthored")
+  videoJobs         VideoJob[]
+
   // Wallet system
   wallet              Wallet?
   depositRequests     DepositRequest[]
@@ -119,6 +131,7 @@ model User {
   deviceTokens         DeviceToken[]
 
   @@index([email])
+  @@index([username])
   @@index([role])
   @@index([revendedorId])
   @@index([isPremium])
@@ -387,6 +400,7 @@ model Comment {
   user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   text           String        @db.Text
   createdAt      DateTime      @default(now())
+  editedAt       DateTime?
 
   // Resposta a outro comentário (thread com 1 nível, estilo Facebook —
   // uma resposta nunca tem respostas próprias, só pertence a um "pai").
@@ -395,6 +409,7 @@ model Comment {
   replies        Comment[]     @relation("CommentReplies")
 
   likes          CommentLike[]
+  mentions       Mention[]
 
   @@index([productId])
   @@index([announcementId])
@@ -419,6 +434,34 @@ model CommentLike {
 }
 
 // ─────────────────────────────────────────────
+// MENTIONS ("@utilizador" em comentários e publicações)
+// Guarda a relação entre o conteúdo (comentário OU publicação) e o
+// utilizador mencionado, e é a base para a notificação + para
+// evitar notificações duplicadas quando o texto é editado (ver
+// mentionService.syncMentions — recalcula o conjunto a cada edição
+// e só notifica quem for uma menção nova).
+// ─────────────────────────────────────────────
+model Mention {
+  id              String        @id @default(uuid())
+  mentionedUserId String
+  mentionedUser   User          @relation("MentionsReceived", fields: [mentionedUserId], references: [id], onDelete: Cascade)
+  authorId        String
+  author          User          @relation("MentionsAuthored", fields: [authorId], references: [id], onDelete: Cascade)
+  commentId       String?
+  comment         Comment?      @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  announcementId  String?
+  announcement    Announcement? @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  createdAt       DateTime      @default(now())
+
+  @@unique([mentionedUserId, commentId])
+  @@unique([mentionedUserId, announcementId])
+  @@index([mentionedUserId])
+  @@index([authorId])
+  @@index([commentId])
+  @@index([announcementId])
+}
+
+// ─────────────────────────────────────────────
 // ANNOUNCEMENTS ("anúncios" — posts estilo rede social,
 // sem preço/stock, exclusivo de vendedores Premium)
 // ─────────────────────────────────────────────
@@ -438,6 +481,7 @@ model Announcement {
 
   comments      Comment[]
   images        AnnouncementImage[]
+  mentions      Mention[]
 
   @@index([bazarId])
   @@index([sellerId])
@@ -474,6 +518,12 @@ model Story {
   imagePublicId String?
   videoUrl      String?
   videoPublicId String?
+  // Capa do vídeo (fotograma escolhido no editor de vídeo) e duração —
+  // nulos para histórias de imagem. Campo separado de `imageUrl` para
+  // não colidir com histórias de foto pura.
+  thumbnailUrl      String?
+  thumbnailPublicId String?
+  videoDurationSec  Int?
   text          String?  @db.Text
   createdAt     DateTime @default(now())
   expiresAt     DateTime
@@ -500,6 +550,11 @@ model Reel {
   videoPublicId String?
   imageUrl      String?
   imagePublicId String?
+  // Capa do vídeo (fotograma escolhido no editor) e duração — nulos
+  // para reels de foto pura.
+  thumbnailUrl      String?
+  thumbnailPublicId String?
+  videoDurationSec  Int?
   text          String?  @db.Text
   productId     String?
   product       Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
@@ -1099,4 +1154,35 @@ enum CommissionStatus {
   PROCESSANDO
   PAGA
   FALHADA
+}
+
+// ─────────────────────────────────────────────
+// VIDEO JOBS — processamento assíncrono do editor de vídeo (Fase 3).
+// O corte, a capa, a mistura de áudio e a compressão correm no
+// servidor (FFmpeg), nunca no browser. O frontend cria o job, mostra
+// progresso a fazer polling a este registo, e só quando status=DONE
+// é que publica a História/Reel, referenciando o resultado aqui em
+// vez de reenviar o vídeo já editado.
+// ─────────────────────────────────────────────
+model VideoJob {
+  id                String   @id @default(uuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // PENDING → PROCESSING → DONE | FAILED
+  status            String   @default("PENDING")
+  progress          Int      @default(0)
+  // Pasta de destino no Cloudinary consoante o que vai ser publicado
+  // ('bazares/stories' ou 'bazares/reels').
+  targetFolder      String
+  resultUrl         String?
+  resultPublicId    String?
+  thumbnailUrl      String?
+  thumbnailPublicId String?
+  durationSec       Int?
+  errorMessage      String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([userId])
+  @@index([status])
 }
