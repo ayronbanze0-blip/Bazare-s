@@ -80,4 +80,43 @@ router.post('/', authenticate, async (req, res) => {
   }
 });
 
+// GET /reviews?bazarId=me|<id ou slug>&limit=N
+// Frontend chama com bazarId='me' a partir do painel do próprio vendedor
+// (my-bazar.html). Aceita também um id/slug de bazar para uso futuro
+// noutras páginas (ex.: reviews públicas de uma loja).
+router.get('/', authenticate, async (req, res) => {
+  try {
+    const { bazarId, limit } = req.query;
+    if (!bazarId) return badRequest(res, 'bazarId obrigatório.');
+
+    let sellerId;
+    if (bazarId === 'me') {
+      sellerId = req.user.id;
+    } else {
+      const bazar = await prisma.bazar.findFirst({
+        where: { OR: [{ id: bazarId }, { slug: bazarId }] },
+        select: { sellerId: true }
+      });
+      if (!bazar) return notFound(res, 'Bazar não encontrado.');
+      sellerId = bazar.sellerId;
+    }
+
+    const take = Math.min(parseInt(limit, 10) || 20, 50);
+    const reviews = await prisma.review.findMany({
+      where: { sellerId },
+      orderBy: { createdAt: 'desc' },
+      take,
+      include: {
+        buyer: { select: { id: true, name: true, avatarUrl: true } },
+        product: { select: { id: true, name: true } }
+      }
+    });
+
+    return ok(res, { reviews });
+  } catch (err) {
+    logger.error(`[Reviews.list] ${err.message}`);
+    return serverError(res);
+  }
+});
+
 module.exports = router;
