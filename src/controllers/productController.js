@@ -713,27 +713,7 @@ const unpin = async (req, res) => {
   }
 };
 
-// ─── GET /api/products/categories-overview ─────────────────────────
-// Contagem de produtos activos por categoria, para a secção
-// "Comunidades por categoria" da home. Sem tabela nova — agrega
-// directamente sobre Product.
-const categoriesOverview = async (req, res) => {
-  try {
-    const grouped = await prisma.product.groupBy({
-      by: ['category'],
-      where: { active: true },
-      _count: { _all: true },
-      orderBy: { _count: { category: 'desc' } }
-    });
-    const categories = grouped.map(g => ({ category: g.category, count: g._count._all }));
-    return ok(res, { categories });
-  } catch (err) {
-    logger.error(`[Products.categoriesOverview] ${err.message}`);
-    return serverError(res);
-  }
-};
-
-module.exports = { list, getOne, featured, related, trackView, create, update, deleteImage, reorderImages, toggle, toggleStock, remove, myProducts, toggleFavorite, myFavorites, attachFavorites, generateDescription, pin, unpin, categoriesOverview };
+module.exports = { list, getOne, featured, related, trackView, create, update, deleteImage, reorderImages, toggle, toggleStock, remove, myProducts, toggleFavorite, myFavorites, attachFavorites, generateDescription, pin, unpin };
 
 
 
