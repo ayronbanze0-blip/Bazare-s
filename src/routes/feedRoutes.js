@@ -17,7 +17,6 @@ router.get('/:targetType/:targetId/comments', optionalAuth, ctrl.listComments);
 router.post('/:targetType/:targetId/comments', authenticate, commentValidation, ctrl.createComment);
 router.get('/comments/:commentId/replies', optionalAuth, ctrl.listReplies);
 router.post('/comments/:commentId/like', authenticate, ctrl.likeComment);
-router.put('/comments/:commentId', authenticate, commentValidation, ctrl.updateComment);
 router.delete('/comments/:commentId', authenticate, ctrl.removeComment);
 
 module.exports = router;

@@ -16,10 +16,8 @@ const bazarValidation = [
 ];
 
 router.get('/', ctrl.list);
-router.get('/ranking', ctrl.ranking);
 router.get('/me', authenticate, isSeller, ctrl.myBazar);
 router.get('/:idOrSlug', optionalAuth, ctrl.getOne);
-router.get('/:idOrSlug/follow-status', optionalAuth, ctrl.getFollowStatus);
 router.post('/:idOrSlug/whatsapp-click', ctrl.trackWhatsappClick);
 router.post('/:idOrSlug/follow', authenticate, ctrl.toggleFollow);
 router.get('/:idOrSlug/announcements', announcementCtrl.list);
