@@ -130,6 +130,10 @@ model User {
   // Push notifications (Firebase Cloud Messaging)
   deviceTokens         DeviceToken[]
 
+  // Bloqueios — ver model Block acima
+  blocking             Block[]   @relation("BlockerOf")
+  blockedBy            Block[]   @relation("BlockedBy")
+
   @@index([email])
   @@index([username])
   @@index([role])
@@ -386,6 +390,26 @@ model Follow {
 }
 
 // ─────────────────────────────────────────────
+// BLOCKS — bloqueio entre utilizadores (rede social real)
+// blockerId bloqueou blockedId: deixa de ver o conteúdo dele no feed,
+// não pode iniciar/continuar conversas com ele, e é escondido dos
+// resultados desse utilizador também (bloqueio esconde nos dois
+// sentidos, como Instagram/Facebook — ver blockService.isBlockedEither).
+// ─────────────────────────────────────────────
+model Block {
+  id        String   @id @default(uuid())
+  blockerId String
+  blocker   User     @relation("BlockerOf", fields: [blockerId], references: [id], onDelete: Cascade)
+  blockedId String
+  blocked   User     @relation("BlockedBy", fields: [blockedId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([blockerId, blockedId])
+  @@index([blockerId])
+  @@index([blockedId])
+}
+
+// ─────────────────────────────────────────────
 // COMMENTS (comentários abertos em cada produto)
 // ─────────────────────────────────────────────
 model Comment {
@@ -599,7 +623,7 @@ model FeedReaction {
   user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   targetType FeedTargetType
   targetId   String
-  value      Int            // 1 = polegar para cima, -1 = polegar para baixo
+  value      Int            // 1-7 = tipo de reação (Adoro/Gosto/Riso/Uau/Triste/Ira/Coragem — ver REACTIONS no frontend)
   createdAt  DateTime       @default(now())
   updatedAt  DateTime       @updatedAt
 
