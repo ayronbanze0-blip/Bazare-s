@@ -2,6 +2,7 @@
 
 const router = require('express').Router();
 const ctrl = require('../controllers/userController');
+const blockCtrl = require('../controllers/blockController');
 const { authenticate, optionalAuth } = require('../middleware/auth');
 const { upload } = require('../services/uploadService');
 const { uploadLimiter } = require('../middleware/rateLimiter');
@@ -15,9 +16,15 @@ router.put('/me/onboarding', authenticate, ctrl.onboarding);
 router.post('/me/request-verification', authenticate, ctrl.requestVerification);
 router.delete('/me', authenticate, ctrl.deleteAccount);
 router.post('/:id/thumb', authenticate, ctrl.sendThumb);
+router.post('/:id/block', authenticate, blockCtrl.block);
+router.delete('/:id/block', authenticate, blockCtrl.unblock);
 
 // ─── Autocomplete de menções ("@") — antes de /:id para não colidir ─
 router.get('/search/mentions', authenticate, ctrl.searchMentionable);
+// ─── Lista de bloqueados — também antes de /:id pela mesma razão (uma
+// rota estática de um segmento só, como '/:id', tinha de vir primeiro
+// ou '/:id' apanhava "blocked" como se fosse um userId). ─────────────
+router.get('/blocked', authenticate, blockCtrl.myBlocked);
 
 // ─── Public ───────────────────────────────────────────────────────
 // Deve ficar por último para não capturar /me como :id
