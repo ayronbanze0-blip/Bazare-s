@@ -45,8 +45,13 @@ const attachEngagement = async (items, userId) => {
   const likeMap = {}, dislikeMap = {}, shareMap = {}, commentMap = {};
   reactions.forEach((r) => {
     const k = key(r.targetType, r.targetId);
-    if (r.value === 1) likeMap[k] = r._count;
-    if (r.value === -1) dislikeMap[k] = r._count;
+    // O selector de reações no frontend usa valores 1-7 (Adoro/Gosto/
+    // Riso/Uau/Triste/Ira/Coragem — ver REACTIONS em app.js), não só
+    // 1/-1 como no antigo like/dislike binário. likeCount deve somar
+    // todas as reações positivas (1-7); só se sobrar algum valor
+    // negativo legado é que conta como dislike.
+    if (r.value >= 1) likeMap[k] = (likeMap[k] || 0) + r._count;
+    else if (r.value < 0) dislikeMap[k] = (dislikeMap[k] || 0) + r._count;
   });
   shares.forEach((s) => { shareMap[key(s.targetType, s.targetId)] = s._count; });
   comments.forEach((c) => {
