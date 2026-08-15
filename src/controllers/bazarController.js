@@ -62,10 +62,25 @@ const getOne = async (req, res) => {
     });
 
     if (!bazar) return notFound(res, 'Bazar não encontrado.');
+
+    // Só esconde a loja quando foi o VENDEDOR que bloqueou o visitante —
+    // se for o visitante quem bloqueou o vendedor, a página continua
+    // acessível (com isBlocked:true) para ele poder desbloquear a
+    // partir daqui; um 404 nos dois sentidos deixava isso impossível.
+    if (req.user?.id) {
+      const blockedByThem = await prisma.block.findUnique({
+        where: { blockerId_blockedId: { blockerId: bazar.sellerId, blockedId: req.user.id } }
+      });
+      if (blockedByThem) return notFound(res, 'Bazar não encontrado.');
+    }
+
     bazar.products = await attachProductEngagement(await attachFavorites(bazar.products, req.user?.id), req.user?.id);
     bazar.followerCount = bazar._count.followers;
     bazar.isFollowing = req.user
       ? !!(await prisma.follow.findUnique({ where: { userId_bazarId: { userId: req.user.id, bazarId: bazar.id } } }))
+      : false;
+    bazar.isBlocked = req.user
+      ? !!(await prisma.block.findUnique({ where: { blockerId_blockedId: { blockerId: req.user.id, blockedId: bazar.sellerId } } }))
       : false;
     return ok(res, { bazar });
   } catch (err) {

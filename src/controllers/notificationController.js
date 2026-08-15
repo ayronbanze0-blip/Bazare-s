@@ -1,7 +1,7 @@
 'use strict';
 
 
-const { ok, notFound, forbidden, serverError } = require('../utils/response');
+const { ok, notFound, forbidden, serverError, badRequest } = require('../utils/response');
 const { paginate, paginateMeta } = require('../utils/helpers');
 const logger = require('../utils/logger');
 

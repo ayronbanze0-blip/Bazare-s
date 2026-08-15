@@ -6,6 +6,7 @@ const notifSvc = require('../services/notificationService');
 const aiSvc = require('../services/aiService');
 const uploadSvc = require('../services/uploadService');
 const premiumService = require('../services/premiumService');
+const blockSvc = require('../services/blockService');
 const logger = require('../utils/logger');
 
 // Usa o singleton partilhado — instanciar 'new PrismaClient()' aqui abria
@@ -77,6 +78,10 @@ const getOrCreateChat = async (req, res) => {
     const otherUser = await prisma.user.findUnique({ where: { id: userId } });
     if (!otherUser) return notFound(res, 'Utilizador não encontrado.');
 
+    if (await blockSvc.isBlockedEither(req.user.id, userId)) {
+      return forbidden(res, 'Não é possível iniciar esta conversa.');
+    }
+
     const [userAId, userBId] = [req.user.id, userId].sort();
 
     let chat = await prisma.chat.findUnique({
@@ -120,6 +125,8 @@ const getOrCreateChat = async (req, res) => {
 
 const myChats = async (req, res) => {
   try {
+    const hiddenIds = await blockSvc.getHiddenUserIds(req.user.id);
+
     const chats = await prisma.chat.findMany({
       where: { OR: [{ userAId: req.user.id }, { userBId: req.user.id }] },
       orderBy: { updatedAt: 'desc' },
@@ -135,16 +142,23 @@ const myChats = async (req, res) => {
       }
     });
 
-    const formatted = chats.map(c => ({
-      id: c.id,
-      userAId: c.userAId,
-      userBId: c.userBId,
-      userA: c.userA,
-      userB: c.userB,
-      lastMessage: c.messages[0] || null,
-      unreadCount: c._count.messages,
-      updatedAt: c.updatedAt
-    }));
+    const formatted = chats
+      // Conversas com quem bloqueaste (ou te bloqueou) somem da lista —
+      // a conversa continua a existir na BD, só fica escondida.
+      .filter(c => {
+        const otherId = c.userAId === req.user.id ? c.userBId : c.userAId;
+        return !hiddenIds.has(otherId);
+      })
+      .map(c => ({
+        id: c.id,
+        userAId: c.userAId,
+        userBId: c.userBId,
+        userA: c.userA,
+        userB: c.userB,
+        lastMessage: c.messages[0] || null,
+        unreadCount: c._count.messages,
+        updatedAt: c.updatedAt
+      }));
 
     return ok(res, { chats: formatted });
   } catch (err) {
@@ -195,6 +209,11 @@ const sendMessage = async (req, res) => {
     const chat = await prisma.chat.findUnique({ where: { id: chatId } });
     if (!chat) return notFound(res, 'Conversa não encontrada.');
     if (chat.userAId !== req.user.id && chat.userBId !== req.user.id) return forbidden(res);
+
+    const otherPartyId = chat.userAId === req.user.id ? chat.userBId : chat.userAId;
+    if (await blockSvc.isBlockedEither(req.user.id, otherPartyId)) {
+      return forbidden(res, 'Não é possível enviar mensagens nesta conversa.');
+    }
 
     // ─── Upload da imagem (se houver) ───────────────────────────
     let imageUrl = null, imagePublicId = null;

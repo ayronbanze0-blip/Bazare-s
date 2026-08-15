@@ -136,7 +136,12 @@ const myReferralStats = async (req, res) => {
         revendedor: `${baseUrl}/revendedor/${req.user.id}`
       },
       stats: {
-        totalReferrals: directReferrals.length + myInvites.filter(i => i.used).length,
+        // Nota: um convite usado resulta sempre num utilizador com
+        // revendedorId = req.user.id (ver authController.register), ou
+        // seja, já está contado em directReferrals. Somar
+        // myInvites.filter(used) por cima duplicava cada referral vindo
+        // de convite nas estatísticas.
+        totalReferrals: directReferrals.length,
         directReferrals: directReferrals.length,
         invitesSent: myInvites.length,
         invitesUsed: myInvites.filter(i => i.used).length,

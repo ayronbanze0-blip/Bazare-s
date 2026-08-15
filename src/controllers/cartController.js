@@ -88,6 +88,14 @@ const updateItem = async (req, res) => {
       return ok(res, {}, 'Item removido.');
     }
 
+    // Mesma validação de stock que já existe em addItem — faltava aqui,
+    // por isso dava para pôr uma quantidade acima do stock disponível
+    // só editando a linha existente do carrinho (só era apanhado mais
+    // tarde, ao finalizar a encomenda).
+    const product = await prisma.product.findUnique({ where: { id: item.productId } });
+    if (!product || !product.active) return notFound(res, 'Produto não disponível.');
+    if (parseInt(qty) > product.stock) return badRequest(res, `Apenas ${product.stock} unidades disponíveis.`);
+
     const updated = await prisma.cartItem.update({ where: { id: item.id }, data: { qty: parseInt(qty) } });
     return ok(res, { item: updated });
   } catch (err) {

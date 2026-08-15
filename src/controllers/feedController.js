@@ -7,6 +7,7 @@ const { attachEngagement, VALID_TYPES } = require('../services/feedEngagementSer
 const commentService = require('../services/commentService');
 const notifSvc = require('../services/notificationService');
 const mentionSvc = require('../services/mentionService');
+const blockSvc = require('../services/blockService');
 const logger = require('../utils/logger');
 const prisma = require('../config/database');
 
@@ -71,9 +72,41 @@ const list = async (req, res) => {
       }))
     ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
+    // Esconde conteúdo de quem bloqueaste (ou de quem te bloqueou) —
+    // um bloqueio esconde nos dois sentidos, ver blockService.
+    if (req.user?.id) {
+      const hiddenIds = await blockSvc.getHiddenUserIds(req.user.id);
+      if (hiddenIds.size) {
+        items = items.filter(it => {
+          const sellerId = it.product?.seller?.id || it.announcement?.seller?.id;
+          return !hiddenIds.has(sellerId);
+        });
+      }
+    }
+
     const total = items.length;
     items = items.slice(skip, skip + take);
     items = await attachEngagement(items, req.user?.id);
+
+    // Estado real do botão "Seguir" no cartão do feed — sem isto o
+    // frontend nunca sabia se já seguias a loja (feedFollowBtnHtml
+    // recebia sempre `following=false` fixo, mesmo já a seguires).
+    // attachFollowState (feedEngagementService) espera `it.bazar`
+    // directo, mas aqui o bazar vem dentro de it.product/it.announcement
+    // — por isso aplica-se manualmente em vez de reutilizar essa função.
+    if (req.user?.id) {
+      const bazarIds = [...new Set(items.map(it => (it.product?.bazar || it.announcement?.bazar)?.id).filter(Boolean))];
+      if (bazarIds.length) {
+        const follows = await prisma.follow.findMany({ where: { userId: req.user.id, bazarId: { in: bazarIds } }, select: { bazarId: true } });
+        const followedSet = new Set(follows.map(f => f.bazarId));
+        items = items.map(it => {
+          const key = it.targetType === 'PRODUCT' ? 'product' : 'announcement';
+          const content = it[key];
+          if (!content?.bazar) return it;
+          return { ...it, [key]: { ...content, bazar: { ...content.bazar, isFollowing: followedSet.has(content.bazar.id) } } };
+        });
+      }
+    }
 
     return ok(res, { items, meta: paginateMeta(total, page, limit) });
   } catch (err) {
@@ -83,14 +116,18 @@ const list = async (req, res) => {
 };
 
 // ─── POST /api/feed/:targetType/:targetId/react ──────────────────
-// body: { value: 1 | -1 } — enviar o mesmo valor outra vez remove a
-// reação (comportamento "toggle", como Facebook/Instagram).
+// body: { value } — 1 a 7 (ver REACTIONS no frontend: Adoro/Gosto/
+// Riso/Uau/Triste/Ira/Coragem); enviar o mesmo valor outra vez remove
+// a reação (toggle, como Facebook/Instagram). Antes só aceitava 1/-1
+// (resquício do antigo like/dislike binário) e rejeitava com 400
+// qualquer reação que não fosse "Adoro" — as outras 6 estavam todas
+// partidas desde que o selector de reações foi lançado no frontend.
 const react = async (req, res) => {
   try {
     const { targetType, targetId } = req.params;
     if (!assertType(targetType)) return badRequest(res, 'Tipo inválido.');
     const value = parseInt(req.body.value, 10);
-    if (![1, -1].includes(value)) return badRequest(res, 'value deve ser 1 ou -1.');
+    if (!Number.isInteger(value) || value < 1 || value > 7) return badRequest(res, 'value deve ser um número entre 1 e 7.');
 
     const existing = await prisma.feedReaction.findUnique({
       where: { userId_targetType_targetId: { userId: req.user.id, targetType, targetId } }
@@ -104,14 +141,12 @@ const react = async (req, res) => {
       await prisma.feedReaction.create({ data: { userId: req.user.id, targetType, targetId, value } });
     }
 
-    const counts = await prisma.feedReaction.groupBy({
-      by: ['value'], where: { targetType, targetId }, _count: true
-    });
-    const likeCount = counts.find(c => c.value === 1)?._count || 0;
-    const dislikeCount = counts.find(c => c.value === -1)?._count || 0;
+    // likeCount = todas as reações (qualquer uma das 7), não só value===1
+    // — ver a mesma correção em feedEngagementService.attachEngagement.
+    const likeCount = await prisma.feedReaction.count({ where: { targetType, targetId } });
     const myReaction = (existing && existing.value === value) ? 0 : value;
 
-    return ok(res, { likeCount, dislikeCount, myReaction });
+    return ok(res, { likeCount, myReaction });
   } catch (err) {
     logger.error(`[Feed.react] ${err.message}`);
     return serverError(res);

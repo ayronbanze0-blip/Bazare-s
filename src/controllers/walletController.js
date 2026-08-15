@@ -352,9 +352,15 @@ const zumboPayWebhook = async (req, res) => {
             referenceType: 'COMMISSION',
             referenceId: payment.bazarId
           });
+          // Decrementa só o valor efectivamente pago, nunca zera tudo:
+          // entre o STK push ser iniciado e o webhook confirmar (pode
+          // demorar minutos), o vendedor pode ter recebido novas
+          // encomendas ENTREGUE que aumentaram pendingFees. Um `pendingFees:
+          // 0` aqui apagaria essas taxas novas de graça — o mesmo
+          // raciocínio do "claim" atómico usado no caminho WALLET acima.
           await tx.bazar.update({
             where: { id: payment.bazarId },
-            data: { paidFees: { increment: payment.amount }, pendingFees: 0 }
+            data: { paidFees: { increment: payment.amount }, pendingFees: { decrement: payment.amount } }
           });
         });
 
