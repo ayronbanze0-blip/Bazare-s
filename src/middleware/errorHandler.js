@@ -26,13 +26,20 @@ const errorHandler = (err, req, res, next) => {
   }
 
   // Multer errors
+  // O limite real depende de qual multer apanhou o ficheiro (imagem
+  // 10MB, vídeo 60MB, vídeo bruto do editor 150MB) — usar sempre
+  // "10MB" na mensagem era enganador para uploads de vídeo/histórias
+  // que na verdade tinham limites bem maiores.
   if (err.code === 'LIMIT_FILE_SIZE') {
-    return res.status(400).json({ success: false, message: 'Ficheiro demasiado grande. Máximo: 10MB.' });
+    const isVideoRoute = /\/(reels|stories|media\/video)/.test(req.originalUrl || '');
+    const isEditRoute = /\/media\/video\/(process|edit)/.test(req.originalUrl || '');
+    const max = isEditRoute ? '150MB' : isVideoRoute ? '60MB' : '10MB';
+    return res.status(400).json({ success: false, message: `Ficheiro demasiado grande. Máximo: ${max}.` });
   }
   if (err.code === 'LIMIT_FILE_COUNT') {
-    return res.status(400).json({ success: false, message: 'Demasiados ficheiros. Máximo: 20.' });
+    return res.status(400).json({ success: false, message: 'Demasiados ficheiros para este envio.' });
   }
-  if (err.message?.includes('Apenas imagens')) {
+  if (err.message?.includes('Apenas imagens') || err.message?.includes('Apenas vídeos') || err.message?.includes('Apenas áudio')) {
     return res.status(400).json({ success: false, message: err.message });
   }
 
