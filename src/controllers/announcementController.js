@@ -4,6 +4,7 @@ const { ok, created, notFound, forbidden, serverError, badRequest } = require('.
 const { sanitize, paginate, paginateMeta } = require('../utils/helpers');
 const uploadSvc = require('../services/uploadService');
 const mentionSvc = require('../services/mentionService');
+const { attachDirectEngagement } = require('../services/feedEngagementService');
 const logger = require('../utils/logger');
 const prisma = require('../config/database');
 
@@ -29,7 +30,14 @@ const list = async (req, res) => {
       prisma.announcement.count({ where: { bazarId: bazar.id } })
     ]);
 
-    return ok(res, { announcements, meta: paginateMeta(total, page, limit) });
+    // Sem isto, myReaction/likeCount/shareCount/commentCount vinham
+    // sempre a zero/vazio — reagir, comentar e ver os números certos
+    // nunca funcionava em bazar.html, meufeed.html e anuncios.html
+    // (todos usam este mesmo endpoint), mesmo que a reação/comentário
+    // estivesse guardado na base de dados.
+    const withEngagement = await attachDirectEngagement(announcements, req.user?.id, 'ANNOUNCEMENT');
+
+    return ok(res, { announcements: withEngagement, meta: paginateMeta(total, page, limit) });
   } catch (err) {
     logger.error(`[Announcements.list] ${err.message}`);
     return serverError(res);
