@@ -205,4 +205,4 @@ const remove = async (req, res) => {
   }
 };
 
-module.exports = { list, listGlobal, create, update, remove };
+module.exports = { list, listGlobal, getOne, create, update, remove };

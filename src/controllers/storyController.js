@@ -193,7 +193,23 @@ const viewers = async (req, res) => {
   }
 };
 
+// ─── SELLER: obter uma história individual (para o formulário de edição) ──
+const getOne = async (req, res) => {
+  try {
+    const story = await prisma.story.findUnique({ where: { id: req.params.storyId } });
+    if (!story) return notFound(res, 'História não encontrada.');
+    if (story.sellerId !== req.user.id) return forbidden(res);
+    return ok(res, { story });
+  } catch (err) {
+    logger.error(`[Stories.getOne] ${err.message}`);
+    return serverError(res);
+  }
+};
+
 // ─── SELLER: Editar a legenda de uma história (antes de expirar) ──
+// Também aceita trocar a foto (campo multipart "image") quando a
+// história é do tipo foto — vídeo continua só editável na legenda,
+// tal como Reels (trocar o vídeo exige apagar e publicar de novo).
 const updateText = async (req, res) => {
   try {
     const story = await prisma.story.findUnique({ where: { id: req.params.storyId } });
@@ -202,7 +218,19 @@ const updateText = async (req, res) => {
     if (story.expiresAt < new Date()) return badRequest(res, 'Esta história já expirou.');
 
     const text = (req.body.text || '').trim().slice(0, 200) || null;
-    const updated = await prisma.story.update({ where: { id: story.id }, data: { text } });
+    const data = { text };
+
+    const imageFile = req.files?.image?.[0] || req.file;
+    if (imageFile) {
+      if (story.videoUrl) return badRequest(res, 'Esta história tem vídeo — não é possível trocar por uma foto. Apaga e publica de novo.');
+      const up = await uploadSvc.uploadToCloud(imageFile.path, 'bazares/stories');
+      if (!up.ok) return badRequest(res, 'Falha ao enviar a foto.');
+      if (story.imagePublicId) uploadSvc.deleteFromCloud(story.imagePublicId).catch(() => {});
+      data.imageUrl = up.url;
+      data.imagePublicId = up.publicId;
+    }
+
+    const updated = await prisma.story.update({ where: { id: story.id }, data });
     return ok(res, { story: updated }, 'História actualizada.');
   } catch (err) {
     logger.error(`[Stories.updateText] ${err.message}`);
@@ -228,4 +256,4 @@ const remove = async (req, res) => {
   }
 };
 
-module.exports = { list, create, markViewed, updateText, remove, reply, viewers };
+module.exports = { list, create, markViewed, getOne, updateText, remove, reply, viewers };
