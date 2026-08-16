@@ -54,6 +54,7 @@ const list = async (req, res) => {
         orderBy: { createdAt: 'desc' },
         take: 60,
         include: {
+          images: { orderBy: { order: 'asc' } },
           bazar: { select: { id: true, name: true, slug: true } },
           seller: { select: { id: true, name: true, avatarUrl: true, isPremium: true } },
           mentions: { select: { mentionedUserId: true, mentionedUser: { select: { username: true } } } }
@@ -362,3 +363,4 @@ const removeComment = async (req, res) => {
 };
 
 module.exports = { list, react, share, listComments, listReplies, createComment, updateComment, removeComment, likeComment, engagement };
+
