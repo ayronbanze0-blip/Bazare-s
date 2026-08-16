@@ -21,9 +21,10 @@ router.get('/:idOrSlug', optionalAuth, ctrl.getOne);
 router.post('/:idOrSlug/whatsapp-click', ctrl.trackWhatsappClick);
 router.post('/:idOrSlug/follow', authenticate, ctrl.toggleFollow);
 router.get('/:idOrSlug/announcements', announcementCtrl.list);
+router.get('/:idOrSlug/announcements/:announcementId', authenticate, isSeller, announcementCtrl.getOne);
 // Até 6 fotos por anúncio (campo multipart "images"), como pedido em anuncio.html.
 router.post('/:idOrSlug/announcements', authenticate, isSeller, upload.array('images', 6), announcementCtrl.create);
-router.put('/:idOrSlug/announcements/:announcementId', authenticate, isSeller, announcementCtrl.update);
+router.put('/:idOrSlug/announcements/:announcementId', authenticate, isSeller, upload.array('images', 6), announcementCtrl.update);
 router.delete('/:idOrSlug/announcements/:announcementId', authenticate, isSeller, announcementCtrl.remove);
 
 // Histórias: imagem OU vídeo no mesmo endpoint (campos "image" / "video").
@@ -36,13 +37,19 @@ router.post(
 
 // Reels: vídeo OU foto (campos "video" / "image"), legenda opcional e produto associado opcional.
 router.get('/:idOrSlug/reels', optionalAuth, reelCtrl.list);
+router.get('/:idOrSlug/reels/:reelId', authenticate, isSeller, reelCtrl.getOne);
 router.post(
   '/:idOrSlug/reels',
   authenticate, isSeller,
   uploadMedia.fields([{ name: 'video', maxCount: 1 }, { name: 'image', maxCount: 1 }]),
   reelCtrl.create
 );
-router.put('/:idOrSlug/reels/:reelId', authenticate, isSeller, reelCtrl.update);
+router.put(
+  '/:idOrSlug/reels/:reelId',
+  authenticate, isSeller,
+  uploadMedia.fields([{ name: 'image', maxCount: 1 }]),
+  reelCtrl.update
+);
 router.delete('/:idOrSlug/reels/:reelId', authenticate, isSeller, reelCtrl.remove);
 
 router.post('/', authenticate, isSeller, bazarValidation, ctrl.create);
