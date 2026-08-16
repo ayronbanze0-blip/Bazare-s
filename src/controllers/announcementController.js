@@ -44,6 +44,24 @@ const list = async (req, res) => {
   }
 };
 
+// ─── SELLER: obter um anúncio individual (para o formulário de edição) ──
+const getOne = async (req, res) => {
+  try {
+    const bazar = await resolveBazar(req.params.idOrSlug);
+    if (!bazar) return notFound(res, 'Bazar não encontrado.');
+    const announcement = await prisma.announcement.findFirst({
+      where: { id: req.params.announcementId, bazarId: bazar.id },
+      include: { images: { orderBy: { order: 'asc' } } }
+    });
+    if (!announcement) return notFound(res, 'Anúncio não encontrado.');
+    if (announcement.sellerId !== req.user.id) return forbidden(res);
+    return ok(res, { announcement });
+  } catch (err) {
+    logger.error(`[Announcements.getOne] ${err.message}`);
+    return serverError(res);
+  }
+};
+
 // ─── SELLER: Post an announcement ─────────────────────────────────
 const create = async (req, res) => {
   try {
@@ -101,16 +119,59 @@ const create = async (req, res) => {
   }
 };
 
-// ─── SELLER: Editar o texto de um anúncio ─────────────────────────
+// ─── SELLER: Editar um anúncio — texto e/ou fotos ─────────────────
+// keepImageIds (JSON, campo de texto multipart): ids das fotos já
+// existentes que devem ficar, pela ordem desejada. Fotos existentes
+// que NÃO estiverem nessa lista são apagadas (Cloudinary incluído).
+// Novas fotos (campo "images", multipart) ficam sempre depois das
+// mantidas — mesmo comportamento já usado na edição de produtos.
 const update = async (req, res) => {
   try {
-    const announcement = await prisma.announcement.findUnique({ where: { id: req.params.announcementId } });
+    const announcement = await prisma.announcement.findUnique({
+      where: { id: req.params.announcementId },
+      include: { images: true }
+    });
     if (!announcement) return notFound(res, 'Anúncio não encontrado.');
     if (announcement.sellerId !== req.user.id) return forbidden(res);
 
     const text = sanitize(req.body.text || '');
     if (!text || text.length < 3) return badRequest(res, 'Escreva algo para publicar.');
     if (text.length > 500) return badRequest(res, 'Máximo de 500 caracteres.');
+
+    let imageUploadErrors = [];
+    if (req.body.keepImageIds !== undefined) {
+      let keepIds = [];
+      try { keepIds = JSON.parse(req.body.keepImageIds); } catch (_) { keepIds = []; }
+      if (!Array.isArray(keepIds)) keepIds = [];
+
+      const toRemove = announcement.images.filter(img => !keepIds.includes(img.id));
+      if (toRemove.length) {
+        await prisma.announcementImage.deleteMany({ where: { id: { in: toRemove.map(i => i.id) } } });
+        toRemove.forEach(img => { if (img.publicId) uploadSvc.deleteFromCloud(img.publicId).catch(() => {}); });
+      }
+      // Reordena as que ficaram, respeitando a ordem enviada.
+      await Promise.all(keepIds.map((id, i) =>
+        prisma.announcementImage.update({ where: { id }, data: { order: i } }).catch(() => {})
+      ));
+
+      if (req.files && req.files.length > 0) {
+        const total = keepIds.length + req.files.length;
+        if (total > 6) return badRequest(res, 'Máximo de 6 fotos por anúncio.');
+        const uploadResults = await uploadSvc.uploadMany(req.files, 'bazares/announcements');
+        const validImages = uploadResults.filter(r => r.ok);
+        imageUploadErrors = uploadResults.filter(r => !r.ok).map(r => r.error);
+        if (validImages.length > 0) {
+          await prisma.announcementImage.createMany({
+            data: validImages.map((r, i) => ({
+              announcementId: announcement.id,
+              url: r.url,
+              publicId: r.publicId,
+              order: keepIds.length + i
+            }))
+          });
+        }
+      }
+    }
 
     const updated = await prisma.announcement.update({
       where: { id: announcement.id },
@@ -126,7 +187,7 @@ const update = async (req, res) => {
       link: `home.html?announcement=${announcement.id}`
     }).catch(() => {});
 
-    return ok(res, { announcement: updated }, 'Anúncio actualizado.');
+    return ok(res, { announcement: updated, imageUploadErrors: imageUploadErrors.length ? imageUploadErrors : undefined }, 'Anúncio actualizado.');
   } catch (err) {
     logger.error(`[Announcements.update] ${err.message}`);
     return serverError(res);
@@ -157,4 +218,4 @@ const remove = async (req, res) => {
   }
 };
 
-module.exports = { list, create, update, remove };
+module.exports = { list, getOne, create, update, remove };

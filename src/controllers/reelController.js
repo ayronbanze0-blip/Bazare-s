@@ -63,6 +63,24 @@ const listGlobal = async (req, res) => {
   }
 };
 
+// ─── SELLER: obter um Reel individual (para o formulário de edição) ────
+const getOne = async (req, res) => {
+  try {
+    const bazar = await resolveBazar(req.params.idOrSlug);
+    if (!bazar) return notFound(res, 'Bazar não encontrado.');
+    const reel = await prisma.reel.findFirst({
+      where: { id: req.params.reelId, bazarId: bazar.id },
+      include: { product: { select: { id: true, name: true, slug: true, price: true } } }
+    });
+    if (!reel) return notFound(res, 'Reel não encontrado.');
+    if (reel.sellerId !== req.user.id) return forbidden(res);
+    return ok(res, { reel });
+  } catch (err) {
+    logger.error(`[Reels.getOne] ${err.message}`);
+    return serverError(res);
+  }
+};
+
 // ─── SELLER: Publicar um Reel (vídeo OU foto) ─────────────────────
 const create = async (req, res) => {
   try {
@@ -121,7 +139,13 @@ const create = async (req, res) => {
   }
 };
 
-// ─── SELLER: Editar a legenda de um Reel ──────────────────────────
+// ─── SELLER: Editar um Reel — legenda, produto associado e (só para
+// Reels de FOTO) trocar a foto. Trocar o VÍDEO de um Reel não é
+// suportado aqui: o vídeo passa sempre pelo editor/processamento
+// (ver create() acima) — para trocar o vídeo, apaga o Reel e publica
+// de novo. Editar aqui a legenda/foto/produto de um Reel de vídeo
+// continua a funcionar normalmente, só o próprio ficheiro de vídeo
+// é que fica de fora.
 const update = async (req, res) => {
   try {
     const reel = await prisma.reel.findUnique({ where: { id: req.params.reelId } });
@@ -129,9 +153,30 @@ const update = async (req, res) => {
     if (reel.sellerId !== req.user.id) return forbidden(res);
 
     const text = (req.body.text || '').trim().slice(0, 500) || null;
+    const data = { text };
+
+    if (req.body.productId !== undefined) {
+      if (!req.body.productId) {
+        data.productId = null;
+      } else {
+        const product = await prisma.product.findUnique({ where: { id: req.body.productId } });
+        if (product && product.sellerId === req.user.id) data.productId = product.id;
+      }
+    }
+
+    const imageFile = req.files?.image?.[0];
+    if (imageFile) {
+      if (reel.videoUrl) return badRequest(res, 'Este Reel tem vídeo — não é possível trocar por uma foto. Apaga e publica de novo.');
+      const up = await uploadSvc.uploadToCloud(imageFile.path, 'bazares/reels');
+      if (!up.ok) return badRequest(res, 'Falha ao enviar a foto.');
+      if (reel.imagePublicId) uploadSvc.deleteFromCloud(reel.imagePublicId).catch(() => {});
+      data.imageUrl = up.url;
+      data.imagePublicId = up.publicId;
+    }
+
     const updated = await prisma.reel.update({
       where: { id: reel.id },
-      data: { text },
+      data,
       include: { product: { select: { id: true, name: true, slug: true, price: true } } }
     });
 
