@@ -154,6 +154,43 @@ const react = async (req, res) => {
   }
 };
 
+// ─── GET /api/feed/:targetType/:targetId/reactors ──────────────────
+// Lista de quem reagiu, ao estilo Facebook — devolve as pessoas mais
+// recentes a reagir e, em `counts`, quantas há de cada uma das 7
+// reações (para os separadores "Todas/❤️/👍/…" no frontend). `value`
+// opcional filtra a lista para um só tipo de reação (um separador).
+const reactors = async (req, res) => {
+  try {
+    const { targetType, targetId } = req.params;
+    if (!assertType(targetType)) return badRequest(res, 'Tipo inválido.');
+    const value = req.query.value ? parseInt(req.query.value, 10) : null;
+    if (value !== null && (!Number.isInteger(value) || value < 1 || value > 7)) return badRequest(res, 'value deve ser um número entre 1 e 7.');
+    const { page = 1, limit = 30 } = req.query;
+    const { skip, take } = paginate(page, limit);
+
+    const where = { targetType, targetId, ...(value ? { value } : {}) };
+    const [rows, total, grouped] = await Promise.all([
+      prisma.feedReaction.findMany({
+        where,
+        include: { user: { select: { id: true, name: true, avatarUrl: true, isPremium: true } } },
+        orderBy: { createdAt: 'desc' },
+        skip, take
+      }),
+      prisma.feedReaction.count({ where }),
+      prisma.feedReaction.groupBy({ by: ['value'], where: { targetType, targetId }, _count: { value: true } })
+    ]);
+
+    const counts = {};
+    grouped.forEach(g => { counts[g.value] = g._count.value; });
+    const reactorsList = rows.filter(r => r.user).map(r => ({ user: r.user, value: r.value }));
+
+    return ok(res, { reactors: reactorsList, counts, meta: paginateMeta(total, page, limit) });
+  } catch (err) {
+    logger.error(`[Feed.reactors] ${err.message}`);
+    return serverError(res);
+  }
+};
+
 // ─── POST /api/feed/:targetType/:targetId/share ──────────────────
 // Repartilha dentro do próprio feed do Bazares — aparece também no
 // feed de quem partilhou (marcado como "sharedByMe" na listagem).
@@ -362,5 +399,5 @@ const removeComment = async (req, res) => {
   }
 };
 
-module.exports = { list, react, share, listComments, listReplies, createComment, updateComment, removeComment, likeComment, engagement };
+module.exports = { list, react, reactors, share, listComments, listReplies, createComment, updateComment, removeComment, likeComment, engagement };
 
