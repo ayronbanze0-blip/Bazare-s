@@ -632,11 +632,6 @@ const generateDescription = async (req, res) => {
     const { name, category, keywords, condition } = req.body;
     if (!name || !name.trim()) return badRequest(res, 'Indica pelo menos o nome do produto.');
 
-    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
-    if (!premiumService.isActive(user)) {
-      return forbidden(res, 'A geração de descrições com IA é exclusiva da Conta Premium.');
-    }
-
     const result = await aiSvc.generateProductDescription({
       name: sanitize(name),
       category,

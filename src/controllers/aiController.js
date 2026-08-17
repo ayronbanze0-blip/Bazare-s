@@ -18,11 +18,6 @@ const generateCaption = async (req, res) => {
     const validKinds = ['STORY', 'REEL', 'ANNOUNCEMENT'];
     if (!validKinds.includes(kind)) return badRequest(res, 'Tipo de publicação inválido.');
 
-    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
-    if (!premiumService.isActive(user)) {
-      return forbidden(res, 'A geração de legendas com IA é exclusiva da Conta Premium.');
-    }
-
     const bazar = await prisma.bazar.findUnique({ where: { sellerId: req.user.id }, select: { name: true } });
 
     const result = await aiSvc.generateCaption({
