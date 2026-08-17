@@ -12,6 +12,7 @@ const commentValidation = [
 router.get('/', optionalAuth, ctrl.list);
 router.get('/:targetType/:targetId/engagement', optionalAuth, ctrl.engagement);
 router.post('/:targetType/:targetId/react', authenticate, ctrl.react);
+router.get('/:targetType/:targetId/reactors', optionalAuth, ctrl.reactors);
 router.post('/:targetType/:targetId/share', authenticate, ctrl.share);
 router.get('/:targetType/:targetId/comments', optionalAuth, ctrl.listComments);
 router.post('/:targetType/:targetId/comments', authenticate, commentValidation, ctrl.createComment);
