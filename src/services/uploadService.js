@@ -183,6 +183,18 @@ const uploadBazarBanner = async (localPath) =>
   uploadToCloud(localPath, 'bazares/banners');
 
 // ─── Upload de vídeo para o Cloudinary (Histórias em vídeo, Reels) ─
+// O `eager` abaixo tem de bater CERTINHO com a transformação que o
+// frontend pede na entrega (cldVideo() em js/app.js: w_1080,c_limit,
+// q_auto:good,f_auto) para o primeiro espectador receber algo já
+// pronto em vez de uma transcodificação ao vivo (ver Ronda 19).
+//
+// `eager_async:true` — NÃO espera essa transcodificação terminar
+// antes de responder (era `false`/síncrono). Gerar a variante de
+// entrega pode levar bastante tempo em vídeos maiores, e isso estava
+// a somar-se ao tempo total de publicação (pedido explícito: tornar
+// a publicação mais rápida). O Cloudinary continua a gerar a mesma
+// variante em segundo plano — só passa a ficar pronta uns segundos
+// depois de publicado, em vez de bloquear o vendedor à espera.
 const uploadVideoToCloud = async (localPath, folder = 'bazares/reels', attempt = 1) => {
   const MAX_ATTEMPTS = 3;
   try {
@@ -190,8 +202,8 @@ const uploadVideoToCloud = async (localPath, folder = 'bazares/reels', attempt =
       folder,
       resource_type: 'video',
       timeout: 120000,
-      eager: [{ format: 'mp4', quality: 'auto:good' }],
-      eager_async: false
+      eager: [{ width: 1080, crop: 'limit', quality: 'auto:good', fetch_format: 'mp4' }],
+      eager_async: true
     });
     fs.unlink(localPath, (err) => {
       if (err) logger.warn(`Could not delete temp file: ${localPath}`);
