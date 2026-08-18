@@ -135,7 +135,7 @@ async function processJob(jobId, p) {
         .videoCodec('libx264')
         .outputOptions([
           '-preset veryfast',
-          '-crf 25',
+          '-crf 21', // era 25 (demasiado agressivo — vídeo saía com qualidade muito abaixo da original); 21 é quase visualmente sem perdas em x264
           '-movflags +faststart',
           '-vf scale=\'min(1280,iw)\':-2', // limita a 1280px de largura, mantém proporção — leve para mobile
           '-pix_fmt yuv420p'
