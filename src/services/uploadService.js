@@ -188,22 +188,38 @@ const uploadBazarBanner = async (localPath) =>
 // q_auto:good,f_auto) para o primeiro espectador receber algo já
 // pronto em vez de uma transcodificação ao vivo (ver Ronda 19).
 //
-// `eager_async:true` — NÃO espera essa transcodificação terminar
-// antes de responder (era `false`/síncrono). Gerar a variante de
-// entrega pode levar bastante tempo em vídeos maiores, e isso estava
-// a somar-se ao tempo total de publicação (pedido explícito: tornar
-// a publicação mais rápida). O Cloudinary continua a gerar a mesma
-// variante em segundo plano — só passa a ficar pronta uns segundos
-// depois de publicado, em vez de bloquear o vendedor à espera.
+// `eager_async:false` — espera a transcodificação de entrega (w_1080)
+// terminar ANTES de responder. Era `true` para acelerar a publicação,
+// mas isso deixava a variante w_1080 "a meio" quando os primeiros
+// espectadores abriam o Reel: o Cloudinary serve vídeo em transformação
+// on-the-fly por chunks à medida que vai codificando, por isso quem via
+// o vídeo nesse intervalo apanhava qualidade a variar dentro do MESMO
+// vídeo — nítido nalguns frames, em bloco/desfocado noutros — até o
+// eager acabar e ficar em cache. Como este upload já corre dentro de um
+// VideoJob em segundo plano (o frontend faz polling até status=DONE e
+// só publica depois disso — ver videoEditService.processJob), esperar
+// aqui não atrasa nada visível ao vendedor: só adia uns segundos o
+// "pronto", e garante que quem vir o Reel a seguir recebe sempre a
+// variante w_1080 já pronta e estável, nunca uma transcodificação a
+// meio.
 const uploadVideoToCloud = async (localPath, folder = 'bazares/reels', attempt = 1) => {
   const MAX_ATTEMPTS = 3;
   try {
     const result = await cloudinary.uploader.upload(localPath, {
       folder,
       resource_type: 'video',
-      timeout: 120000,
-      eager: [{ width: 1080, crop: 'limit', quality: 'auto:good', fetch_format: 'mp4' }],
-      eager_async: true
+      timeout: 240000, // era 120000 — agora inclui o tempo do eager síncrono (upload + transcodificação w_1080)
+      // quality:'auto:best' (era 'auto:good') — este vídeo já vem
+      // comprimido uma vez pelo FFmpeg (videoEditService, crf 19); usar
+      // 'good' aqui era uma 2ª compressão agressiva em cima da 1ª,
+      // e a soma das duas perdas é que estava a tirar nitidez ao
+      // resultado final. TEM de bater certo com o cldVideo() no
+      // frontend (js/app.js) — se um dos dois lados mudar sem o outro,
+      // o Cloudinary deixa de servir a variante pré-gerada em cache e
+      // volta a transcodificar na hora (o bug de qualidade instável
+      // dentro do mesmo vídeo que já corrigimos).
+      eager: [{ width: 1080, crop: 'limit', quality: 'auto:best', fetch_format: 'mp4' }],
+      eager_async: false
     });
     fs.unlink(localPath, (err) => {
       if (err) logger.warn(`Could not delete temp file: ${localPath}`);
