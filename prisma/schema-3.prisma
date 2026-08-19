@@ -1,0 +1,1222 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// USERS
+// ─────────────────────────────────────────────
+model User {
+  id                String    @id @default(uuid())
+  name              String
+  email             String    @unique
+  // Alcunha curta e única usada para menções ("@joaomatavel") em
+  // comentários e publicações. Gerada automaticamente no registo a
+  // partir do nome (ver utils/slugify.js -> uniqueUsername); os
+  // utilizadores criados antes desta funcionalidade são preenchidos
+  // por scripts/backfill-usernames.js. Fica nullable por causa disso
+  // — nunca deve ficar null para contas novas.
+  username          String?   @unique
+  passwordHash      String
+  role              Role      @default(BUYER)
+  phone             String?
+  location          String?
+  bio               String?
+  avatarUrl         String?
+  coverUrl          String?
+
+  // Auth
+  verified          Boolean   @default(false)
+  active            Boolean   @default(true)
+  emailVerifiedAt   DateTime?
+  lastLoginAt       DateTime?
+
+  // Seller verification badge
+  verifiedSeller    Boolean   @default(false)
+  verificationRequestedAt DateTime?
+
+  // Conta Premium — assinatura mensal (selo, destaque na pesquisa,
+  // taxa reduzida, analytics avançado). isPremium é a flag rápida usada
+  // em todas as leituras; premiumExpiresAt é a fonte de verdade — se
+  // já passou, tratamos como não-premium mesmo que isPremium ainda
+  // esteja true (ver premiumService.isActive / lazy downgrade).
+  isPremium         Boolean   @default(false)
+  premiumSince      DateTime?
+  premiumExpiresAt  DateTime?
+
+  // Conta de sistema do BazarBot (assistente de suporte por IA).
+  // Só deve existir UMA linha com isBazarBot=true.
+  isBazarBot        Boolean   @default(false)
+
+  // Onboarding pós-registo (ecrã "o que pretende fazer / já tem loja /
+  // onde ouviu falar"). onboardedAt fica null até a pessoa completar o
+  // formulário (PUT /api/users/me/onboarding), que define a data.
+  onboardedAt       DateTime?
+  hasPhysicalStore  Boolean?
+  referralSource    String?
+
+  // Stats
+  rating            Float     @default(0)
+  ratingCount       Int       @default(0)
+  cancelCount       Int       @default(0)
+  thumbsUp          Int       @default(0)
+  thumbsDown        Int       @default(0)
+
+  // Revendedor system
+  revendedorId      String?
+  revendedor        User?     @relation("RevendedorSellers", fields: [revendedorId], references: [id])
+  sellers           User[]    @relation("RevendedorSellers")
+  inviteId          String?
+  invite            RevendedorInvite? @relation(fields: [inviteId], references: [id])
+
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  // Relations
+  bazar             Bazar?
+  products          Product[]
+  orders            Order[]   @relation("BuyerOrders")
+  sellerOrders      Order[]   @relation("SellerOrders")
+  reviewsGiven      Review[]  @relation("ReviewsByUser")
+  reviewsReceived   Review[]  @relation("ReviewsForSeller")
+  notifications     Notification[]
+  chatsAsA          Chat[]    @relation("ChatUserA")
+  chatsAsB          Chat[]    @relation("ChatUserB")
+  messagesSent      Message[]
+  favorites         Favorite[]
+  following         Follow[]
+  comments          Comment[]
+  announcements     Announcement[]
+  stories           Story[]
+  reels             Reel[]
+  storyViews        StoryView[]
+  feedReactions     FeedReaction[]
+  feedShares        FeedShare[]
+  commentLikes      CommentLike[]
+  cartItems         CartItem[]
+  tokens            RefreshToken[]
+  verificationCodes VerificationCode[]
+  reports           Report[]  @relation("ReportsByUser")
+  reportsAgainst    Report[]  @relation("ReportsAgainstUser")
+  invitesCreated    RevendedorInvite[] @relation("InviteCreator")
+  transactions      Transaction[]      @relation("SellerTransactions")
+  loginAttempts     LoginAttempt[]
+  thumbVotesGiven   SellerThumbVote[]  @relation("ThumbVoter")
+  thumbVotesReceived SellerThumbVote[] @relation("ThumbSeller")
+
+  // Menções ("@utilizador") em comentários e publicações
+  mentionsReceived  Mention[] @relation("MentionsReceived")
+  mentionsAuthored  Mention[] @relation("MentionsAuthored")
+  videoJobs         VideoJob[]
+
+  // Wallet system
+  wallet              Wallet?
+  depositRequests     DepositRequest[]
+  withdrawalRequests  WithdrawalRequest[]
+  commissionPayments  CommissionPayment[]   @relation("SellerCommissionPayments")
+  reviewedDeposits    DepositRequest[]      @relation("DepositReviewedBy")
+  reviewedWithdrawals WithdrawalRequest[]   @relation("WithdrawalReviewedBy")
+
+  // Premium
+  premiumSubscriptions PremiumSubscription[]
+  quickReplies         QuickReply[]
+  premiumCodesCreated  PremiumCode[]          @relation("PremiumCodeCreator")
+  premiumCodesRedeemed PremiumCode[]          @relation("PremiumCodeRedeemer")
+
+  // Push notifications (Firebase Cloud Messaging)
+  deviceTokens         DeviceToken[]
+
+  // Bloqueios — ver model Block acima
+  blocking             Block[]   @relation("BlockerOf")
+  blockedBy            Block[]   @relation("BlockedBy")
+
+  @@index([email])
+  @@index([username])
+  @@index([role])
+  @@index([revendedorId])
+  @@index([isPremium])
+}
+
+enum Role {
+  ADMIN
+  REVENDEDOR
+  SELLER
+  BUYER
+}
+
+// ─────────────────────────────────────────────
+// AUTH TOKENS
+// ─────────────────────────────────────────────
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  revoked   Boolean  @default(false)
+  // Quando e por qual token este foi substituído na rotação. Usados para
+  // dar uma pequena janela de tolerância a pedidos de refresh concorrentes
+  // (ex: duas abas, ou uma chamada de fundo e o carregamento de página a
+  // disputar o mesmo cookie) — sem isto, o "perdedor" da corrida era
+  // deslogado à força mesmo com uma sessão válida.
+  revokedAt        DateTime?
+  replacedByToken  String?
+  userAgent String?
+  ipAddress String?
+
+  @@index([token])
+  @@index([userId])
+}
+
+model VerificationCode {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  code      String
+  purpose   CodePurpose
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId, purpose])
+}
+
+enum CodePurpose {
+  EMAIL_VERIFY
+  PASSWORD_RESET
+  TWO_FACTOR
+}
+
+model LoginAttempt {
+  id        String   @id @default(uuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  email     String
+  success   Boolean
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([email, createdAt])
+  @@index([ipAddress, createdAt])
+}
+
+// ─────────────────────────────────────────────
+// BAZARS
+// ─────────────────────────────────────────────
+model Bazar {
+  id          String   @id @default(uuid())
+  sellerId    String   @unique
+  seller      User     @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  name        String
+  slug        String   @unique
+  description String   @db.Text
+  category    String
+  phone       String?
+  location    String?
+  latitude    Float?
+  longitude   Float?
+  bannerUrl   String?
+  logoUrl     String?
+  active      Boolean  @default(true)
+
+  // Banner promocional personalizado (exclusivo Conta Premium)
+  promoTitle    String?
+  promoSubtitle String?
+  promoColor    String?  // hex, ex: "#16A34A" — usado como cor de fundo do banner promocional
+
+  // Estatística Premium: quantos cliques recebeu o botão "Contactar via WhatsApp"
+  whatsappClicks Int     @default(0)
+
+  // Financial
+  feeRate       Float   @default(2.0)
+  pendingFees   Float   @default(0)
+  paidFees      Float   @default(0)
+  totalSales    Float   @default(0)
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  products    Product[]
+  orders      Order[]
+  transactions Transaction[]
+  followers   Follow[]
+  announcements Announcement[]
+  stories     Story[]
+  reels       Reel[]
+
+  @@index([category])
+  @@index([active])
+  @@index([active, category, createdAt])
+}
+
+// ─────────────────────────────────────────────
+// PRODUCTS
+// ─────────────────────────────────────────────
+model Product {
+  id             String   @id @default(uuid())
+  bazarId        String
+  bazar          Bazar    @relation(fields: [bazarId], references: [id], onDelete: Cascade)
+  sellerId       String
+  seller         User     @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  name           String
+  // URL amigável para SEO (ex: "iphone-13-128gb-maputo-a1b2"). Nullable
+  // porque produtos antigos são preenchidos por um script de backfill;
+  // produtos novos recebem-no sempre no create().
+  slug           String?  @unique
+  description    String   @db.Text
+  price          Float
+  category       String
+  stock          Int      @default(0)
+  condition      String   @default("Novo")
+  size           String?
+  color          String?
+  location       String?
+  deliveryMethod String   @default("Combinado")
+  active         Boolean  @default(true)
+  featured       Boolean  @default(false)
+  // "Destaque do dia" — Conta Premium: vendedor pode fixar 1 produto no
+  // topo do seu bazar/pesquisa por 24h. featured=true enquanto activo;
+  // featuredUntil marca quando expira (limpo de forma lazy no pin() e
+  // no featured()).
+  featuredUntil  DateTime?
+
+  // Moderação por IA — corre antes da publicação. APPROVED por
+  // omissão para produtos criados antes desta funcionalidade existir.
+  moderationStatus ModerationStatus @default(APPROVED)
+  moderationReason String?
+
+  // Stats
+  rating         Float    @default(0)
+  ratingCount    Int      @default(0)
+  sales          Int      @default(0)
+  views          Int      @default(0)
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  images         ProductImage[]
+  orderItems     OrderItem[]
+  reviews        Review[]
+  favorites      Favorite[]
+  comments       Comment[]
+  cartItems      CartItem[]
+  reports        Report[]
+  reels          Reel[]
+  announcements  Announcement[]
+  stories        Story[]
+
+  @@index([bazarId])
+  @@index([category])
+  @@index([active])
+  @@index([sellerId])
+  @@index([slug])
+  // Compostos — cobrem os filtros+ordenação reais de list() em
+  // productController (active sempre presente + 1 filtro + orderBy).
+  @@index([active, category, createdAt])
+  @@index([active, bazarId, createdAt])
+  @@index([active, sellerId, createdAt])
+  @@index([active, price])
+  @@index([active, rating])
+  @@index([active, sales])
+  @@index([active, views])
+  @@index([featured, active, sales])
+}
+
+enum ModerationStatus {
+  APPROVED
+  BLOCKED
+}
+
+model ProductImage {
+  id        String  @id @default(uuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  url       String
+  publicId  String? // Cloudinary public_id
+  order     Int     @default(0)
+
+  @@index([productId])
+}
+
+// ─────────────────────────────────────────────
+// CART
+// ─────────────────────────────────────────────
+model CartItem {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  qty       Int      @default(1)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, productId])
+  @@index([userId])
+}
+
+// ─────────────────────────────────────────────
+// FAVORITES
+// ─────────────────────────────────────────────
+model Favorite {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, productId])
+  @@index([userId])
+}
+
+// ─────────────────────────────────────────────
+// FOLLOW (seguir um bazar/vendedor — notificado quando publica)
+// ─────────────────────────────────────────────
+model Follow {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bazarId   String
+  bazar     Bazar    @relation(fields: [bazarId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, bazarId])
+  @@index([userId])
+  @@index([bazarId])
+}
+
+// ─────────────────────────────────────────────
+// BLOCKS — bloqueio entre utilizadores (rede social real)
+// blockerId bloqueou blockedId: deixa de ver o conteúdo dele no feed,
+// não pode iniciar/continuar conversas com ele, e é escondido dos
+// resultados desse utilizador também (bloqueio esconde nos dois
+// sentidos, como Instagram/Facebook — ver blockService.isBlockedEither).
+// ─────────────────────────────────────────────
+model Block {
+  id        String   @id @default(uuid())
+  blockerId String
+  blocker   User     @relation("BlockerOf", fields: [blockerId], references: [id], onDelete: Cascade)
+  blockedId String
+  blocked   User     @relation("BlockedBy", fields: [blockedId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([blockerId, blockedId])
+  @@index([blockerId])
+  @@index([blockedId])
+}
+
+// ─────────────────────────────────────────────
+// COMMENTS (comentários abertos em cada produto)
+// ─────────────────────────────────────────────
+model Comment {
+  id             String        @id @default(uuid())
+  productId      String?
+  product        Product?      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  announcementId String?
+  announcement   Announcement? @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  reelId         String?
+  reel           Reel?         @relation(fields: [reelId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  text           String        @db.Text
+  createdAt      DateTime      @default(now())
+  editedAt       DateTime?
+
+  // Resposta a outro comentário (thread com 1 nível, estilo Facebook —
+  // uma resposta nunca tem respostas próprias, só pertence a um "pai").
+  parentId       String?
+  parent         Comment?      @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies        Comment[]     @relation("CommentReplies")
+
+  likes          CommentLike[]
+  mentions       Mention[]
+
+  @@index([productId])
+  @@index([announcementId])
+  @@index([reelId])
+  @@index([userId])
+  @@index([parentId])
+}
+
+// ─────────────────────────────────────────────
+// COMMENT LIKES ("gosto" num comentário, estilo Facebook)
+// ─────────────────────────────────────────────
+model CommentLike {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  commentId String
+  comment   Comment  @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, commentId])
+  @@index([commentId])
+}
+
+// ─────────────────────────────────────────────
+// MENTIONS ("@utilizador" em comentários e publicações)
+// Guarda a relação entre o conteúdo (comentário OU publicação) e o
+// utilizador mencionado, e é a base para a notificação + para
+// evitar notificações duplicadas quando o texto é editado (ver
+// mentionService.syncMentions — recalcula o conjunto a cada edição
+// e só notifica quem for uma menção nova).
+// ─────────────────────────────────────────────
+model Mention {
+  id              String        @id @default(uuid())
+  mentionedUserId String
+  mentionedUser   User          @relation("MentionsReceived", fields: [mentionedUserId], references: [id], onDelete: Cascade)
+  authorId        String
+  author          User          @relation("MentionsAuthored", fields: [authorId], references: [id], onDelete: Cascade)
+  commentId       String?
+  comment         Comment?      @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  announcementId  String?
+  announcement    Announcement? @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  createdAt       DateTime      @default(now())
+
+  @@unique([mentionedUserId, commentId])
+  @@unique([mentionedUserId, announcementId])
+  @@index([mentionedUserId])
+  @@index([authorId])
+  @@index([commentId])
+  @@index([announcementId])
+}
+
+// ─────────────────────────────────────────────
+// ANNOUNCEMENTS ("anúncios" — posts estilo rede social,
+// sem preço/stock, exclusivo de vendedores Premium)
+// ─────────────────────────────────────────────
+model Announcement {
+  id            String   @id @default(uuid())
+  bazarId       String
+  bazar         Bazar    @relation(fields: [bazarId], references: [id], onDelete: Cascade)
+  sellerId      String
+  seller        User     @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  text          String   @db.Text
+  // Campos legados de imagem única — mantidos (não usados na criação
+  // desde o suporte a múltiplas imagens) para não perder dados de
+  // anúncios antigos já gravados antes desta migração.
+  imageUrl      String?
+  imagePublicId String?
+  createdAt     DateTime @default(now())
+  // Produto associado ao Post (opcional) — mesma ideia dos Reels:
+  // mostra um cartão do produto por cima do post, para quem vir
+  // poder ir directo à ficha e comprar.
+  productId     String?
+  product       Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  comments      Comment[]
+  images        AnnouncementImage[]
+  mentions      Mention[]
+
+  @@index([bazarId])
+  @@index([sellerId])
+}
+
+model AnnouncementImage {
+  id             String       @id @default(uuid())
+  announcementId String
+  announcement   Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  url            String
+  publicId       String?
+  order          Int          @default(0)
+
+  @@index([announcementId])
+}
+
+// ─────────────────────────────────────────────
+// STORIES ("histórias" — posts que desaparecem 24h depois de
+// publicados, ao estilo Instagram/WhatsApp Status). Exclusivo de
+// vendedores Premium, tal como os Anúncios. Não há job de limpeza:
+// simplesmente filtramos por `expiresAt > now()` em todas as
+// consultas — as linhas expiradas ficam na tabela mas nunca aparecem.
+// ─────────────────────────────────────────────
+model Story {
+  id            String   @id @default(uuid())
+  bazarId       String
+  bazar         Bazar    @relation(fields: [bazarId], references: [id], onDelete: Cascade)
+  sellerId      String
+  seller        User     @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  // Uma história tem imagem OU vídeo (nunca ambos) — nula consoante o
+  // tipo de ficheiro enviado. Mantido opcional (em vez de obrigatório)
+  // desde que histórias em vídeo passaram a ser suportadas.
+  imageUrl      String?
+  imagePublicId String?
+  videoUrl      String?
+  videoPublicId String?
+  // Capa do vídeo (fotograma escolhido no editor de vídeo) e duração —
+  // nulos para histórias de imagem. Campo separado de `imageUrl` para
+  // não colidir com histórias de foto pura.
+  thumbnailUrl      String?
+  thumbnailPublicId String?
+  videoDurationSec  Int?
+  text          String?  @db.Text
+  createdAt     DateTime @default(now())
+  expiresAt     DateTime
+  // Produto associado à História (opcional) — mesma ideia dos Reels.
+  productId     String?
+  product       Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  views         StoryView[]
+
+  @@index([bazarId])
+  @@index([sellerId])
+  @@index([expiresAt])
+}
+
+// ─────────────────────────────────────────────
+// REELS (vídeos curtos, ao estilo TikTok/Instagram/Facebook Reels).
+// Publicados por vendedores a partir do seu Bazar, opcionalmente
+// ligados a um Produto para permitir "ver produto" a partir do reel.
+// ─────────────────────────────────────────────
+model Reel {
+  id            String   @id @default(uuid())
+  bazarId       String
+  bazar         Bazar    @relation(fields: [bazarId], references: [id], onDelete: Cascade)
+  sellerId      String
+  seller        User     @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  videoUrl      String?
+  videoPublicId String?
+  imageUrl      String?
+  imagePublicId String?
+  // Capa do vídeo (fotograma escolhido no editor) e duração — nulos
+  // para reels de foto pura.
+  thumbnailUrl      String?
+  thumbnailPublicId String?
+  videoDurationSec  Int?
+  text          String?  @db.Text
+  productId     String?
+  product       Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  views         Int      @default(0)
+  createdAt     DateTime @default(now())
+
+  comments      Comment[]
+
+  @@index([bazarId])
+  @@index([sellerId])
+  @@index([createdAt])
+}
+
+model StoryView {
+  id        String   @id @default(uuid())
+  storyId   String
+  story     Story    @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([storyId, userId])
+  @@index([storyId])
+}
+
+// ─────────────────────────────────────────────
+// FEED (página "Home" — reações, partilhas)
+// Um item do feed é um Product (destaque) ou um Announcement.
+// Como os dois tipos partilham a mesma interação (reagir/partilhar),
+// usamos um par (targetType, targetId) em vez de duas tabelas
+// duplicadas — mais simples de agregar e ordenar no feed.
+// ─────────────────────────────────────────────
+enum FeedTargetType {
+  PRODUCT
+  ANNOUNCEMENT
+  REEL
+}
+
+model FeedReaction {
+  id         String         @id @default(uuid())
+  userId     String
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  targetType FeedTargetType
+  targetId   String
+  value      Int            // 1-7 = tipo de reação (Adoro/Gosto/Riso/Uau/Triste/Ira/Coragem — ver REACTIONS no frontend)
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  @@unique([userId, targetType, targetId])
+  @@index([targetType, targetId])
+}
+
+model FeedShare {
+  id         String         @id @default(uuid())
+  userId     String
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  targetType FeedTargetType
+  targetId   String
+  createdAt  DateTime       @default(now())
+
+  @@unique([userId, targetType, targetId])
+  @@index([targetType, targetId])
+  @@index([userId])
+}
+
+// ─────────────────────────────────────────────
+// SELLER THUMB VOTES (👍/👎 na loja, um voto por comprador)
+// ─────────────────────────────────────────────
+model SellerThumbVote {
+  id        String   @id @default(uuid())
+  voterId   String
+  voter     User     @relation("ThumbVoter", fields: [voterId], references: [id], onDelete: Cascade)
+  sellerId  String
+  seller    User     @relation("ThumbSeller", fields: [sellerId], references: [id], onDelete: Cascade)
+  vote      ThumbVote
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([voterId, sellerId])
+  @@index([sellerId])
+}
+
+enum ThumbVote {
+  UP
+  DOWN
+}
+
+// ─────────────────────────────────────────────
+// ORDERS
+// ─────────────────────────────────────────────
+model Order {
+  id          String      @id @default(uuid())
+  buyerId     String
+  buyer       User        @relation("BuyerOrders", fields: [buyerId], references: [id])
+  sellerId    String
+  seller      User        @relation("SellerOrders", fields: [sellerId], references: [id])
+  bazarId     String
+  bazar       Bazar       @relation(fields: [bazarId], references: [id])
+  status      OrderStatus @default(PENDENTE)
+
+  // Buyer info
+  buyerName   String
+  buyerPhone  String
+  address     String
+  latitude    Float?
+  longitude   Float?
+  payment     String
+  size        String?
+  color       String?
+  notes       String?     @db.Text
+
+  // Financial
+  subtotal    Float
+  feeRate     Float       @default(2.0)
+  feeAmount   Float       @default(0)
+  total       Float
+
+  rated       Boolean     @default(false)
+  deliveredAt DateTime?
+  cancelledAt DateTime?
+  cancelReason String?
+
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  items       OrderItem[]
+  review      Review?
+  transaction Transaction?
+
+  @@index([buyerId])
+  @@index([sellerId])
+  @@index([bazarId])
+  @@index([status])
+}
+
+model OrderItem {
+  id        String  @id @default(uuid())
+  orderId   String
+  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  name      String
+  price     Float
+  qty       Int
+  imageUrl  String?
+
+  @@index([orderId])
+}
+
+enum OrderStatus {
+  PENDENTE
+  ACEITE
+  EM_PREPARACAO
+  EM_ENTREGA
+  ENTREGUE
+  CANCELADA
+}
+
+// ─────────────────────────────────────────────
+// REVIEWS
+// ─────────────────────────────────────────────
+model Review {
+  id         String   @id @default(uuid())
+  orderId    String   @unique
+  order      Order    @relation(fields: [orderId], references: [id])
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id])
+  sellerId   String
+  seller     User     @relation("ReviewsForSeller", fields: [sellerId], references: [id])
+  buyerId    String
+  buyer      User     @relation("ReviewsByUser", fields: [buyerId], references: [id])
+  rating     Int
+  recommend  Boolean?
+  comment    String?  @db.Text
+  createdAt  DateTime @default(now())
+
+  @@index([sellerId])
+  @@index([productId])
+}
+
+// ─────────────────────────────────────────────
+// TRANSACTIONS
+// ─────────────────────────────────────────────
+model Transaction {
+  id        String          @id @default(uuid())
+  bazarId   String
+  bazar     Bazar           @relation(fields: [bazarId], references: [id])
+  orderId   String?         @unique
+  order     Order?          @relation(fields: [orderId], references: [id])
+  sellerId  String
+  seller    User            @relation("SellerTransactions", fields: [sellerId], references: [id])
+  type      TransactionType
+  amount    Float
+  fee       Float           @default(0)
+  description String
+  createdAt DateTime        @default(now())
+
+  @@index([bazarId])
+  @@index([sellerId])
+}
+
+enum TransactionType {
+  VENDA
+  PAGAMENTO
+  AJUSTE
+  REEMBOLSO
+}
+
+// ─────────────────────────────────────────────
+// CHAT & MESSAGES
+// ─────────────────────────────────────────────
+model Chat {
+  id        String    @id @default(uuid())
+  userAId   String
+  userA     User      @relation("ChatUserA", fields: [userAId], references: [id], onDelete: Cascade)
+  userBId   String
+  userB     User      @relation("ChatUserB", fields: [userBId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  messages  Message[]
+
+  @@unique([userAId, userBId])
+  @@index([userAId])
+  @@index([userBId])
+}
+
+model Message {
+  id        String   @id @default(uuid())
+  chatId    String
+  chat      Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  senderId  String
+  sender    User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  text      String   @default("") @db.Text
+  imageUrl  String?
+  imagePublicId String?
+  fromBot   Boolean  @default(false)
+  read      Boolean  @default(false)
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([chatId])
+  @@index([senderId])
+  @@index([read])
+}
+
+// ─────────────────────────────────────────────
+// NOTIFICATIONS
+// ─────────────────────────────────────────────
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType @default(INFO)
+  title     String
+  message   String           @db.Text
+  link      String?
+  read      Boolean          @default(false)
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  @@index([userId, read])
+}
+
+enum NotificationType {
+  INFO
+  SUCCESS
+  WARNING
+  ERROR
+  ORDER
+  CHAT
+  REVIEW
+  SYSTEM
+  SOCIAL
+}
+
+// ─────────────────────────────────────────────
+// REPORTS / DENUNCIAS
+// ─────────────────────────────────────────────
+model Report {
+  id           String       @id @default(uuid())
+  reporterId   String
+  reporter     User         @relation("ReportsByUser", fields: [reporterId], references: [id])
+  targetUserId String?
+  targetUser   User?        @relation("ReportsAgainstUser", fields: [targetUserId], references: [id])
+  targetProductId String?
+  targetProduct   Product?  @relation(fields: [targetProductId], references: [id])
+  type         ReportType
+  reason       String
+  description  String       @db.Text
+  status       ReportStatus @default(PENDENTE)
+  resolvedAt   DateTime?
+  resolvedBy   String?
+  resolution   String?      @db.Text
+  createdAt    DateTime     @default(now())
+
+  @@index([status])
+  @@index([reporterId])
+}
+
+enum ReportType {
+  PRODUCT
+  USER
+  BAZAR
+}
+
+enum ReportStatus {
+  PENDENTE
+  EM_ANALISE
+  RESOLVIDA
+  ARQUIVADA
+}
+
+// ─────────────────────────────────────────────
+// REVENDEDOR INVITES
+// ─────────────────────────────────────────────
+model RevendedorInvite {
+  id          String   @id @default(uuid())
+  token       String   @unique
+  note        String?
+  createdById String
+  createdBy   User     @relation("InviteCreator", fields: [createdById], references: [id])
+  used        Boolean  @default(false)
+  usedAt      DateTime?
+  expiresAt   DateTime?
+  createdAt   DateTime @default(now())
+  usedByUsers User[]
+
+  @@index([token])
+}
+
+// ─────────────────────────────────────────────
+// AUDIT LOGS
+// ─────────────────────────────────────────────
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  action     String
+  entity     String?
+  entityId   String?
+  oldValue   Json?
+  newValue   Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+// ─────────────────────────────────────────────
+// WALLET — saldo interno, extracto, transferências
+// ─────────────────────────────────────────────
+model Wallet {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  balance   Float    @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  transactions WalletTransaction[]
+
+  @@index([userId])
+}
+
+model WalletTransaction {
+  id           String              @id @default(uuid())
+  walletId     String
+  wallet       Wallet              @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  type         WalletTxType
+  amount       Float               // sempre positivo; o sinal é dado pelo "type"
+  balanceAfter Float               // saldo da wallet imediatamente após este movimento
+  description  String
+  status       WalletTxStatus      @default(CONCLUIDA)
+  referenceType String?            // ex: "ORDER", "DEPOSIT", "WITHDRAWAL", "COMMISSION", "TRANSFER"
+  referenceId   String?            // id da entidade relacionada
+  createdAt    DateTime            @default(now())
+
+  @@index([walletId])
+  @@index([type])
+  @@index([referenceType, referenceId])
+}
+
+enum WalletTxType {
+  CREDITO_DEPOSITO
+  DEBITO_LEVANTAMENTO
+  TRANSFERENCIA_ENVIADA
+  TRANSFERENCIA_RECEBIDA
+  DEBITO_COMISSAO
+  CREDITO_COMISSAO
+  AJUSTE_ADMIN
+}
+
+enum WalletTxStatus {
+  CONCLUIDA
+  PENDENTE
+  REJEITADA
+  REVERTIDA
+}
+
+enum PaymentMethod {
+  MPESA
+  EMOLA
+}
+
+// ─────────────────────────────────────────────
+// DEPOSITS — carregamento manual de saldo (comprovativo)
+// ─────────────────────────────────────────────
+model DepositRequest {
+  id          String         @id @default(uuid())
+  userId      String
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amount      Float
+  method      PaymentMethod
+  proofUrl    String?
+  reference   String?        // comprovativo manual: texto livre; STK automático: referência da ZumboPay
+  msisdn      String?        // só preenchido no fluxo automático (STK push)
+  status      DepositStatus  @default(PENDENTE)
+  reviewedById String?
+  reviewedBy   User?         @relation("DepositReviewedBy", fields: [reviewedById], references: [id])
+  reviewedAt  DateTime?
+  rejectReason String?
+  createdAt   DateTime       @default(now())
+
+  @@index([userId])
+  @@index([status])
+  @@index([reference])
+}
+
+enum DepositStatus {
+  PENDENTE
+  PROCESSANDO
+  APROVADO
+  REJEITADO
+  FALHADA
+}
+
+// ─────────────────────────────────────────────
+// WITHDRAWALS — levantamento manual (admin paga fora do sistema)
+// ─────────────────────────────────────────────
+model WithdrawalRequest {
+  id           String            @id @default(uuid())
+  userId       String
+  user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amount       Float
+  method       PaymentMethod
+  destination  String            // número de telefone M-Pesa/e-Mola
+  status       WithdrawalStatus  @default(PENDENTE)
+  reviewedById String?
+  reviewedBy   User?             @relation("WithdrawalReviewedBy", fields: [reviewedById], references: [id])
+  reviewedAt   DateTime?
+  rejectReason String?
+  notes        String?
+  createdAt    DateTime          @default(now())
+
+  @@index([userId])
+  @@index([status])
+}
+
+enum WithdrawalStatus {
+  PENDENTE
+  PAGO
+  REJEITADO
+}
+
+// ─────────────────────────────────────────────
+// COMMISSION PAYMENTS — pagamento da contribuição de plataforma
+// (substitui o fluxo antigo de comprovativo manual)
+// ─────────────────────────────────────────────
+model CommissionPayment {
+  id              String              @id @default(uuid())
+  bazarId         String
+  sellerId        String
+  seller          User                @relation("SellerCommissionPayments", fields: [sellerId], references: [id])
+  amount          Float
+  method          CommissionMethod
+  status          CommissionStatus    @default(PENDENTE)
+  msisdn          String?             // telefone usado no STK push (método ZUMBOPAY)
+  gatewayReference String?            // referência devolvida pela ZumboPay
+  gatewayChannel   String?            // "mpesa" | "emola"
+  failReason      String?
+  createdAt       DateTime            @default(now())
+  paidAt          DateTime?
+
+  @@index([bazarId])
+  @@index([sellerId])
+  @@index([status])
+  @@index([gatewayReference])
+}
+
+enum CommissionMethod {
+  WALLET
+  ZUMBOPAY
+  MANUAL
+}
+
+// ─────────────────────────────────────────────
+// CONTA PREMIUM
+// ─────────────────────────────────────────────
+// Um registo por ciclo de cobrança (mensal). O estado "actual" do
+// utilizador vive em User.isPremium/premiumExpiresAt — esta tabela é
+// o histórico/rasto de cada tentativa de pagamento via STK push.
+model PremiumSubscription {
+  id               String            @id @default(uuid())
+  userId           String
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amount           Float
+  periodStart      DateTime?
+  periodEnd        DateTime?
+  status           PremiumSubStatus  @default(PROCESSANDO)
+  msisdn           String?           // telefone usado no STK push
+  gatewayReference String?           // referência devolvida pela ZumboPay
+  gatewayChannel   String?           // "mpesa" | "emola"
+  failReason       String?
+  createdAt        DateTime          @default(now())
+  paidAt           DateTime?
+
+  @@index([userId])
+  @@index([status])
+  @@index([gatewayReference])
+}
+
+enum PremiumSubStatus {
+  PROCESSANDO
+  PAGA
+  FALHADA
+  CANCELADA
+}
+
+// ─────────────────────────────────────────────
+// DEVICE TOKENS — push notifications (Firebase Cloud Messaging)
+// ─────────────────────────────────────────────
+// Um utilizador pode ter vários tokens (telemóvel + browser desktop,
+// por ex.). O token em si já identifica o par utilizador+dispositivo
+// de forma única do lado da Firebase, por isso basta @unique nele —
+// sem chave composta.
+model DeviceToken {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token      String   @unique
+  platform   String?  // "web" | "ios" | "android"
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// Código Premium gerado pelo admin (cortesias, parcerias, suporte) —
+// uma alternativa ao pagamento via STK push. Um código dá direito a
+// N meses de Premium e só pode ser resgatado uma vez; o resgate passa
+// pelo mesmo premiumService.activateOrExtend usado no pagamento, por
+// isso soma-se correctamente a um período já activo.
+model PremiumCode {
+  id          String            @id @default(uuid())
+  code        String            @unique
+  months      Int               @default(1)
+  note        String?           // ex: "Parceria feira de Maputo Jul/2026"
+  createdById String
+  createdBy   User              @relation("PremiumCodeCreator", fields: [createdById], references: [id])
+  status      PremiumCodeStatus @default(ACTIVO)
+  usedById    String?
+  usedBy      User?             @relation("PremiumCodeRedeemer", fields: [usedById], references: [id])
+  usedAt      DateTime?
+  expiresAt   DateTime?         // opcional — se não usado até esta data, deixa de ser resgatável
+  createdAt   DateTime          @default(now())
+
+  @@index([code])
+  @@index([status])
+  @@index([createdById])
+}
+
+enum PremiumCodeStatus {
+  ACTIVO
+  USADO
+  REVOGADO
+  EXPIRADO
+}
+
+// Respostas rápidas personalizadas do vendedor no chat (exclusivo
+// Conta Premium). Só texto pronto a inserir — nada de automação aqui.
+model QuickReply {
+  id        String   @id @default(uuid())
+  sellerId  String
+  seller    User     @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  label     String   // curto, mostrado no botão (ex: "Prazo de entrega")
+  text      String   @db.Text // texto completo inserido no campo de mensagem
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([sellerId])
+}
+
+enum CommissionStatus {
+  PENDENTE
+  PROCESSANDO
+  PAGA
+  FALHADA
+}
+
+// ─────────────────────────────────────────────
+// VIDEO JOBS — processamento assíncrono do editor de vídeo (Fase 3).
+// O corte, a capa, a mistura de áudio e a compressão correm no
+// servidor (FFmpeg), nunca no browser. O frontend cria o job, mostra
+// progresso a fazer polling a este registo, e só quando status=DONE
+// é que publica a História/Reel, referenciando o resultado aqui em
+// vez de reenviar o vídeo já editado.
+// ─────────────────────────────────────────────
+model VideoJob {
+  id                String   @id @default(uuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // PENDING → PROCESSING → DONE | FAILED
+  status            String   @default("PENDING")
+  progress          Int      @default(0)
+  // Pasta de destino no Cloudinary consoante o que vai ser publicado
+  // ('bazares/stories' ou 'bazares/reels').
+  targetFolder      String
+  resultUrl         String?
+  resultPublicId    String?
+  thumbnailUrl      String?
+  thumbnailPublicId String?
+  durationSec       Int?
+  errorMessage      String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([userId])
+  @@index([status])
+}
