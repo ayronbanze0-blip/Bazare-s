@@ -57,7 +57,8 @@ const list = async (req, res) => {
           images: { orderBy: { order: 'asc' } },
           bazar: { select: { id: true, name: true, slug: true } },
           seller: { select: { id: true, name: true, avatarUrl: true, isPremium: true } },
-          mentions: { select: { mentionedUserId: true, mentionedUser: { select: { username: true } } } }
+          mentions: { select: { mentionedUserId: true, mentionedUser: { select: { username: true } } } },
+          product: { select: { id: true, name: true, slug: true, price: true } }
         }
       })
     ]);
