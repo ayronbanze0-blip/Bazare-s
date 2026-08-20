@@ -1,7 +1,6 @@
 name: Migrar BD Neon -> Supabase
 
-on:
-  workflow_dispatch:
+on: workflow_dispatch
 
 jobs:
   migrate:
@@ -12,17 +11,11 @@ jobs:
 
       - name: Dump da Neon
         run: |
-          pg_dump "${{ secrets.NEON_DATABASE_URL }}" \
-            -Fc --no-owner --no-acl \
-            -f neon_dump.dump
+          pg_dump "${{ secrets.NEON_DATABASE_URL }}" -Fc --no-owner --no-acl -f neon_dump.dump
 
       - name: Restaurar na Supabase
         run: |
-          pg_restore \
-            --no-owner --no-privileges \
-            --clean --if-exists \
-            -d "${{ secrets.SUPABASE_DATABASE_URL }}" \
-            neon_dump.dump
+          pg_restore --no-owner --no-privileges --clean --if-exists -d "${{ secrets.SUPABASE_DATABASE_URL }}" neon_dump.dump
 
       - name: Verificar tabelas na Supabase
         run: psql "${{ secrets.SUPABASE_DATABASE_URL }}" -c "\dt"
