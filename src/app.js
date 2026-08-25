@@ -12,6 +12,7 @@ const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 const { apiLimiter } = require('./middleware/rateLimiter');
 const requestId = require('./middleware/requestId');
 const logger = require('./utils/logger');
+const Sentry = require('./config/sentry');
 
 const app = express();
 
@@ -129,6 +130,15 @@ app.get('/', (req, res) => {
 app.get('/sentry-test', () => {
   throw new Error('Bazares — teste manual do Sentry (backend)');
 });
+
+// ─── Sentry — captura automática de erros não tratados nas rotas ──
+// Tem de vir DEPOIS de todas as rotas e ANTES do notFoundHandler/
+// errorHandler próprios (Sentry SDK v8, API nova — substitui o antigo
+// Sentry.Handlers.errorHandler()). O errorHandler.js abaixo continua a
+// correr a seguir e continua a ser quem decide a resposta ao cliente;
+// isto só garante que o Sentry também vê o erro, mesmo em rotas que
+// não passem explicitamente por errorHandler.js.
+Sentry.setupExpressErrorHandler(app);
 
 // ─── 404 & Error Handling ─────────────────────────────────────────
 app.use(notFoundHandler);
