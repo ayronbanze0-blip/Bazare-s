@@ -24,6 +24,7 @@ router.use('/reels', require('./reelRoutes'));
 router.use('/stories', require('./storyRoutes'));
 router.use('/ai', require('./aiRoutes'));
 router.use('/media', require('./mediaRoutes'));
+router.use('/analytics', require('./analyticsRoutes'));
 
 // Verifica também a ligação à base de dados — se a DB estiver em baixo,
 // o Railway deve marcar a instância como não saudável (503), em vez de
