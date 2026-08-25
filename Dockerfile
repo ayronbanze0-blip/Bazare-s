@@ -10,4 +10,4 @@ RUN npm install
 
 EXPOSE 3001
 
-CMD ["sh", "-c", "(npx prisma db push --accept-data-loss || echo 'AVISO: prisma db push falhou (DB pode estar em baixo) — a arrancar na mesma, o servidor reconecta sozinho') && (node scripts/backfill-product-slugs.js || true); npm start"]
+CMD ["sh", "-c", "npx prisma db push --accept-data-loss && node scripts/backfill-product-slugs.js && npm start"]
