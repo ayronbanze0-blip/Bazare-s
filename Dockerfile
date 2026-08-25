@@ -10,4 +10,4 @@ RUN npm install
 
 EXPOSE 3001
 
-CMD ["sh", "-c", "npx prisma db push --accept-data-loss && node scripts/backfill-product-slugs.js && npm start"]
+CMD ["sh", "-c", "npx prisma migrate deploy && (node scripts/backfill-product-slugs.js || true) && npm start"]
