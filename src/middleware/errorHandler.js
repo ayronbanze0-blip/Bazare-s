@@ -64,6 +64,18 @@ const errorHandler = (err, req, res, next) => {
       requestId: req.id
     });
   }
+  // P1001/P1002/P1017: base de dados inalcançável ou a fechar a ligação
+  // (ex.: Neon suspensa por limite de CU, Supabase a "acordar"). Antes
+  // caía no 500 genérico "Erro interno do servidor" — agora fica claro
+  // que é a base de dados, não o backend em si, e que reconecta sozinho
+  // (ver tryConnect() em server.js) assim que ela voltar.
+  if (['P1001', 'P1002', 'P1017'].includes(err.code)) {
+    return res.status(503).json({
+      success: false,
+      message: 'Base de dados temporariamente indisponível. Tenta novamente dentro de momentos.',
+      requestId: req.id
+    });
+  }
 
   // JWT errors
   if (err.name === 'JsonWebTokenError') {
