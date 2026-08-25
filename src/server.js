@@ -70,21 +70,47 @@ notifSvc.init(prisma, io);
 auditMw.init(prisma);
 
 // ─── Database connection check ────────────────────────────────────
-const startServer = async () => {
+// IMPORTANTE: uma falha de ligação à base de dados (ex.: Neon suspensa
+// por limite de CU, Supabase ainda a acordar, blip de rede) já NÃO
+// derruba o processo inteiro. Antes disto, um `process.exit(1)` aqui
+// significava que o Render nunca sequer punha o servidor HTTP a
+// escutar — o frontend via "sem ligação ao servidor" para TUDO,
+// mesmo rotas que não precisam da DB, e não havia recuperação
+// automática quando a DB voltasse (era preciso um redeploy manual).
+// Agora: o servidor arranca sempre; as rotas que precisam da DB
+// continuam a falhar normalmente (Prisma lança erro, errorHandler.js
+// responde 500/503) enquanto ela estiver em baixo, e uma tentativa de
+// reconexão em segundo plano (backoff crescente, teto de 30s) repõe a
+// ligação sozinha assim que a DB voltar — sem intervenção manual.
+const DB_RETRY_MAX_MS = 30000;
+let dbConnected = false;
+
+const tryConnect = async (attempt = 1) => {
   try {
     await prisma.$connect();
+    dbConnected = true;
     logger.info('✅ Conexão com a base de dados estabelecida.');
-
-    server.listen(PORT, '0.0.0.0', () => {
-      logger.info(`🚀 Bazares API a correr na porta ${PORT}`);
-      logger.info(`🌍 Ambiente: ${process.env.NODE_ENV || 'development'}`);
-      logger.info(`🔌 Socket.IO activo para chat em tempo real`);
-    });
   } catch (err) {
-    logger.error(`❌ Falha ao conectar à base de dados: ${err.message}`);
-    logger.error('Verifique a variável DATABASE_URL no ficheiro .env');
-    process.exit(1);
+    dbConnected = false;
+    const wait = Math.min(DB_RETRY_MAX_MS, 1000 * Math.pow(2, attempt - 1));
+    logger.error(`❌ Falha ao conectar à base de dados (tentativa ${attempt}): ${err.message}`);
+    if (attempt === 1) {
+      logger.error('Verifique a variável DATABASE_URL — ou se a instância (Neon/Supabase) está activa/reactivada.');
+    }
+    setTimeout(() => tryConnect(attempt + 1), wait);
   }
+};
+
+const startServer = async () => {
+  // Não bloqueia o arranque do HTTP à espera da DB — CORS, health
+  // check, ficheiros estáticos e qualquer rota sem DB continuam a
+  // responder mesmo com a base de dados em baixo.
+  server.listen(PORT, '0.0.0.0', () => {
+    logger.info(`🚀 Bazares API a correr na porta ${PORT}`);
+    logger.info(`🌍 Ambiente: ${process.env.NODE_ENV || 'development'}`);
+    logger.info(`🔌 Socket.IO activo para chat em tempo real`);
+  });
+  tryConnect();
 };
 
 // ─── Graceful Shutdown ─────────────────────────────────────────────
