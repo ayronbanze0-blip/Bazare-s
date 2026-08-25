@@ -3,6 +3,17 @@
 const jwt = require('jsonwebtoken');
 const { unauthorized, forbidden } = require('../utils/response');
 const logger = require('../utils/logger');
+const Sentry = require('../config/sentry');
+
+// Liga o utilizador autenticado ao evento/transacção Sentry corrente —
+// sem isto, todo erro no backend aparece como "utilizador desconhecido"
+// e não dá para ver quantas PESSOAS diferentes são afectadas pelo
+// mesmo problema (só quantas vezes aconteceu).
+function tagSentryUser(req) {
+  try {
+    if (req.user?.id) Sentry.setUser({ id: req.user.id, role: req.user.role });
+  } catch {}
+}
 
 // ─── Verify Access Token ─────────────────────────────────────────
 const authenticate = async (req, res, next) => {
@@ -23,6 +34,7 @@ const authenticate = async (req, res, next) => {
 
     // Attach user payload to request
     req.user = decoded;
+    tagSentryUser(req);
     next();
   } catch (err) {
     logger.error(`[Auth Middleware] ${err.message}`);
@@ -51,6 +63,7 @@ const optionalAuth = (req, res, next) => {
   if (!authHeader || !authHeader.startsWith('Bearer ')) { req.user = null; return next(); }
   try {
     req.user = jwt.verify(authHeader.split(' ')[1], process.env.JWT_ACCESS_SECRET);
+    tagSentryUser(req);
   } catch { req.user = null; }
   next();
 };
