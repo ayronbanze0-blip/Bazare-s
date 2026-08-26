@@ -1263,3 +1263,17 @@ model AnalyticsEvent {
   @@index([receivedAt])
   @@index([event, receivedAt])
 }
+
+// ─────────────────────────────────────────────
+// FeatureFlag — desligar/ligar funcionalidades sem novo deploy.
+// Lido com cache em memória de curta duração (ver
+// src/services/featureFlags.js), por isso o efeito de um toggle
+// demora no máximo ~30s a propagar-se, em vez de precisar de deploy.
+// ─────────────────────────────────────────────
+model FeatureFlag {
+  key         String   @id
+  enabled     Boolean  @default(false)
+  description String?
+  updatedAt   DateTime @updatedAt
+  updatedBy   String?
+}
