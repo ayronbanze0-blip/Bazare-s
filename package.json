@@ -18,6 +18,7 @@
     "db:studio": "npx prisma studio",
     "db:backup": "node scripts/backup-db.js",
     "db:backfill-usernames": "node scripts/backfill-usernames.js",
+    "smoke-test": "node scripts/smoke-test.js",
     "test": "jest tests/contract"
   },
   "dependencies": {
