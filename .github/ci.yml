@@ -1,0 +1,35 @@
+name: CI
+
+# Corre em todos os PRs para main e em pushes diretos a main — antes,
+# não havia nenhum workflow a correr os testes; o único workflow
+# existente (migrate-db.yml) é uma migração manual pontual, não CI.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Gerar Prisma Client
+        run: npx prisma generate
+
+      - name: Correr testes (jest tests/contract)
+        run: npm test
+
+  # Se este job falhar num PR, o merge fica bloqueado assim que
+  # ativares "Require status checks to pass" nas branch protection
+  # rules do repositório (Settings → Branches → main).
