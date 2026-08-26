@@ -12,6 +12,7 @@ const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 const { apiLimiter } = require('./middleware/rateLimiter');
 const requestId = require('./middleware/requestId');
 const logger = require('./utils/logger');
+const Sentry = require('./config/sentry');
 
 const app = express();
 
@@ -70,7 +71,14 @@ app.use(cors({
   },
   credentials: allowedOrigins.length > 0 ? true : false,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  // 'sentry-trace' e 'baggage' são injetados automaticamente pelo
+  // browserTracingIntegration() do Sentry no frontend (ver js/config.js,
+  // tracePropagationTargets) em toda chamada feita para esta API. Sem
+  // os autorizar aqui, o preflight CORS rejeita-os e o browser bloqueia
+  // a chamada real (aparece como "falha de conexão" no frontend, mesmo
+  // com o backend saudável) — foi exactamente isto que causou o bug
+  // reportado na fusão do frontend.
+  allowedHeaders: ['Content-Type', 'Authorization', 'sentry-trace', 'baggage']
 }));
 
 // ─── Webhooks (ANTES do express.json — precisam do corpo em bruto) ─
@@ -129,6 +137,15 @@ app.get('/', (req, res) => {
 app.get('/sentry-test', () => {
   throw new Error('Bazares — teste manual do Sentry (backend)');
 });
+
+// ─── Sentry — captura automática de erros não tratados nas rotas ──
+// Tem de vir DEPOIS de todas as rotas e ANTES do notFoundHandler/
+// errorHandler próprios (Sentry SDK v8, API nova — substitui o antigo
+// Sentry.Handlers.errorHandler()). O errorHandler.js abaixo continua a
+// correr a seguir e continua a ser quem decide a resposta ao cliente;
+// isto só garante que o Sentry também vê o erro, mesmo em rotas que
+// não passem explicitamente por errorHandler.js.
+Sentry.setupExpressErrorHandler(app);
 
 // ─── 404 & Error Handling ─────────────────────────────────────────
 app.use(notFoundHandler);
