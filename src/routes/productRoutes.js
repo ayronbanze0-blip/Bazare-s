@@ -22,6 +22,7 @@ const commentValidation = [
 // ─── Public ───────────────────────────────────────────────────────
 router.get('/', optionalAuth, ctrl.list);
 router.get('/featured', optionalAuth, ctrl.featured);
+router.get('/categories-overview', optionalAuth, ctrl.categoriesOverview);
 
 // ─── Seller (antes de /:id para não ser capturado) ───────────────
 router.get('/mine', authenticate, isSeller, ctrl.myProducts);

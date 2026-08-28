@@ -13,6 +13,37 @@ const logger = require('../utils/logger');
 // Singleton partilhado — ver nota em controllers/chatController.js
 const prisma = require('../config/database');
 
+router.get('/', authenticate, async (req, res) => {
+  try {
+    const { bazarId, limit = 10, page = 1 } = req.query;
+    // Reviews não têm bazarId próprio (ligam-se ao vendedor via sellerId) —
+    // 'me' é a única forma que o frontend usa isto (dashboard do próprio
+    // vendedor, ver my-bazar.html). Outros valores não são suportados.
+    if (bazarId !== 'me') return badRequest(res, 'Parâmetro bazarId inválido — só é suportado bazarId=me.');
+
+    const take = Math.min(Math.max(parseInt(limit) || 10, 1), 50);
+    const skip = (Math.max(parseInt(page) || 1, 1) - 1) * take;
+
+    const [reviews, total] = await Promise.all([
+      prisma.review.findMany({
+        where: { sellerId: req.user.id },
+        orderBy: { createdAt: 'desc' },
+        take, skip,
+        include: {
+          buyer: { select: { id: true, name: true, avatarUrl: true } },
+          product: { select: { id: true, name: true, slug: true } }
+        }
+      }),
+      prisma.review.count({ where: { sellerId: req.user.id } })
+    ]);
+
+    return ok(res, { reviews, meta: { total, page: parseInt(page) || 1, limit: take, pages: Math.ceil(total / take) } });
+  } catch (err) {
+    logger.error(`[Reviews.list] ${err.message}`);
+    return serverError(res);
+  }
+});
+
 router.post('/', authenticate, async (req, res) => {
   try {
     const { orderId, productId, rating, comment, recommend } = req.body;
