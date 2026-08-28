@@ -28,7 +28,7 @@ async function main() {
         role: 'ADMIN',
         verified: true,
         active: true,
-        onboarded: true,
+        onboardedAt: new Date(),
         emailVerifiedAt: new Date()
       }
     });
@@ -36,6 +36,42 @@ async function main() {
     console.log(`   Email: ${admin.email}`);
     console.log(`   Senha: ${adminPassword}`);
     console.log(`   ID: ${admin.id}\n`);
+  }
+
+  // ─── Create BazarBot system account ─────────────────────────────
+  // Sem isto, getBazarBotUserId() (chatController.js / chatSocket.js)
+  // nunca encontra nenhum utilizador com isBazarBot=true — o endpoint
+  // GET /api/chat/bazarbot devolve sempre 404 "BazarBot ainda não está
+  // configurado" e a funcionalidade fica permanentemente por activar,
+  // porque não havia nenhum sítio no código que criasse esta conta.
+  const botEmail = process.env.BAZARBOT_EMAIL || 'bazarbot@bazares.co.mz';
+
+  const existingBot = await prisma.user.findFirst({ where: { isBazarBot: true } });
+
+  if (existingBot) {
+    console.log(`✓ Conta BazarBot já existe: ${existingBot.email}`);
+  } else {
+    // Password aleatória — esta conta nunca faz login, só existe como
+    // remetente de mensagens (senderId em Message/Chat).
+    const botPasswordHash = await bcrypt.hash(
+      require('crypto').randomBytes(24).toString('hex'),
+      parseInt(process.env.BCRYPT_ROUNDS) || 12
+    );
+    const bot = await prisma.user.create({
+      data: {
+        name: 'BazarBot',
+        email: botEmail,
+        passwordHash: botPasswordHash,
+        role: 'ADMIN',
+        verified: true,
+        active: true,
+        isBazarBot: true,
+        onboardedAt: new Date(),
+        emailVerifiedAt: new Date(),
+        bio: 'Assistente de suporte automático do Bazares.'
+      }
+    });
+    console.log(`✅ Conta BazarBot criada com sucesso: ${bot.email} (id: ${bot.id})\n`);
   }
 
   console.log('🎉 Seed concluído com sucesso!\n');
