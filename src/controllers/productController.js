@@ -124,6 +124,27 @@ const list = async (req, res) => {
   }
 };
 
+// ─── PUBLIC: Category overview (counts of active products per category) ──
+// Consumido por home.html na secção "Comunidades por categoria" — devolve
+// só categorias com pelo menos 1 produto activo, ordenadas pela mais
+// popular primeiro.
+const categoriesOverview = async (req, res) => {
+  try {
+    const grouped = await prisma.product.groupBy({
+      by: ['category'],
+      where: { active: true },
+      _count: { _all: true },
+      orderBy: { _count: { category: 'desc' } },
+      take: 12
+    });
+    const categories = grouped.map(g => ({ category: g.category, count: g._count._all }));
+    return ok(res, { categories });
+  } catch (err) {
+    logger.error(`[Products.categoriesOverview] ${err.message}`);
+    return serverError(res);
+  }
+};
+
 // ─── PUBLIC: Get single product ──────────────────────────────────
 const getOne = async (req, res) => {
   try {
@@ -708,7 +729,7 @@ const unpin = async (req, res) => {
   }
 };
 
-module.exports = { list, getOne, featured, related, trackView, create, update, deleteImage, reorderImages, toggle, toggleStock, remove, myProducts, toggleFavorite, myFavorites, attachFavorites, generateDescription, pin, unpin };
+module.exports = { list, getOne, featured, related, trackView, create, update, deleteImage, reorderImages, toggle, toggleStock, remove, myProducts, toggleFavorite, myFavorites, attachFavorites, generateDescription, pin, unpin, categoriesOverview };
 
 
 

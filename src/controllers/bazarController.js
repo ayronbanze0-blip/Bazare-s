@@ -296,7 +296,89 @@ const toggleFollow = async (req, res) => {
   }
 };
 
-module.exports = { list, getOne, create, update, myBazar, trackWhatsappClick, toggleFollow };
+// ─── GET /api/bazars/:idOrSlug/follow-status — só consulta, não altera ───
+// Usado por my-bazar.html para mostrar o número de seguidores no dashboard
+// sem correr o risco de acidentalmente alternar o estado (isso só o
+// toggleFollow acima deve fazer).
+const followStatus = async (req, res) => {
+  try {
+    const bazar = await prisma.bazar.findFirst({
+      where: { OR: [{ id: req.params.idOrSlug }, { slug: req.params.idOrSlug }] },
+      select: { id: true }
+    });
+    if (!bazar) return notFound(res, 'Bazar não encontrado.');
+
+    const [followerCount, following] = await Promise.all([
+      prisma.follow.count({ where: { bazarId: bazar.id } }),
+      req.user
+        ? prisma.follow.findUnique({ where: { userId_bazarId: { userId: req.user.id, bazarId: bazar.id } } }).then(f => !!f)
+        : Promise.resolve(false)
+    ]);
+
+    return ok(res, { following, followerCount });
+  } catch (err) {
+    logger.error(`[Bazar.followStatus] ${err.message}`);
+    return serverError(res);
+  }
+};
+
+// ─── PUBLIC: Ranking de vendedores (vendas entregues este mês) ────
+const MONTH_LABELS = [
+  'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+  'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
+];
+
+const ranking = async (req, res) => {
+  try {
+    const monthStart = startOfMonth(new Date());
+
+    const grouped = await prisma.order.groupBy({
+      by: ['sellerId'],
+      where: { status: 'ENTREGUE', deliveredAt: { gte: monthStart } },
+      _count: { _all: true },
+      orderBy: { _count: { sellerId: 'desc' } },
+      take: 50
+    });
+
+    if (!grouped.length) {
+      const now = new Date();
+      return ok(res, { ranking: [], period: { label: `${MONTH_LABELS[now.getMonth()]} de ${now.getFullYear()}` } });
+    }
+
+    const sellerIds = grouped.map(g => g.sellerId);
+    const sellers = await prisma.user.findMany({
+      where: { id: { in: sellerIds } },
+      select: {
+        id: true, name: true, verifiedSeller: true,
+        bazar: { select: { id: true, name: true, slug: true, logoUrl: true } }
+      }
+    });
+    const sellerById = new Map(sellers.map(s => [s.id, s]));
+
+    const list = grouped
+      .map(g => sellerById.get(g.sellerId))
+      .filter(s => s && s.bazar) // vendedor pode já não ter Bazar activo — não faz sentido no ranking
+      .map((s, i) => {
+        const totalEncomendas = grouped.find(g => g.sellerId === s.id)._count._all;
+        return {
+          rank: i + 1,
+          name: s.name,
+          verifiedSeller: s.verifiedSeller,
+          bazar: s.bazar,
+          badge: getBadgeTier(totalEncomendas),
+          totalEncomendas
+        };
+      });
+
+    const now = new Date();
+    return ok(res, { ranking: list, period: { label: `${MONTH_LABELS[now.getMonth()]} de ${now.getFullYear()}` } });
+  } catch (err) {
+    logger.error(`[Bazars.ranking] ${err.message}`);
+    return serverError(res);
+  }
+};
+
+module.exports = { list, getOne, create, update, myBazar, trackWhatsappClick, toggleFollow, followStatus, ranking };
 
 
 

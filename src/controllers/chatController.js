@@ -31,7 +31,7 @@ const getBazarBotUserId = async () => {
 const getBazarBotChat = async (req, res) => {
   try {
     const botId = await getBazarBotUserId();
-    if (!botId) return notFound(res, 'BazarBot ainda não está configurado. Corre a migração SQL primeiro.');
+    if (!botId) return notFound(res, 'BazarBot ainda não está configurado. Corre "npm run db:seed" para criar a conta do BazarBot.');
 
     const [userAId, userBId] = [req.user.id, botId].sort();
     let chat = await prisma.chat.findUnique({
