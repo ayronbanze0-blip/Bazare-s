@@ -3,7 +3,10 @@
 
   "GET /products": { "dataKeys": ["products", "meta"] },
   "GET /products/featured": { "dataKeys": ["products"] },
+  "GET /products/categories-overview": { "dataKeys": ["categories"] },
   "GET /products/:id": { "dataKeys": ["product"] },
+  "POST /products": { "dataKeys": ["product", "imageUploadErrors"] },
+  "PUT /products/:id": { "dataKeys": ["product", "imageUploadErrors"] },
   "GET /products/:id/related": { "dataKeys": ["products"] },
   "GET /products/mine": { "dataKeys": ["products", "meta"] },
   "GET /products/favorites": { "dataKeys": ["products"] },
@@ -14,6 +17,8 @@
   "GET /bazars": { "dataKeys": ["bazars", "meta"] },
   "GET /bazars/:idOrSlug": { "dataKeys": ["bazar"] },
   "GET /bazars/me": { "dataKeys": ["bazar"] },
+  "GET /bazars/ranking": { "dataKeys": ["ranking", "period"] },
+  "GET /reviews": { "dataKeys": ["reviews", "meta"] },
 
   "GET /cart": { "dataKeys": ["items", "total"] },
   "GET /orders/mine": { "dataKeys": ["orders", "meta"] },

@@ -133,6 +133,48 @@ describe('Contrato de resposta — Produtos', () => {
     await ctrl.getOne(req, res);
     expectContractKeys(res, 'GET /products/:id');
   });
+
+  // Regressão do bug do Cloudinary: novoproduto.html/my-products.html liam
+  // res.data.imagesFailed, mas o controller sempre devolveu
+  // res.data.imageUploadErrors — o aviso de "algumas fotos falharam" nunca
+  // aparecia. Este teste trava a chave; a correcção foi no frontend.
+  test('POST /products devolve {product, imageUploadErrors}', async () => {
+    jest.resetModules();
+    jest.doMock('../../src/config/database', () => makePrismaMock({
+      bazar: { findUnique: jest.fn().mockResolvedValue({ id: 'b1', active: true }) },
+      product: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        findUnique: jest.fn().mockResolvedValue({ id: 'p1', name: 'Novo', images: [] }),
+        create: jest.fn().mockResolvedValue({ id: 'p1', name: 'Novo' })
+      }
+    }));
+    jest.doMock('../../src/services/aiService', () => ({
+      moderateProduct: jest.fn().mockResolvedValue({ ok: true, blocked: false })
+    }));
+    const ctrl = require('../../src/controllers/productController');
+    const { req, res } = makeReqRes({
+      body: { name: 'Novo Produto', description: 'Descrição de teste com mais de 10 caracteres', price: '100', category: 'Roupa', stock: '1' }
+    });
+    req.files = [];
+    await ctrl.create(req, res);
+    expectContractKeys(res, 'POST /products');
+  });
+
+  test('PUT /products/:id devolve {product, imageUploadErrors}', async () => {
+    jest.resetModules();
+    jest.doMock('../../src/config/database', () => makePrismaMock({
+      product: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'p1', sellerId: 'u1', bazarId: 'b1' }),
+        findUnique: jest.fn().mockResolvedValue({ id: 'p1', name: 'Editado', images: [] }),
+        update: jest.fn().mockResolvedValue({ id: 'p1', name: 'Editado' })
+      }
+    }));
+    const ctrl = require('../../src/controllers/productController');
+    const { req, res } = makeReqRes({ params: { id: 'p1' }, body: { name: 'Editado' } });
+    req.files = [];
+    await ctrl.update(req, res);
+    expectContractKeys(res, 'PUT /products/:id');
+  });
 });
 
 describe('Contrato de resposta — Bazares', () => {
