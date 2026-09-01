@@ -17,11 +17,11 @@ jobs:
 
       - name: Dump da Neon
         run: |
-          pg_dump "${{ secrets.NEON_DATABASE_URL }}" -Fc --no-owner --no-acl -f neon_dump.dump
+          /usr/lib/postgresql/18/bin/pg_dump "${{ secrets.NEON_DATABASE_URL }}" -Fc --no-owner --no-acl -f neon_dump.dump
 
       - name: Restaurar na Supabase
         run: |
-          pg_restore --no-owner --no-privileges --clean --if-exists -d "${{ secrets.SUPABASE_DATABASE_URL }}" neon_dump.dump
+          /usr/lib/postgresql/18/bin/pg_restore --no-owner --no-privileges --clean --if-exists -d "${{ secrets.SUPABASE_DATABASE_URL }}" neon_dump.dump
 
       - name: Verificar tabelas na Supabase
-        run: psql "${{ secrets.SUPABASE_DATABASE_URL }}" -c "\dt"
+        run: /usr/lib/postgresql/18/bin/psql "${{ secrets.SUPABASE_DATABASE_URL }}" -c "\dt"
