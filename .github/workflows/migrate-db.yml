@@ -6,8 +6,12 @@ jobs:
   migrate:
     runs-on: ubuntu-latest
     steps:
-      - name: Instalar postgresql-client
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Instalar postgresql-client 18
+        run: |
+          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /usr/share/keyrings/postgresql.gpg
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-18
 
       - name: Dump da Neon
         run: |
