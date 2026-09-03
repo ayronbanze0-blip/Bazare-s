@@ -112,6 +112,7 @@ model User {
   mentionsReceived  Mention[] @relation("MentionsReceived")
   mentionsAuthored  Mention[] @relation("MentionsAuthored")
   videoJobs         VideoJob[]
+  userAudios        UserAudio[]
 
   // Wallet system
   wallet              Wallet?
@@ -1219,6 +1220,28 @@ model VideoJob {
 
   @@index([userId])
   @@index([status])
+}
+
+// ─────────────────────────────────────────────
+// USER AUDIO — biblioteca pessoal de áudios/músicas usados no editor
+// de vídeo (Fase 3). Um áudio novo escolhido pelo vendedor sobe UMA
+// ÚNICA VEZ para aqui (ver mediaController.uploadAudio); publicações
+// seguintes reutilizam-no só pelo `id`, sem novo upload. Cada linha
+// é dona do próprio ficheiro no Cloudinary (cloudinaryId), por isso
+// dá para apagar sem afectar VideoJobs já concluídos (esses guardam
+// o resultado final já misturado, não dependem do áudio original).
+// ─────────────────────────────────────────────
+model UserAudio {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title        String
+  audioUrl     String
+  cloudinaryId String
+  durationSec  Float    @default(0)
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
 }
 
 // ─────────────────────────────────────────────
