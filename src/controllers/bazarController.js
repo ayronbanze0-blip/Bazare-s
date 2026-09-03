@@ -76,12 +76,17 @@ const getOne = async (req, res) => {
 
     bazar.products = await attachProductEngagement(await attachFavorites(bazar.products, req.user?.id), req.user?.id);
     bazar.followerCount = bazar._count.followers;
-    bazar.isFollowing = req.user
-      ? !!(await prisma.follow.findUnique({ where: { userId_bazarId: { userId: req.user.id, bazarId: bazar.id } } }))
-      : false;
-    bazar.isBlocked = req.user
-      ? !!(await prisma.block.findUnique({ where: { blockerId_blockedId: { blockerId: req.user.id, blockedId: bazar.sellerId } } }))
-      : false;
+    // isFollowing e isBlocked são independentes uma da outra — corriam em
+    // sequência (2 idas à BD, uma a seguir à outra) sem motivo; em paralelo
+    // ficam no tempo da mais lenta das duas, não da soma das duas.
+    const [followRecord, blockRecord] = req.user
+      ? await Promise.all([
+          prisma.follow.findUnique({ where: { userId_bazarId: { userId: req.user.id, bazarId: bazar.id } } }),
+          prisma.block.findUnique({ where: { blockerId_blockedId: { blockerId: req.user.id, blockedId: bazar.sellerId } } })
+        ])
+      : [null, null];
+    bazar.isFollowing = !!followRecord;
+    bazar.isBlocked = !!blockRecord;
     return ok(res, { bazar });
   } catch (err) {
     logger.error(`[Bazars.getOne] ${err.message}`);

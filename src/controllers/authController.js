@@ -427,7 +427,13 @@ const refresh = async (req, res) => {
   if (!token) return unauthorized(res, 'Refresh token não fornecido.');
 
   try {
-    const record = await prisma.refreshToken.findUnique({ where: { token } });
+    // Antes: buscava o refreshToken e, só depois, o user numa segunda
+    // ida à base de dados — 2 round-trips sequenciais no caminho mais
+    // comum (token válido, não revogado). Combinado num único pedido
+    // com `include`, poupa uma dessas idas em cada refresh — que é a
+    // rota mais chamada de toda a app (dispara em cada carregamento de
+    // página autenticada) e a mais lenta no painel de monitorização.
+    const record = await prisma.refreshToken.findUnique({ where: { token }, include: { user: true } });
     if (!record) return unauthorized(res, 'Refresh token inválido ou expirado. Faça login novamente.');
 
     if (record.revoked) {
@@ -440,8 +446,11 @@ const refresh = async (req, res) => {
 
       // Requisição concorrente que perdeu a corrida de rotação, mas dentro
       // da janela de tolerância — devolve um access token novo para o
-      // token que já venceu a corrida, sem rodar de novo.
-      const user = await prisma.user.findUnique({ where: { id: current.userId } });
+      // token que já venceu a corrida, sem rodar de novo. `current` pode
+      // vir de `_resolveCurrentToken` sem o `user` incluído (segue a
+      // cadeia de replacedByToken), por isso usa o do `record` original
+      // quando é o mesmo utilizador, só voltando à BD se mudou.
+      const user = current.userId === record.userId ? record.user : await prisma.user.findUnique({ where: { id: current.userId } });
       if (!user || !user.active) return unauthorized(res, 'Utilizador inválido.');
 
       setRefreshCookie(res, current.token);
@@ -452,19 +461,34 @@ const refresh = async (req, res) => {
       return unauthorized(res, 'Refresh token inválido ou expirado. Faça login novamente.');
     }
 
-    const user = await prisma.user.findUnique({ where: { id: record.userId } });
+    const user = record.user;
     if (!user || !user.active) return unauthorized(res, 'Utilizador inválido.');
 
-    // Rotate refresh token
-    const newRefreshToken = await createRefreshToken(user.id, req);
-    await prisma.refreshToken.update({
-      where: { id: record.id },
-      data: { revoked: true, revokedAt: new Date(), replacedByToken: newRefreshToken }
-    });
-    setRefreshCookie(res, newRefreshToken);
+    // Rotate refresh token — cria o novo e revoga o antigo numa única
+    // transacção: antes eram 2 pedidos independentes, e uma falha entre
+    // eles (rede, cold start da ligação) podia deixar 2 tokens activos
+    // em simultâneo para o mesmo utilizador.
+    const newToken = signRefresh();
+    const expiresInDays = 7;
+    await prisma.$transaction([
+      prisma.refreshToken.create({
+        data: {
+          token: newToken,
+          userId: user.id,
+          expiresAt: new Date(Date.now() + expiresInDays * 24 * 3600 * 1000),
+          userAgent: req.headers['user-agent']?.slice(0, 255),
+          ipAddress: req.ip
+        }
+      }),
+      prisma.refreshToken.update({
+        where: { id: record.id },
+        data: { revoked: true, revokedAt: new Date(), replacedByToken: newToken }
+      })
+    ]);
+    setRefreshCookie(res, newToken);
 
     const accessToken = signAccess(user);
-    return ok(res, { accessToken, refreshToken: newRefreshToken }, 'Token renovado.');
+    return ok(res, { accessToken, refreshToken: newToken }, 'Token renovado.');
   } catch (err) {
     logger.error(`[Refresh] ${err.message}`);
     return serverError(res);
