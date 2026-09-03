@@ -100,6 +100,16 @@ const uploadVideoEdit = multer({
   limits: { fileSize: 150 * 1024 * 1024, files: 2 } // até 150MB de vídeo bruto + 1 áudio
 });
 
+// ─── Multer só para áudio (biblioteca pessoal — POST /media/audio) ─
+// Separado de uploadVideoEdit porque aqui é sempre um único ficheiro
+// de áudio, guardado uma vez para reutilização futura, nunca junto
+// com vídeo no mesmo pedido.
+const uploadAudioOnly = multer({
+  storage,
+  fileFilter: audioFileFilter,
+  limits: { fileSize: 15 * 1024 * 1024, files: 1 } // 15MB chega de sobra para 60s de áudio
+});
+
 // ─── Erros transitórios (rede/timeout) vs erros definitivos ──────
 // Estes valem a pena repetir; erros de auth/validação da Cloudinary não.
 const isTransientError = (err) => {
@@ -166,9 +176,9 @@ const uploadMany = async (files, folder = 'bazares/products') => {
   return results;
 };
 
-const deleteFromCloud = async (publicId) => {
+const deleteFromCloud = async (publicId, resourceType = 'image') => {
   try {
-    await cloudinary.uploader.destroy(publicId);
+    await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
     return { ok: true };
   } catch (err) {
     logger.error(`[Cloudinary] Delete failed: ${err.message}`);
@@ -238,13 +248,46 @@ const uploadVideoToCloud = async (localPath, folder = 'bazares/reels', attempt =
   }
 };
 
+// ─── Upload de áudio para o Cloudinary (biblioteca pessoal) ────────
+// Cloudinary trata áudio como resource_type "video" (sem stream de
+// imagem) — não há eager de entrega aqui porque estes ficheiros são
+// pequenos (até 15MB / ~60s úteis) e só voltam a ser lidos pelo
+// próprio FFmpeg no servidor (videoEditService), nunca servidos
+// directamente a um espectador.
+const uploadAudioToCloud = async (localPath, folder, attempt = 1) => {
+  const MAX_ATTEMPTS = 3;
+  try {
+    const result = await cloudinary.uploader.upload(localPath, {
+      folder,
+      resource_type: 'video',
+      timeout: 60000
+    });
+    fs.unlink(localPath, (err) => {
+      if (err) logger.warn(`Could not delete temp file: ${localPath}`);
+    });
+    return { ok: true, url: result.secure_url, publicId: result.public_id, durationSec: result.duration || 0 };
+  } catch (err) {
+    const transient = isTransientError(err);
+    if (transient && attempt < MAX_ATTEMPTS) {
+      logger.warn(`[Cloudinary] Tentativa de áudio ${attempt} falhou (${err.message}) — a repetir...`);
+      await new Promise(r => setTimeout(r, attempt * 500));
+      return uploadAudioToCloud(localPath, folder, attempt + 1);
+    }
+    logger.error(`[Cloudinary] Upload de áudio falhou definitivamente após ${attempt} tentativa(s): ${err.message}`);
+    fs.unlink(localPath, () => {});
+    return { ok: false, error: friendlyUploadError(err), transient };
+  }
+};
+
 module.exports = {
   upload,
   uploadVideo,
   uploadMedia,
   uploadVideoEdit,
+  uploadAudioOnly,
   uploadToCloud,
   uploadVideoToCloud,
+  uploadAudioToCloud,
   uploadMany,
   deleteFromCloud,
   uploadAvatar,

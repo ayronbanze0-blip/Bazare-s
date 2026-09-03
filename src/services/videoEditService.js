@@ -75,6 +75,50 @@ const clampNum = (v, min, max, fallback) => {
   return Math.min(max, Math.max(min, n));
 };
 
+// Traduz "9:16" etc. numa expressão de crop centrado, em função das
+// dimensões reais de entrada (iw/ih) — o FFmpeg resolve isto em tempo
+// de execução, por isso não precisamos de saber a resolução aqui.
+const ASPECT_RATIOS = { '9:16': 9 / 16, '1:1': 1, '4:5': 4 / 5, '16:9': 16 / 9 };
+function buildCropFilter(aspect) {
+  const r = ASPECT_RATIOS[aspect];
+  if (!r) return null;
+  // Escolhe o maior rectângulo com a proporção `r` que cabe no frame,
+  // e centra-o — o mesmo comportamento que um "crop para caber" no
+  // editor de fotos já dá ao vendedor.
+  return `crop='if(gt(a,${r}),ih*${r},iw)':'if(gt(a,${r}),ih,iw/${r})'`;
+}
+
+/**
+ * Monta a cadeia -vf (filtros de vídeo) num único filtro combinado.
+ * Mantém sempre o "punch" subtil (contraste/saturação/nitidez) que já
+ * era aplicado a todos os vídeos automaticamente — os ajustes do
+ * vendedor (brightness/contrast/saturation) somam-se a essa base em
+ * vez de a substituir, para não perder a consistência visual entre
+ * publicações que não mexem em nada.
+ */
+function buildVideoFilterChain({ rotation, aspect, brightness, contrast, saturation, speed }) {
+  const filters = [];
+
+  if (rotation === 90) filters.push('transpose=1');
+  else if (rotation === 180) filters.push('transpose=1,transpose=1');
+  else if (rotation === 270) filters.push('transpose=2');
+
+  const cropFilter = buildCropFilter(aspect);
+  if (cropFilter) filters.push(cropFilter);
+
+  filters.push("scale='min(1280,iw)':-2");
+  filters.push('unsharp=5:5:0.8:5:5:0.0');
+
+  const finalContrast = clampNum(1.06 * (1 + (contrast || 0)), 0.3, 3, 1.06);
+  const finalSaturation = clampNum(1.08 * (1 + (saturation || 0)), 0, 3, 1.08);
+  const finalBrightness = clampNum(brightness || 0, -1, 1, 0);
+  filters.push(`eq=contrast=${finalContrast.toFixed(3)}:saturation=${finalSaturation.toFixed(3)}:brightness=${finalBrightness.toFixed(3)}`);
+
+  if (speed && speed !== 1) filters.push(`setpts=${(1 / speed).toFixed(4)}*PTS`);
+
+  return filters.join(',');
+}
+
 /**
  * Processa um VideoJob já criado (status PENDING) em segundo plano.
  * Nunca lança — todos os erros ficam registados no próprio job.
@@ -82,27 +126,36 @@ const clampNum = (v, min, max, fallback) => {
  * @param {string} jobId
  * @param {Object} p
  * @param {string} p.inputPath - vídeo bruto (temp, em disco)
- * @param {string} [p.audioPath] - áudio opcional a adicionar (temp, em disco)
+ * @param {string} [p.audioUrl] - URL (Cloudinary) do áudio da biblioteca pessoal a adicionar
+ * @param {number} [p.musicStart] - segundos, início do troço de áudio a usar
+ * @param {number} [p.musicEnd] - segundos, fim do troço (máx. 60s de troço, já validado no controller)
  * @param {number} p.trimStart - segundos
  * @param {number} p.trimEnd - segundos
- * @param {number} [p.coverTime] - segundo (relativo ao corte) para extrair a capa; default = meio do corte
+ * @param {number} [p.coverTime] - segundo (relativo ao corte, timeline de entrada) para extrair a capa; default = meio do corte
  * @param {boolean} p.keepOriginalAudio
  * @param {number} [p.originalVolume=1] - 0..2
  * @param {number} [p.addedVolume=1] - 0..2
+ * @param {number} [p.rotation=0] - 0, 90, 180 ou 270
+ * @param {number} [p.brightness=0] - -1..1
+ * @param {number} [p.contrast=0] - -1..1
+ * @param {number} [p.saturation=0] - -1..1
+ * @param {number} [p.speed=1] - 0.5..2
+ * @param {string|null} [p.aspect] - "9:16" | "1:1" | "4:5" | "16:9" | null (proporção original)
  */
 async function processJob(jobId, p) {
   const {
-    inputPath, audioPath,
+    inputPath,
+    audioUrl, musicStart = 0, musicEnd = 0,
     trimStart, trimEnd,
     coverTime,
     keepOriginalAudio,
     originalVolume = 1,
     addedVolume = 1,
+    rotation = 0, brightness = 0, contrast = 0, saturation = 0, speed = 1, aspect = null,
     targetFolder
   } = p;
 
   const cleanupPaths = [inputPath];
-  if (audioPath) cleanupPaths.push(audioPath);
 
   const setJob = (data) =>
     prisma.videoJob.update({ where: { id: jobId }, data }).catch((err) =>
@@ -122,12 +175,17 @@ async function processJob(jobId, p) {
     if (duration > MAX_OUTPUT_DURATION_SEC) {
       return fail(`O corte final não pode passar de ${MAX_OUTPUT_DURATION_SEC} segundos.`);
     }
+    const speedSafe = clampNum(speed, 0.5, 2, 1);
+    const outputDuration = duration / speedSafe; // é isto que sai no ficheiro final, se a velocidade mudar
 
     const outVideoPath = tmpFile('.mp4');
     const outThumbPath = tmpFile('.jpg');
     cleanupPaths.push(outVideoPath, outThumbPath);
 
-    // ─── 1) Corte + áudio + compressão, tudo num único comando ─────
+    const hasAddedAudio = !!audioUrl;
+    const musicClipLen = Math.max(0.5, (musicEnd || 0) - (musicStart || 0));
+
+    // ─── 1) Corte + ajustes + áudio + compressão, tudo num único comando ─
     await new Promise((resolve, reject) => {
       const cmd = ffmpeg(inputPath)
         .setStartTime(Math.max(0, Number(trimStart) || 0))
@@ -137,46 +195,49 @@ async function processJob(jobId, p) {
           '-preset veryfast',
           '-crf 19', // era 21 — subido porque este resultado ainda passa por uma 2ª compressão no Cloudinary (eager); 19 dá margem para essa 2ª passagem sem acumular perdas visíveis
           '-movflags +faststart',
-          '-vf scale=\'min(1280,iw)\':-2,unsharp=5:5:0.8:5:5:0.0,eq=contrast=1.06:saturation=1.08',
-          // era só o scale — acrescentado o mesmo tipo de tratamento que
-          // as fotos já têm no editor (image-editor.js: contraste,
-          // saturação, nitidez do preset), mas aqui automático, aplicado
-          // a TODOS os vídeos sem o vendedor ter de mexer em nada:
-          //  - unsharp: realça contornos/detalhe (nitidez) — valores
-          //    moderados (0.8) para não criar halos à volta dos bordos
-          //  - eq=contrast/saturation: o mesmo "punch" que os presets
-          //    de imagem já davam, com valores discretos (+6%/+8%) para
-          //    não ficar com aspecto "sobre-editado"
-          // Aplicado ANTES da compressão (mesmo -vf), para o unsharp
-          // trabalhar sobre o vídeo ainda não comprimido — sharpen
-          // depois de comprimir só realçava os blocos de compressão.
+          `-vf ${buildVideoFilterChain({ rotation, aspect, brightness, contrast, saturation, speed: speedSafe })}`,
+          // scale + unsharp + eq: o mesmo tipo de tratamento que as fotos
+          // já têm no editor (image-editor.js: contraste, saturação,
+          // nitidez do preset), aplicado a TODOS os vídeos sem o vendedor
+          // ter de mexer em nada — rotação/proporção/ajustes do vendedor
+          // (se os usar) somam-se a esta base, ver buildVideoFilterChain.
           '-pix_fmt yuv420p'
         ]);
 
       // ─── Áudio: 4 combinações possíveis ───
-      if (audioPath && keepOriginalAudio) {
-        // mistura: áudio original (cortado ao mesmo intervalo) + áudio adicionado, cada um com o seu volume
+      if (hasAddedAudio && keepOriginalAudio) {
+        // mistura: áudio original (cortado ao mesmo intervalo) + troço
+        // escolhido do áudio da biblioteca, cada um com o seu volume.
+        // O áudio da biblioteca entra como input remoto (URL do
+        // Cloudinary) — o FFmpeg descarrega-o directamente, sem
+        // precisarmos de o pôr em disco aqui.
         cmd
-          .input(audioPath)
+          .input(audioUrl)
+          .inputOptions(['-ss', String(musicStart), '-t', String(musicClipLen)])
           .complexFilter([
-            `[0:a]volume=${clampNum(originalVolume, 0, 2, 1)}[a0]`,
-            `[1:a]volume=${clampNum(addedVolume, 0, 2, 1)}[a1]`,
+            `[0:a]volume=${clampNum(originalVolume, 0, 2, 1)}${speedSafe !== 1 ? `,atempo=${speedSafe}` : ''}[a0]`,
+            `[1:a]asetpts=PTS-STARTPTS,volume=${clampNum(addedVolume, 0, 2, 1)}${speedSafe !== 1 ? `,atempo=${speedSafe}` : ''}[a1]`,
             '[a0][a1]amix=inputs=2:duration=first:dropout_transition=2[aout]'
           ])
           .outputOptions(['-map 0:v', '-map [aout]'])
           .audioCodec('aac').audioBitrate('128k');
-      } else if (audioPath && !keepOriginalAudio) {
-        // substitui totalmente o áudio original pelo adicionado
+      } else if (hasAddedAudio && !keepOriginalAudio) {
+        // substitui totalmente o áudio original pelo troço da biblioteca
+        const addedAudioFilters = [`atrim=0:${musicClipLen}`, 'asetpts=PTS-STARTPTS', `volume=${clampNum(addedVolume, 0, 2, 1)}`];
+        if (speedSafe !== 1) addedAudioFilters.push(`atempo=${speedSafe}`);
         cmd
-          .input(audioPath)
+          .input(audioUrl)
+          .inputOptions(['-ss', String(musicStart), '-t', String(musicClipLen)])
           .outputOptions(['-map 0:v', '-map 1:a'])
-          .audioFilters(`volume=${clampNum(addedVolume, 0, 2, 1)}`)
+          .audioFilters(addedAudioFilters.join(','))
           .audioCodec('aac').audioBitrate('128k')
           .outputOptions(['-shortest']);
-      } else if (!audioPath && keepOriginalAudio) {
-        // mantém o áudio original, só ajusta o volume se necessário
+      } else if (!hasAddedAudio && keepOriginalAudio) {
+        // mantém o áudio original, só ajusta o volume (e a velocidade, se mudou)
+        const origAudioFilters = [`volume=${clampNum(originalVolume, 0, 2, 1)}`];
+        if (speedSafe !== 1) origAudioFilters.push(`atempo=${speedSafe}`);
         cmd
-          .audioFilters(`volume=${clampNum(originalVolume, 0, 2, 1)}`)
+          .audioFilters(origAudioFilters.join(','))
           .audioCodec('aac').audioBitrate('128k');
       } else {
         // remove o áudio por completo
@@ -200,7 +261,12 @@ async function processJob(jobId, p) {
     await setJob({ progress: 92 });
 
     // ─── 2) Extrai a capa (fotograma escolhido) ─────────────────────
-    const coverAt = clampNum(coverTime, 0, duration, duration / 2);
+    // coverTime vem na timeline de ENTRADA (antes de qualquer alteração
+    // de velocidade) — se a velocidade mudou, o mesmo instante cai
+    // noutro ponto do ficheiro final (setpts=(1/speed)*PTS desloca os
+    // tempos), por isso convertemos aqui.
+    const coverAtInput = clampNum(coverTime, 0, duration, duration / 2);
+    const coverAt = clampNum(coverAtInput / speedSafe, 0, outputDuration, outputDuration / 2);
     await new Promise((resolve, reject) => {
       ffmpeg(outVideoPath)
         .on('error', reject)
@@ -217,7 +283,6 @@ async function processJob(jobId, p) {
     const thumbUp = await uploadSvc.uploadToCloud(outThumbPath, `${targetFolder}/covers`);
 
     fs.unlink(inputPath, () => {});
-    if (audioPath) fs.unlink(audioPath, () => {});
     fs.unlink(outThumbPath, () => {}); // uploadToCloud já apaga o outVideoPath/outThumbPath em sucesso; isto cobre falhas parciais
 
     await setJob({
@@ -227,7 +292,7 @@ async function processJob(jobId, p) {
       resultPublicId: videoUp.publicId,
       thumbnailUrl: thumbUp.ok ? thumbUp.url : null,
       thumbnailPublicId: thumbUp.ok ? thumbUp.publicId : null,
-      durationSec: Math.round(duration)
+      durationSec: Math.round(outputDuration)
     });
   } catch (err) {
     await fail(err.message || 'Erro desconhecido a processar o vídeo.');
@@ -241,4 +306,26 @@ function toSeconds(timemark) {
   return parts[0] * 3600 + parts[1] * 60 + parts[2];
 }
 
-module.exports = { validateInput, processJob, MAX_OUTPUT_DURATION_SEC, MAX_INPUT_DURATION_SEC };
+// ─── Compressão de áudio para a biblioteca pessoal ─────────────────
+// Chamado uma vez, quando um áudio novo é guardado (mediaController.
+// uploadAudio) — nunca no momento de publicar, já que o ficheiro
+// guardado é reutilizado várias vezes depois. Normaliza qualquer
+// formato de origem (mp3/wav/m4a/aac/ogg) para AAC 128kbps: um WAV de
+// 60s pode pesar ~10MB sem compressão nenhuma, contra ~1MB depois
+// disto — a diferença conta tanto para o espaço no Cloudinary como
+// para os dados móveis do vendedor a enviar.
+function compressAudioForLibrary(inputPath) {
+  const outPath = tmpFile('.m4a');
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .noVideo() // alguns ficheiros de origem trazem uma capa embutida como "faixa de vídeo" — descartada, só interessa o som
+      .audioCodec('aac')
+      .audioBitrate('128k')
+      .audioChannels(2)
+      .on('error', reject)
+      .on('end', () => resolve(outPath))
+      .save(outPath);
+  });
+}
+
+module.exports = { validateInput, processJob, compressAudioForLibrary, MAX_OUTPUT_DURATION_SEC, MAX_INPUT_DURATION_SEC };
