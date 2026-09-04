@@ -9,6 +9,13 @@ const zumboPay = require('../services/zumboPayService');
 
 const prisma = require('../config/database');
 
+class CodeAlreadyRedeemedError extends Error {
+  constructor() {
+    super('Este código já foi utilizado — provavelmente por um pedido duplicado (ex.: dois toques em "Resgatar"). Nada foi cobrado duas vezes.');
+    this.name = 'CodeAlreadyRedeemedError';
+  }
+}
+
 // Mesmo raciocínio do STK_INFLIGHT_EXPIRY_MS em walletController: depois
 // deste tempo sem confirmação, uma subscrição "PROCESSANDO" é tratada
 // como abandonada e deixa de bloquear novas tentativas.
@@ -126,17 +133,28 @@ const redeemCode = async (req, res) => {
     }
 
     const periodEnd = await prisma.$transaction(async (tx) => {
-      const end = await premiumService.activateOrExtend(tx, req.user.id, record.months * 30);
-      await tx.premiumCode.update({
-        where: { id: record.id },
+      // Marca o código como USADO de forma atómica e condicional — só
+      // avança se ele ainda estiver no estado em que a verificação acima
+      // o viu. Sem isto, dois pedidos concorrentes com o mesmo código
+      // (ex.: duplo toque em "Resgatar") passavam ambos na verificação
+      // (feita fora da transacção, antes desta), e ambos activavam
+      // Premium antes de qualquer um marcar o código como usado — o
+      // mesmo código de uso único a ser gasto duas vezes. Mesmo padrão
+      // de correcção já usado no decremento de stock em orderController.
+      const claim = await tx.premiumCode.updateMany({
+        where: { id: record.id, status: 'ACTIVO' },
         data: { status: 'USADO', usedById: req.user.id, usedAt: new Date() }
       });
-      return end;
+      if (claim.count === 0) {
+        throw new CodeAlreadyRedeemedError();
+      }
+      return premiumService.activateOrExtend(tx, req.user.id, record.months * 30);
     });
 
     logger.info(`[Premium.redeemCode] Código ${record.code} resgatado por ${req.user.email} (+${record.months} mês(es)).`);
     return ok(res, { premiumExpiresAt: periodEnd, months: record.months }, 'Código resgatado! A sua Conta Premium está activa.');
   } catch (err) {
+    if (err instanceof CodeAlreadyRedeemedError) return badRequest(res, err.message);
     logger.error(`[Premium.redeemCode] ${err.message}`);
     return serverError(res);
   }

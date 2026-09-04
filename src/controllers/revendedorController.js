@@ -34,7 +34,12 @@ const generateInvite = async (req, res) => {
       ref: `${baseUrl}/ref/${token}`
     };
 
-    logger.info(`[Revendedor] Invite generated: ${token} by ${req.user.email}`);
+    // Só os últimos caracteres do token vão para o log — o token
+    // completo dá acesso ao convite (é de uso único, mas ainda assim é
+    // uma credencial), mesmo padrão de redacção já usado para tokens
+    // push em pushService.js. O suficiente para cruzar com o `invite.id`
+    // se for preciso investigar, sem expor o valor utilizável.
+    logger.info(`[Revendedor] Invite generated: ...${token.slice(-8)} by ${req.user.email}`);
     return created(res, { invite, links }, 'Convite gerado com sucesso.');
   } catch (err) {
     logger.error(`[Revendedor.generateInvite] ${err.message}`);

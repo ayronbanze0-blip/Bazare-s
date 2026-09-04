@@ -35,9 +35,19 @@ const addItem = async (req, res) => {
     const { productId, qty = 1 } = req.body;
     if (!productId) return badRequest(res, 'Produto obrigatório.');
 
+    // Faltava validar isto — sem esta linha, dava para enviar qty=-5 (ou
+    // 0, ou "abc") e criar uma linha de carrinho inválida: `product.stock
+    // < qty` nunca apanha quantidades negativas (qualquer stock é "maior"
+    // que um número negativo), e um qty não-numérico vira NaN só lá
+    // adiante, no create, como erro 500 em vez de um 400 claro.
+    const qtyNum = parseInt(qty, 10);
+    if (!Number.isInteger(qtyNum) || qtyNum < 1) {
+      return badRequest(res, 'Quantidade inválida.');
+    }
+
     const product = await prisma.product.findUnique({ where: { id: productId } });
     if (!product || !product.active) return notFound(res, 'Produto não disponível.');
-    if (product.stock < qty) return badRequest(res, `Apenas ${product.stock} unidades disponíveis.`);
+    if (product.stock < qtyNum) return badRequest(res, `Apenas ${product.stock} unidades disponíveis.`);
 
     const existing = await prisma.cartItem.findUnique({
       where: { userId_productId: { userId: req.user.id, productId } }
@@ -45,12 +55,12 @@ const addItem = async (req, res) => {
 
     let item;
     if (existing) {
-      const newQty = existing.qty + parseInt(qty);
+      const newQty = existing.qty + qtyNum;
       if (newQty > product.stock) return badRequest(res, `Apenas ${product.stock} unidades disponíveis.`);
       item = await prisma.cartItem.update({ where: { id: existing.id }, data: { qty: newQty } });
     } else {
       try {
-        item = await prisma.cartItem.create({ data: { userId: req.user.id, productId, qty: parseInt(qty) } });
+        item = await prisma.cartItem.create({ data: { userId: req.user.id, productId, qty: qtyNum } });
       } catch (createErr) {
         // P2002: um pedido concorrente (duplo toque em "Adicionar") já
         // criou a mesma linha entre a verificação acima e este create —
@@ -61,7 +71,7 @@ const addItem = async (req, res) => {
         });
         item = await prisma.cartItem.update({
           where: { id: winner.id },
-          data: { qty: winner.qty + parseInt(qty) }
+          data: { qty: winner.qty + qtyNum }
         });
       }
     }
