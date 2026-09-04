@@ -8,11 +8,11 @@ const { combine, timestamp, printf, colorize, errors, json } = winston.format;
 
 const isProduction = process.env.NODE_ENV === 'production';
 
-// ─── Produção (Railway) ───────────────────────────────────────────
+// ─── Produção (Render) ─────────────────────────────────────────────
 // O disco do container é EFÉMERO: qualquer coisa escrita em ficheiro
 // desaparece no próximo deploy/restart e não é acessível sem shell.
 // Por isso em produção só escrevemos para stdout/stderr em JSON — o
-// Railway captura isso automaticamente na tab "Logs" e torna-o
+// Render captura isso automaticamente na tab "Logs" e torna-o
 // pesquisável/filtrável (ex.: por level, por requestId).
 //
 // ─── Desenvolvimento (local) ──────────────────────────────────────
