@@ -99,6 +99,7 @@ model User {
   commentLikes      CommentLike[]
   cartItems         CartItem[]
   tokens            RefreshToken[]
+  webhookSubscriptions WebhookSubscription[]
   verificationCodes VerificationCode[]
   reports           Report[]  @relation("ReportsByUser")
   reportsAgainst    Report[]  @relation("ReportsAgainstUser")
@@ -140,6 +141,7 @@ model User {
   @@index([role])
   @@index([revendedorId])
   @@index([isPremium])
+  @@index([inviteId])
 }
 
 enum Role {
@@ -205,6 +207,7 @@ model LoginAttempt {
 
   @@index([email, createdAt])
   @@index([ipAddress, createdAt])
+  @@index([userId])
 }
 
 // ─────────────────────────────────────────────
@@ -359,6 +362,12 @@ model CartItem {
 
   @@unique([userId, productId])
   @@index([userId])
+  // Sem isto, contar "quantas pessoas têm este produto no carrinho"
+  // obrigava a percorrer toda a tabela — o índice composto acima
+  // (userId, productId) não ajuda uma pesquisa só por productId (só
+  // serve pesquisas que também filtrem por userId, pela ordem das
+  // colunas).
+  @@index([productId])
 }
 
 // ─────────────────────────────────────────────
@@ -374,6 +383,9 @@ model Favorite {
 
   @@unique([userId, productId])
   @@index([userId])
+  // Mesmo motivo do CartItem acima — usado em toda página de produto e
+  // listagem (_count.favorites), sempre filtrado só por productId.
+  @@index([productId])
 }
 
 // ─────────────────────────────────────────────
@@ -737,6 +749,7 @@ model OrderItem {
   imageUrl  String?
 
   @@index([orderId])
+  @@index([productId])
 }
 
 enum OrderStatus {
@@ -768,6 +781,7 @@ model Review {
 
   @@index([sellerId])
   @@index([productId])
+  @@index([buyerId])
 }
 
 // ─────────────────────────────────────────────
@@ -887,6 +901,8 @@ model Report {
 
   @@index([status])
   @@index([reporterId])
+  @@index([targetUserId])
+  @@index([targetProductId])
 }
 
 enum ReportType {
@@ -918,6 +934,7 @@ model RevendedorInvite {
   usedByUsers User[]
 
   @@index([token])
+  @@index([createdById])
 }
 
 // ─────────────────────────────────────────────
@@ -938,6 +955,7 @@ model AuditLog {
   @@index([userId])
   @@index([action])
   @@index([createdAt])
+  @@index([entityId])
 }
 
 // ─────────────────────────────────────────────
@@ -1018,6 +1036,7 @@ model DepositRequest {
   @@index([userId])
   @@index([status])
   @@index([reference])
+  @@index([reviewedById])
 }
 
 enum DepositStatus {
@@ -1048,6 +1067,7 @@ model WithdrawalRequest {
 
   @@index([userId])
   @@index([status])
+  @@index([reviewedById])
 }
 
 enum WithdrawalStatus {
@@ -1161,6 +1181,7 @@ model PremiumCode {
   @@index([code])
   @@index([status])
   @@index([createdById])
+  @@index([usedById])
 }
 
 enum PremiumCodeStatus {
@@ -1299,4 +1320,60 @@ model FeatureFlag {
   description String?
   updatedAt   DateTime @updatedAt
   updatedBy   String?
+}
+
+// ─────────────────────────────────────────────
+// WEBHOOKS DE SAÍDA — avisar sistemas externos (ex.: um ERP do
+// vendedor, uma automação no Zapier/Make) quando algo acontece na
+// Bazares, sem eles terem de andar a fazer polling à nossa API.
+//
+// Entrega: enfileirada via BullMQ (src/services/webhookService.js),
+// com retries automáticos e assinatura HMAC-SHA256 (o mesmo esquema
+// que já usamos para RECEBER webhooks da ZumboPay — o consumidor
+// valida o cabeçalho X-Bazares-Signature contra o `secret` que lhe
+// foi dado no momento da subscrição, exactamente como fazemos nós
+// próprios com ZUMBOPAY_WEBHOOK_SECRET).
+// ─────────────────────────────────────────────
+enum WebhookEvent {
+  ORDER_STATUS_CHANGED
+  COMMISSION_PAID
+  PREMIUM_ACTIVATED
+}
+
+enum WebhookDeliveryStatus {
+  PENDENTE
+  ENTREGUE
+  FALHADA
+}
+
+model WebhookSubscription {
+  id        String         @id @default(uuid())
+  userId    String
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  url       String
+  secret    String         // gerado no momento da criação, nunca reenviado depois — só o dono o vê uma vez
+  events    WebhookEvent[]
+  active    Boolean        @default(true)
+  createdAt DateTime       @default(now())
+
+  deliveries WebhookDelivery[]
+
+  @@index([userId])
+}
+
+model WebhookDelivery {
+  id             String                @id @default(uuid())
+  subscriptionId String
+  subscription   WebhookSubscription   @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  event          WebhookEvent
+  payload        Json
+  status         WebhookDeliveryStatus @default(PENDENTE)
+  httpStatus     Int?
+  attempts       Int                   @default(0)
+  lastError      String?
+  createdAt      DateTime              @default(now())
+  deliveredAt    DateTime?
+
+  @@index([subscriptionId])
+  @@index([status])
 }
