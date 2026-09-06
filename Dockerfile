@@ -10,4 +10,4 @@ RUN npm install
 
 EXPOSE 3001
 
-CMD ["sh", "-c", "npx prisma db push --accept-data-loss && (node scripts/backfill-product-slugs.js || true) && npm start"]
+CMD ["sh", "-c", "if [ -d prisma/migrations ] && [ \"$(ls -A prisma/migrations 2>/dev/null)\" ]; then npx prisma migrate deploy; else echo 'AVISO: prisma/migrations não existe ou está vazio — a usar db push como fallback. Crie uma migration baseline (prisma migrate dev) e commit prisma/migrations para produção usar migrate deploy.'; npx prisma db push --accept-data-loss; fi && (node scripts/backfill-product-slugs.js || true) && npm start"]
