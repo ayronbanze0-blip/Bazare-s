@@ -56,4 +56,19 @@ const emailLimiter = rateLimit({
   handler: makeHandler('Demasiados emails enviados. Aguarde 1 hora.')
 });
 
-module.exports = { apiLimiter, authLimiter, uploadLimiter, emailLimiter, orderLimiter };
+// ─── AI limiter (Gemini) ──────────────────────────────────────────
+// Chamadas a modelos de IA custam dinheiro real por pedido — muito
+// mais caro que um pedido normal à API. O limiter geral (apiLimiter,
+// 300/15min) é generoso demais para isto: um utilizador (ou bot)
+// podia gerar centenas de chamadas caras ao Gemini por pouco mais que
+// tráfego normal de API. Usado na pesquisa inteligente e no BazarBot.
+const aiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: parseInt(process.env.AI_RATE_LIMIT_MAX) || 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: keyByUserOrIp,
+  handler: makeHandler('Demasiados pedidos à IA em pouco tempo. Aguarde um minuto.')
+});
+
+module.exports = { apiLimiter, authLimiter, uploadLimiter, emailLimiter, orderLimiter, aiLimiter };
