@@ -21,13 +21,18 @@ model User {
   // por scripts/backfill-usernames.js. Fica nullable por causa disso
   // — nunca deve ficar null para contas novas.
   username          String?   @unique
-  passwordHash      String
+  passwordHash      String?
   role              Role      @default(BUYER)
   phone             String?
   location          String?
   bio               String?
   avatarUrl         String?
   coverUrl          String?
+
+  // Login social (Google/Facebook/Apple). Contas criadas por login social
+  // não têm passwordHash (ver findOrCreateSocialUser em authController).
+  provider          String?
+  providerId        String?
 
   // Auth
   verified          Boolean   @default(false)
@@ -136,6 +141,7 @@ model User {
   blocking             Block[]   @relation("BlockerOf")
   blockedBy            Block[]   @relation("BlockedBy")
 
+  @@unique([provider, providerId])
   @@index([email])
   @@index([username])
   @@index([role])
@@ -925,8 +931,13 @@ model RevendedorInvite {
   id          String   @id @default(uuid())
   token       String   @unique
   note        String?
-  createdById String
-  createdBy   User     @relation("InviteCreator", fields: [createdById], references: [id])
+  createdById String?
+  // Nullable + SetNull: um convite já USADO por outra pessoa não deve
+  // impedir a eliminação da conta do revendedor que o criou — antes,
+  // por ser uma relação obrigatória sem onDelete, isto bloqueava
+  // (P2003) a auto-eliminação de qualquer revendedor com pelo menos
+  // um convite já usado (só os convites por usar eram limpos primeiro).
+  createdBy   User?    @relation("InviteCreator", fields: [createdById], references: [id], onDelete: SetNull)
   used        Boolean  @default(false)
   usedAt      DateTime?
   expiresAt   DateTime?
@@ -1083,8 +1094,12 @@ enum WithdrawalStatus {
 model CommissionPayment {
   id              String              @id @default(uuid())
   bazarId         String
-  sellerId        String
-  seller          User                @relation("SellerCommissionPayments", fields: [sellerId], references: [id])
+  sellerId        String?
+  // Nullable + SetNull: mantém o registo financeiro (histórico de
+  // pagamentos de comissão) mesmo depois do vendedor apagar a conta —
+  // apagar o histórico financeiro só para permitir o "delete account"
+  // seria incorrecto (ver nota em userController.deleteAccount).
+  seller          User?               @relation("SellerCommissionPayments", fields: [sellerId], references: [id], onDelete: SetNull)
   amount          Float
   method          CommissionMethod
   status          CommissionStatus    @default(PENDENTE)
@@ -1210,6 +1225,7 @@ enum CommissionStatus {
   PROCESSANDO
   PAGA
   FALHADA
+  CANCELADA
 }
 
 // ─────────────────────────────────────────────
@@ -1236,6 +1252,10 @@ model VideoJob {
   thumbnailPublicId String?
   durationSec       Int?
   errorMessage      String?
+  // Marca o job como já usado — sem isto, o mesmo vídeo processado
+  // podia ser publicado várias vezes (Story + Story, Reel + Reel, ou
+  // um para cada), reutilizando indefinidamente o mesmo resultado.
+  consumedAt        DateTime?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 

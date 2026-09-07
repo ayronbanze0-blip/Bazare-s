@@ -10,16 +10,33 @@ async function main() {
   console.log('🌱 A semear a base de dados...\n');
 
   // ─── Create Admin Account ───────────────────────────────────────
-  const adminEmail = process.env.ADMIN_EMAIL || 'ayronbanze0@gmail.com';
-  const adminPassword = process.env.ADMIN_PASSWORD || 'C@m@le@o';
-  const adminName = process.env.ADMIN_NAME || 'Ayron Banze';
+  // Em produção NUNCA podemos cair para credenciais fixas no código-fonte
+  // (mesmo como "default de desenvolvimento") — um repositório partilhado
+  // ou um ZIP exportado passa a conter uma password de admin previsível.
+  // Falhamos alto em vez de criar a conta com valores adivinháveis.
+  const isProd = process.env.NODE_ENV === 'production';
+  const adminEmail = process.env.ADMIN_EMAIL || (!isProd ? 'admin@bazares.local' : null);
+  const adminPassword = process.env.ADMIN_PASSWORD || (!isProd ? null : null);
+  const adminName = process.env.ADMIN_NAME || 'Administrador';
+
+  if (isProd && (!process.env.ADMIN_EMAIL || !process.env.ADMIN_PASSWORD)) {
+    console.error('❌ ADMIN_EMAIL e ADMIN_PASSWORD são obrigatórios em produção (NODE_ENV=production). Seed abortado.');
+    process.exit(1);
+  }
+  if (!isProd && !process.env.ADMIN_PASSWORD) {
+    // Gera uma password aleatória para ambientes de desenvolvimento em vez
+    // de usar uma password fixa conhecida — evita que qualquer instalação
+    // local/staging acabe com a mesma credencial previsível.
+    console.warn('⚠️  ADMIN_PASSWORD não definida — a gerar password aleatória para desenvolvimento.');
+  }
+  const resolvedAdminPassword = process.env.ADMIN_PASSWORD || require('crypto').randomBytes(9).toString('base64url');
 
   const existingAdmin = await prisma.user.findUnique({ where: { email: adminEmail } });
 
   if (existingAdmin) {
     console.log(`✓ Conta de administrador já existe: ${adminEmail}`);
   } else {
-    const passwordHash = await bcrypt.hash(adminPassword, parseInt(process.env.BCRYPT_ROUNDS) || 12);
+    const passwordHash = await bcrypt.hash(resolvedAdminPassword, parseInt(process.env.BCRYPT_ROUNDS) || 12);
     const admin = await prisma.user.create({
       data: {
         name: adminName,
@@ -34,8 +51,9 @@ async function main() {
     });
     console.log(`✅ Conta de administrador criada com sucesso:`);
     console.log(`   Email: ${admin.email}`);
-    console.log(`   Senha: ${adminPassword}`);
+    console.log(`   Senha: ${resolvedAdminPassword}`);
     console.log(`   ID: ${admin.id}\n`);
+    console.log('   ⚠️  Guarde esta password agora — não voltará a ser mostrada, e altere-a após o primeiro login.\n');
   }
 
   // ─── Create BazarBot system account ─────────────────────────────
@@ -75,9 +93,11 @@ async function main() {
   }
 
   console.log('🎉 Seed concluído com sucesso!\n');
-  console.log('Pode agora iniciar sessão no painel administrativo com:');
-  console.log(`  Email: ${adminEmail}`);
-  console.log(`  Senha: ${adminPassword}\n`);
+  if (!existingAdmin) {
+    console.log('Pode agora iniciar sessão no painel administrativo com:');
+    console.log(`  Email: ${adminEmail}`);
+    console.log(`  Senha: (mostrada acima — não é guardada em mais lado nenhum)\n`);
+  }
 }
 
 main()
