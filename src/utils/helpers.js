@@ -44,9 +44,38 @@ const sanitize = (str) => (str ? xss(String(str).trim()) : '');
 const genToken = (bytes = 32) => crypto.randomBytes(bytes).toString('hex');
 
 /**
- * Generate 6-digit verification code
+ * Generate 6-digit verification code — usa crypto.randomInt (entropia
+ * criptográfica) em vez de Math.random(), que não é seguro para
+ * credenciais temporárias (previsível/reprodutível em teoria).
  */
-const genCode = () => Math.floor(100000 + Math.random() * 900000).toString();
+const genCode = () => crypto.randomInt(100000, 1000000).toString();
+
+/**
+ * Hash de códigos de verificação (email/reset) para guardar na BD.
+ * HMAC-SHA256 com um secret do servidor: mesmo um código de 6 dígitos
+ * (pequeno espaço de busca) fica protegido contra reconstrução imediata
+ * a partir de um dump da BD, porque quem só tem a BD não tem o secret
+ * usado na chave HMAC. Nunca guardar o código em texto puro.
+ */
+const hashCode = (code) =>
+  crypto
+    .createHmac('sha256', process.env.JWT_ACCESS_SECRET || 'bazares-fallback-hmac-secret')
+    .update(String(code))
+    .digest('hex');
+
+/**
+ * Compara um código recebido do utilizador com o hash guardado, em tempo
+ * constante — evita timing attacks na comparação (ainda que o benefício
+ * prático seja pequeno aqui, é a forma correcta de comparar segredos).
+ */
+const codeMatches = (inputCode, storedHash) => {
+  if (!inputCode || !storedHash) return false;
+  const inputHash = hashCode(inputCode);
+  const a = Buffer.from(inputHash);
+  const b = Buffer.from(storedHash);
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+};
 
 /**
  * Calculate expiry date
@@ -165,7 +194,7 @@ const haversineKm = (lat1, lng1, lat2, lng2) => {
 };
 
 module.exports = {
-  toSlug, uniqueSlug, sanitize, genToken, genCode,
+  toSlug, uniqueSlug, sanitize, genToken, genCode, hashCode, codeMatches,
   expiresAt, fmtMT, paginate, paginateMeta, pick, omit, calcFee,
   startOfWeek, startOfMonth, getBadgeTier, parseLatLng, haversineKm
 };
