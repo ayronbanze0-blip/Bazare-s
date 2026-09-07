@@ -3,6 +3,7 @@
 const router = require('express').Router();
 const { ok, serverError } = require('../utils/response');
 const { paginate, paginateMeta } = require('../utils/helpers');
+const { aiLimiter } = require('../middleware/rateLimiter');
 const aiSvc = require('../services/aiService');
 const logger = require('../utils/logger');
 const ctrl = require('../controllers/searchController');
@@ -26,7 +27,7 @@ router.get('/suggestions', ctrl.suggestions);
 // Ex: "vestido azul para casamento até 1500 MT"
 // A IA extrai keywords/categoria/preço, depois fazemos a query normal
 // à base de dados — a IA nunca decide o que aparece, só interpreta.
-router.get('/smart', async (req, res) => {
+router.get('/smart', aiLimiter, async (req, res) => {
   try {
     const { q = '', page = 1, limit = 20 } = req.query;
     if (!q.trim()) return ok(res, { products: [], meta: { total: 0, page: 1, limit: 20, pages: 0 }, interpreted: null });
@@ -34,14 +35,28 @@ router.get('/smart', async (req, res) => {
     const interpretation = await aiSvc.interpretSearchQuery(q.trim());
 
     // Falha aberta: se a IA falhar, cai para pesquisa simples por texto.
-    const keywords = interpretation.ok ? (interpretation.keywords || q.trim()) : q.trim();
-    const category = interpretation.ok ? interpretation.category : null;
-    const minPrice = interpretation.ok ? interpretation.minPrice : null;
-    const maxPrice = interpretation.ok ? interpretation.maxPrice : null;
+    // Validação rígida da resposta da IA — o Gemini pode devolver tipos
+    // inesperados (minPrice="abc", category=[...], etc.) e isso rebentava
+    // a query do Prisma com um erro 500. Nunca confiar cegamente no JSON
+    // devolvido por um LLM para construir uma query de BD.
+    const asFiniteNumber = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
+    const asShortString = (v) => (typeof v === 'string' && v.trim().length > 0 && v.length <= 100 ? v.trim() : null);
+
+    const keywords = (interpretation.ok && asShortString(interpretation.keywords)) || q.trim().slice(0, 100);
+    const category = interpretation.ok ? asShortString(interpretation.category) : null;
+    let minPrice = interpretation.ok ? asFiniteNumber(interpretation.minPrice) : null;
+    let maxPrice = interpretation.ok ? asFiniteNumber(interpretation.maxPrice) : null;
+    // Se a IA trocar os limites (minPrice > maxPrice), ignoramos ambos em
+    // vez de devolver uma query sem resultados possíveis.
+    if (minPrice != null && maxPrice != null && minPrice > maxPrice) {
+      minPrice = null; maxPrice = null;
+    }
 
     const { take, skip } = paginate(page, limit);
     const where = {
       active: true,
+      // Consistente com o resto das listagens públicas.
+      bazar: { active: true },
       OR: [
         { name: { contains: keywords, mode: 'insensitive' } },
         { description: { contains: keywords, mode: 'insensitive' } }

@@ -15,6 +15,18 @@ const productValidation = [
   body('category').notEmpty().withMessage('Categoria obrigatória.')
 ];
 
+// Update é parcial (PUT com campos opcionais) — por isso cada regra só
+// corre `.optional()`, mas quando o campo VEM no pedido tem de respeitar
+// as mesmas regras do create. Antes o update não tinha validação
+// nenhuma: aceitava price=-100, price="abc", stock inválido, etc.
+const productUpdateValidation = [
+  body('name').optional().trim().isLength({ min: 3, max: 150 }).withMessage('Nome deve ter entre 3 e 150 caracteres.'),
+  body('description').optional().trim().isLength({ min: 10 }).withMessage('Descrição deve ter no mínimo 10 caracteres.'),
+  body('price').optional().isFloat({ gt: 0 }).withMessage('Preço deve ser maior que zero.'),
+  body('stock').optional().isInt({ min: 0 }).withMessage('Stock deve ser um número inteiro maior ou igual a zero.'),
+  body('category').optional().notEmpty().withMessage('Categoria não pode ficar vazia.')
+];
+
 const commentValidation = [
   body('text').trim().isLength({ min: 1, max: 500 }).withMessage('Comentário deve ter entre 1 e 500 caracteres.')
 ];
@@ -28,7 +40,7 @@ router.get('/categories-overview', optionalAuth, ctrl.categoriesOverview);
 router.get('/mine', authenticate, isSeller, ctrl.myProducts);
 router.post('/generate-description', authenticate, isSeller, uploadLimiter, ctrl.generateDescription);
 router.post('/', authenticate, isSeller, uploadLimiter, upload.array('images', 20), productValidation, ctrl.create);
-router.put('/:id', authenticate, isSeller, uploadLimiter, upload.array('images', 20), ctrl.update);
+router.put('/:id', authenticate, isSeller, uploadLimiter, upload.array('images', 20), productUpdateValidation, ctrl.update);
 router.patch('/:id/toggle', authenticate, isSeller, ctrl.toggle);
 router.patch('/:id/stock', authenticate, isSeller, ctrl.toggleStock);
 router.patch('/:id/images/reorder', authenticate, isSeller, ctrl.reorderImages);
