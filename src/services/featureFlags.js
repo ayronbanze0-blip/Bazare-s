@@ -16,6 +16,19 @@
  *   if (!(await isEnabled('analytics_dashboard'))) {
  *     return res.status(404).json({ error: 'not_found' });
  *   }
+ *
+ * IMPORTANTE — fail-open vs fail-closed:
+ * Se a BD estiver em baixo (ou a flag nunca tiver sido criada), isEnabled
+ * devolve `defaultValue`. Isso é seguro para flags cosméticas/UX (podes
+ * omitir defaultValue, cai para false = desligado), mas é PERIGOSO se
+ * alguma vez for usado para controlar pagamentos ou segurança — nesses
+ * casos o valor correcto se a BD falhar é quase sempre "continuar a
+ * bloquear/exigir a verificação", nunca "libertar por omissão". Ainda
+ * não há nenhuma flag desse tipo no código, mas se vier a existir uma
+ * (ex: "exigir_2fa_para_levantamentos"), o chamador tem de passar
+ * defaultValue explicitamente de acordo com o que é seguro:
+ *   isEnabled('nova_funcionalidade_cosmetica')        // defaultValue=false está OK
+ *   isEnabled('bloquear_saques_suspeitos', true)       // FAIL-CLOSED: por omissão fica ACTIVO/a bloquear
  */
 
 const prisma = require('../config/database');

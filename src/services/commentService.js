@@ -2,6 +2,7 @@
 
 const prisma = require('../config/database');
 const notifSvc = require('./notificationService');
+const blockService = require('./blockService');
 
 const USER_SELECT = { id: true, name: true, avatarUrl: true, isPremium: true };
 
@@ -12,9 +13,18 @@ const USER_SELECT = { id: true, name: true, avatarUrl: true, isPremium: true };
  * `where` identifica o alvo (productId/announcementId/reelId).
  */
 const listThreaded = async (where, userId, { take, skip } = {}) => {
+  // Esconde comentários de quem bloqueaste (ou de quem te bloqueou), nos
+  // dois sentidos — antes disto, o feed principal já aplicava isto
+  // (feedController), mas comentários em produtos/anúncios/reels não
+  // aplicavam nada: bloquear alguém não garantia deixar de ver os
+  // comentários dessa pessoa, nem impedia que ela continuasse a ver os
+  // teus.
+  const hiddenIds = userId ? await blockService.getHiddenUserIds(userId) : new Set();
+  const blockFilter = hiddenIds.size ? { userId: { notIn: [...hiddenIds] } } : {};
+
   const [topLevel, total] = await Promise.all([
     prisma.comment.findMany({
-      where: { ...where, parentId: null },
+      where: { ...where, ...blockFilter, parentId: null },
       take, skip,
       orderBy: { createdAt: 'desc' },
       include: {
@@ -23,14 +33,14 @@ const listThreaded = async (where, userId, { take, skip } = {}) => {
         _count: { select: { likes: true, replies: true } }
       }
     }),
-    prisma.comment.count({ where: { ...where, parentId: null } })
+    prisma.comment.count({ where: { ...where, ...blockFilter, parentId: null } })
   ]);
 
   const topIds = topLevel.map((c) => c.id);
   const [replies, myLikes] = await Promise.all([
     topIds.length
       ? prisma.comment.findMany({
-          where: { parentId: { in: topIds } },
+          where: { parentId: { in: topIds }, ...blockFilter },
           orderBy: { createdAt: 'asc' },
           include: {
             user: { select: USER_SELECT },
@@ -72,9 +82,13 @@ const listThreaded = async (where, userId, { take, skip } = {}) => {
 };
 
 const listReplies = async (parentId, userId, { take, skip } = {}) => {
+  // Mesma regra de bloqueio aplicada em listThreaded.
+  const hiddenIds = userId ? await blockService.getHiddenUserIds(userId) : new Set();
+  const blockFilter = hiddenIds.size ? { userId: { notIn: [...hiddenIds] } } : {};
+
   const [replies, total] = await Promise.all([
     prisma.comment.findMany({
-      where: { parentId },
+      where: { parentId, ...blockFilter },
       take, skip,
       orderBy: { createdAt: 'asc' },
       include: {
@@ -83,7 +97,7 @@ const listReplies = async (parentId, userId, { take, skip } = {}) => {
         _count: { select: { likes: true } }
       }
     }),
-    prisma.comment.count({ where: { parentId } })
+    prisma.comment.count({ where: { parentId, ...blockFilter } })
   ]);
   const myLikes = userId
     ? await prisma.commentLike.findMany({ where: { userId, commentId: { in: replies.map((r) => r.id) } }, select: { commentId: true } })
@@ -99,10 +113,18 @@ const toggleLike = async (commentId, userId) => {
     where: { userId_commentId: { userId, commentId } }
   });
   if (existing) {
-    await prisma.commentLike.delete({ where: { id: existing.id } });
+    try {
+      await prisma.commentLike.delete({ where: { id: existing.id } });
+    } catch (err) {
+      if (err.code !== 'P2025') throw err; // já removido por pedido concorrente
+    }
   } else {
-    await prisma.commentLike.create({ data: { userId, commentId } });
-    notifyCommentLiked(commentId, userId).catch(() => {});
+    try {
+      await prisma.commentLike.create({ data: { userId, commentId } });
+      notifyCommentLiked(commentId, userId).catch(() => {});
+    } catch (err) {
+      if (err.code !== 'P2002') throw err; // já criado por pedido concorrente — idempotente
+    }
   }
   const likeCount = await prisma.commentLike.count({ where: { commentId } });
   return { liked: !existing, likeCount };

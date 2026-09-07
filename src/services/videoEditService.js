@@ -185,6 +185,39 @@ async function processJob(jobId, p) {
     const hasAddedAudio = !!audioUrl;
     const musicClipLen = Math.max(0.5, (musicEnd || 0) - (musicStart || 0));
 
+    // Verifica se o vídeo de entrada TEM faixa de áudio antes de montar o
+    // comando — se `keepOriginalAudio=true` mas o vídeo não tiver áudio,
+    // os filtros abaixo referenciam `[0:a]`/`-map 0:a`, que não existe, e
+    // o FFmpeg falha a meio do processamento. Nesse caso, tratamos como
+    // se `keepOriginalAudio=false` (não há áudio original para manter).
+    const inputHasAudio = await new Promise((resolve) => {
+      ffmpeg.ffprobe(inputPath, (err, data) => {
+        if (err) return resolve(false); // falha a sondar => assume que não há, mais seguro
+        resolve((data.streams || []).some((s) => s.codec_type === 'audio'));
+      });
+    });
+    const effectiveKeepOriginalAudio = keepOriginalAudio && inputHasAudio;
+
+    // Clamp de música contra a duração real do ficheiro escolhido — a IA/
+    // frontend pode enviar um musicStart/musicEnd fora do que o áudio
+    // realmente tem (ex: áudio de 30s com musicEnd=90), o que também
+    // rebenta o FFmpeg a meio (ficheiro/troço inexistente).
+    let clampedMusicStart = Math.max(0, Number(musicStart) || 0);
+    let clampedMusicClipLen = musicClipLen;
+    if (hasAddedAudio) {
+      const audioDuration = await new Promise((resolve) => {
+        ffmpeg.ffprobe(audioUrl, (err, data) => {
+          if (err) return resolve(null);
+          resolve(data?.format?.duration ? Number(data.format.duration) : null);
+        });
+      });
+      if (audioDuration && Number.isFinite(audioDuration) && audioDuration > 0) {
+        clampedMusicStart = Math.min(clampedMusicStart, Math.max(0, audioDuration - 0.5));
+        clampedMusicClipLen = Math.min(clampedMusicClipLen, audioDuration - clampedMusicStart);
+        if (clampedMusicClipLen < 0.5) clampedMusicClipLen = Math.min(0.5, audioDuration);
+      }
+    }
+
     // ─── 1) Corte + ajustes + áudio + compressão, tudo num único comando ─
     await new Promise((resolve, reject) => {
       const cmd = ffmpeg(inputPath)
@@ -205,7 +238,7 @@ async function processJob(jobId, p) {
         ]);
 
       // ─── Áudio: 4 combinações possíveis ───
-      if (hasAddedAudio && keepOriginalAudio) {
+      if (hasAddedAudio && effectiveKeepOriginalAudio) {
         // mistura: áudio original (cortado ao mesmo intervalo) + troço
         // escolhido do áudio da biblioteca, cada um com o seu volume.
         // O áudio da biblioteca entra como input remoto (URL do
@@ -213,7 +246,7 @@ async function processJob(jobId, p) {
         // precisarmos de o pôr em disco aqui.
         cmd
           .input(audioUrl)
-          .inputOptions(['-ss', String(musicStart), '-t', String(musicClipLen)])
+          .inputOptions(['-ss', String(clampedMusicStart), '-t', String(clampedMusicClipLen)])
           .complexFilter([
             `[0:a]volume=${clampNum(originalVolume, 0, 2, 1)}${speedSafe !== 1 ? `,atempo=${speedSafe}` : ''}[a0]`,
             `[1:a]asetpts=PTS-STARTPTS,volume=${clampNum(addedVolume, 0, 2, 1)}${speedSafe !== 1 ? `,atempo=${speedSafe}` : ''}[a1]`,
@@ -221,18 +254,18 @@ async function processJob(jobId, p) {
           ])
           .outputOptions(['-map 0:v', '-map [aout]'])
           .audioCodec('aac').audioBitrate('128k');
-      } else if (hasAddedAudio && !keepOriginalAudio) {
+      } else if (hasAddedAudio && !effectiveKeepOriginalAudio) {
         // substitui totalmente o áudio original pelo troço da biblioteca
-        const addedAudioFilters = [`atrim=0:${musicClipLen}`, 'asetpts=PTS-STARTPTS', `volume=${clampNum(addedVolume, 0, 2, 1)}`];
+        const addedAudioFilters = [`atrim=0:${clampedMusicClipLen}`, 'asetpts=PTS-STARTPTS', `volume=${clampNum(addedVolume, 0, 2, 1)}`];
         if (speedSafe !== 1) addedAudioFilters.push(`atempo=${speedSafe}`);
         cmd
           .input(audioUrl)
-          .inputOptions(['-ss', String(musicStart), '-t', String(musicClipLen)])
+          .inputOptions(['-ss', String(clampedMusicStart), '-t', String(clampedMusicClipLen)])
           .outputOptions(['-map 0:v', '-map 1:a'])
           .audioFilters(addedAudioFilters.join(','))
           .audioCodec('aac').audioBitrate('128k')
           .outputOptions(['-shortest']);
-      } else if (!hasAddedAudio && keepOriginalAudio) {
+      } else if (!hasAddedAudio && effectiveKeepOriginalAudio) {
         // mantém o áudio original, só ajusta o volume (e a velocidade, se mudou)
         const origAudioFilters = [`volume=${clampNum(originalVolume, 0, 2, 1)}`];
         if (speedSafe !== 1) origAudioFilters.push(`atempo=${speedSafe}`);
@@ -240,7 +273,8 @@ async function processJob(jobId, p) {
           .audioFilters(origAudioFilters.join(','))
           .audioCodec('aac').audioBitrate('128k');
       } else {
-        // remove o áudio por completo
+        // remove o áudio por completo (também cai aqui quando o vídeo de
+        // entrada simplesmente não tinha áudio nenhum)
         cmd.noAudio();
       }
 

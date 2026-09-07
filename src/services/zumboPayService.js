@@ -38,14 +38,18 @@ const isConfigured = () => Boolean(API_KEY && MERCHANT_ID);
  *   84 / 85 → M-Pesa (Vodacom)
  *   86 / 87 → e-Mola (Movitel)
  */
+// Aceita apenas números moçambicanos válidos (84/85 M-Pesa, 86/87 e-Mola),
+// em vez de truncar cegamente para os últimos 9 dígitos de qualquer input
+// (o que aceitava lixo como "258123" → "258000000123"). Devolve null para
+// qualquer coisa que não corresponda a um MSISDN moçambicano válido.
+const MSISDN_REGEX = /^258(8[4-7])\d{7}$/;
+
 const normalizeMsisdn = (raw) => {
   if (!raw) return null;
   let digits = String(raw).replace(/\D/g, '');
-  // Remove prefixo internacional duplicado, normaliza para 258XXXXXXXXX
   if (digits.startsWith('00258')) digits = digits.slice(3);
-  if (digits.startsWith('258')) digits = digits.slice(3);
-  if (digits.length === 9) digits = digits; // já é só o número local (8XXXXXXXX)
-  return `258${digits.slice(-9)}`;
+  if (!digits.startsWith('258')) digits = `258${digits}`;
+  return MSISDN_REGEX.test(digits) ? digits : null;
 };
 
 const detectMethod = (msisdnRaw) => {
@@ -155,9 +159,19 @@ const initiateCharge = async ({ amount, msisdn, customerName, sourceId }) => {
   });
 
   if (httpStatus === 200) {
+    const reference = data?.data?.reference || null;
+    if (data?.data?.status !== 'success' && !reference) {
+      // HTTP 200 sem status=success e sem reference: não há forma de o
+      // webhook alguma vez encontrar este pagamento (procura por
+      // gatewayReference), por isso ficaria PROCESSANDO para sempre.
+      // Tratamos como erro para que o caller marque FALHADA de imediato,
+      // em vez de deixar o utilizador bloqueado indefinidamente.
+      logger.error(`[ZumboPay] charge HTTP 200 sem status=success e sem reference: ${JSON.stringify(data)}`);
+      throw new Error('Resposta inesperada da ZumboPay (sem referência). Tente novamente.');
+    }
     return {
       status: data?.data?.status === 'success' ? 'success' : 'unknown',
-      reference: data?.data?.reference || null,
+      reference,
       channel: data?.data?.channel || method.toLowerCase(),
       raw: data
     };
@@ -207,8 +221,12 @@ const validateMerchant = async () => {
  */
 const verifyWebhookSignature = (rawBody, signature) => {
   if (!WEBHOOK_SECRET) {
-    logger.warn('[ZumboPay] ZUMBOPAY_WEBHOOK_SECRET não configurado — a aceitar webhook sem validação de assinatura.');
-    return true;
+    // Fail-closed: um webhook financeiro nunca deve ser aceite sem
+    // validação de assinatura. Sem o secret configurado, qualquer pessoa
+    // poderia forjar POSTs de "payment.succeeded" e mover dinheiro/activar
+    // Premium. Antes isto devolvia `true` (fail-open) — corrigido.
+    logger.error('[ZumboPay] ZUMBOPAY_WEBHOOK_SECRET não configurado — a rejeitar webhook por segurança.');
+    return false;
   }
   if (!signature) return false;
 

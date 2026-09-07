@@ -119,7 +119,36 @@ Devolve APENAS um JSON com este formato exacto, sem texto antes ou depois:
 // ─────────────────────────────────────────────────────────────────
 // 2. Moderação de anúncios antes da publicação
 // ─────────────────────────────────────────────────────────────────
+
+// Camada determinística — corre SEMPRE, mesmo que a IA esteja
+// disponível, e é a única linha de defesa quando ela não está.
+// Não substitui a moderação por IA (que apanha muito mais nuances),
+// mas garante que os casos mais óbvios/graves nunca passam só porque
+// o Gemini está em baixo ou indisponível. Lista propositadamente
+// pequena e literal, para minimizar falsos positivos — a IA continua
+// a ser a camada principal para tudo o resto.
+const HARD_BLOCK_KEYWORDS = [
+  'arma de fogo', 'pistola', 'espingarda', 'granada', 'explosivo',
+  'cocaína', 'heroína', 'crystal meth', 'metanfetamina',
+  'marfim de elefante', 'chifre de rinoceronte',
+  'passaporte falso', 'bi falso', 'documento falsificado', 'carta de condução falsa'
+];
+
+const deterministicCheck = ({ name, description, category }) => {
+  const haystack = `${name || ''} ${description || ''} ${category || ''}`.toLowerCase();
+  const hit = HARD_BLOCK_KEYWORDS.find((kw) => haystack.includes(kw));
+  if (hit) {
+    return { blocked: true, flag: 'PROHIBITED', reason: 'Este anúncio parece conter um produto proibido no Bazares.' };
+  }
+  return null;
+};
+
 const moderateProduct = async ({ name, description, category, price }) => {
+  const hardBlock = deterministicCheck({ name, description, category });
+  if (hardBlock) {
+    return { ok: true, ...hardBlock };
+  }
+
   const prompt = `És um moderador de conteúdo para o Bazares, um marketplace moçambicano. Analisa este anúncio e decide se pode ser publicado.
 
 Nome: "${name}"
@@ -142,9 +171,12 @@ Devolve APENAS um JSON com este formato exacto:
 
   const result = await callGemini({ prompt });
   if (!result.ok) {
-    // Falha aberta: se a IA estiver indisponível, não bloqueia o vendedor.
-    // A moderação é uma camada extra, não a única linha de defesa.
-    logger.warn(`[aiService.moderateProduct] IA indisponível, a permitir publicação sem moderação: ${result.error}`);
+    // A IA é uma camada ADICIONAL, não a única defesa — a verificação
+    // determinística acima já correu incondicionalmente. Continuamos a
+    // "falhar aberto" aqui (não bloquear por a IA estar em baixo), mas
+    // agora isso já não significa moderação zero: os casos mais graves
+    // já foram apanhados antes de chegar aqui.
+    logger.warn(`[aiService.moderateProduct] IA indisponível, a usar apenas a verificação determinística: ${result.error}`);
     return { ok: true, blocked: false, flag: 'NONE', reason: '', unavailable: true };
   }
 

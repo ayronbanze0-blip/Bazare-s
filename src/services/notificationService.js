@@ -137,13 +137,23 @@ const broadcastToRole = async (role, notification) => {
 // ─────────────────────────────────────────────
 // ACTIVIDADE SOCIAL (seguir, comentar, responder, gostar de comentário)
 // ─────────────────────────────────────────────
-const newFollower = (sellerId, followerName, bazarId) =>
-  push(sellerId, {
+const { shouldCount } = require('../utils/dedupWindow');
+
+// ─────────────────────────────────────────────
+// ACTIVIDADE SOCIAL (seguir, comentar, responder, gostar de comentário)
+// ─────────────────────────────────────────────
+const newFollower = (sellerId, followerName, bazarId, followerId) => {
+  // Dedup: follow/unfollow/follow repetido (toque acidental, indeciso,
+  // ou alguém a "testar" o botão) não deve gerar uma notificação por
+  // cada vez — só uma por par (seguidor, bazar) a cada 10 minutos.
+  if (followerId && !shouldCount('notif-follow', followerId, bazarId, 10 * 60 * 1000)) return;
+  return push(sellerId, {
     type: 'SOCIAL',
     title: 'Novo seguidor',
     message: `${followerName} começou a seguir o teu bazar.`,
     link: `bazar.html?id=${bazarId}`
   });
+};
 
 const commentOnContent = (ownerId, commenterName, snippet, link) =>
   push(ownerId, {
