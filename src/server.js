@@ -14,6 +14,9 @@ const logger = require('./utils/logger');
 const { setupSocket } = require('./sockets/chatSocket');
 const notifSvc = require('./services/notificationService');
 const auditMw = require('./middleware/audit');
+const { scheduleStoryCleanup } = require('./jobs/cleanupExpiredStories');
+const { schedulePremiumDowngrade } = require('./jobs/downgradeExpiredPremium');
+const { scheduleVideoJobRecovery } = require('./jobs/recoverStuckVideoJobs');
 
 const PORT = Number(process.env.PORT) || 3001;
 const prisma = require('./config/database');
@@ -28,6 +31,15 @@ if (missingEnv.length > 0) {
 }
 if (process.env.NODE_ENV === 'production' && !process.env.FRONTEND_URL) {
   logger.warn('⚠ FRONTEND_URL não definida em produção — CORS e cookies de sessão podem falhar para o frontend real.');
+}
+if (process.env.NODE_ENV === 'production' && !process.env.ZUMBOPAY_WEBHOOK_SECRET) {
+  // O webhook da ZumboPay agora falha-fechado sem este secret (ver
+  // zumboPayService.verifyWebhookSignature) — sem ele, NENHUM pagamento
+  // por webhook será aceite em produção. Melhor falhar no arranque do
+  // que descobrir isto quando um cliente pagar e o Premium/comissão
+  // nunca activar.
+  logger.error('❌ ZUMBOPAY_WEBHOOK_SECRET não definido em produção — os webhooks de pagamento serão sempre rejeitados.');
+  process.exit(1);
 }
 if (
   process.env.NODE_ENV === 'production' &&
@@ -68,6 +80,9 @@ app.set('io', io); // Allow controllers to access io via req.app.get('io')
 // ─── Initialize services that need Prisma/Socket.IO ──────────────
 notifSvc.init(prisma, io);
 auditMw.init(prisma);
+scheduleStoryCleanup(prisma);
+schedulePremiumDowngrade(prisma);
+scheduleVideoJobRecovery(prisma);
 
 // ─── Database connection check ────────────────────────────────────
 const startServer = async () => {
