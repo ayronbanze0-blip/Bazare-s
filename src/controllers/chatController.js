@@ -7,6 +7,7 @@ const aiSvc = require('../services/aiService');
 const uploadSvc = require('../services/uploadService');
 const premiumService = require('../services/premiumService');
 const blockSvc = require('../services/blockService');
+const { checkAiLimit } = require('../utils/aiRateLimit');
 const logger = require('../utils/logger');
 
 // Usa o singleton partilhado — instanciar 'new PrismaClient()' aqui abria
@@ -43,24 +44,39 @@ const getBazarBotChat = async (req, res) => {
     });
 
     if (!chat) {
-      chat = await prisma.chat.create({
-        data: { userAId, userBId },
-        include: {
-          userA: { select: { id: true, name: true, avatarUrl: true, isBazarBot: true } },
-          userB: { select: { id: true, name: true, avatarUrl: true, isBazarBot: true } }
-        }
-      });
+      try {
+        chat = await prisma.chat.create({
+          data: { userAId, userBId },
+          include: {
+            userA: { select: { id: true, name: true, avatarUrl: true, isBazarBot: true } },
+            userB: { select: { id: true, name: true, avatarUrl: true, isBazarBot: true } }
+          }
+        });
 
-      // Mensagem de boas-vindas automática, só na primeira vez
-      const welcome = await prisma.message.create({
-        data: {
-          chatId: chat.id,
-          senderId: botId,
-          text: 'Olá! Sou o BazarBot 🤖 Posso ajudar com dúvidas sobre pagamentos, entregas, a tua Carteira ou como usar o Bazares. Em que posso ajudar?',
-          fromBot: true
-        }
-      });
-      chat._welcomeMessage = welcome;
+        // Mensagem de boas-vindas automática, só na primeira vez
+        const welcome = await prisma.message.create({
+          data: {
+            chatId: chat.id,
+            senderId: botId,
+            text: 'Olá! Sou o BazarBot 🤖 Posso ajudar com dúvidas sobre pagamentos, entregas, a tua Carteira ou como usar o Bazares. Em que posso ajudar?',
+            fromBot: true
+          }
+        });
+        chat._welcomeMessage = welcome;
+      } catch (err) {
+        // P2002: dois pedidos em simultâneo (ex: dois separadores abertos)
+        // tentaram criar o mesmo chat ao mesmo tempo — a unique constraint
+        // protege a BD, mas sem isto o SEGUNDO pedido rebentava com 500
+        // em vez de simplesmente devolver o chat que o primeiro já criou.
+        if (err.code !== 'P2002') throw err;
+        chat = await prisma.chat.findUnique({
+          where: { userAId_userBId: { userAId, userBId } },
+          include: {
+            userA: { select: { id: true, name: true, avatarUrl: true, isBazarBot: true } },
+            userB: { select: { id: true, name: true, avatarUrl: true, isBazarBot: true } }
+          }
+        });
+      }
     }
 
     return ok(res, { chat });
@@ -248,6 +264,9 @@ const sendMessage = async (req, res) => {
     // ─── BazarBot: se o destinatário é o bot, gera e envia a resposta ───
     const botId = await getBazarBotUserId();
     if (botId && recipientId === botId && text && text.trim()) {
+      if (!checkAiLimit(req.user.id)) {
+        logger.warn(`[Chat.bazarBotReply] Limite de IA atingido para ${req.user.id}, resposta do bot ignorada desta vez.`);
+      } else {
       // Não bloqueia a resposta ao utilizador — corre depois de já termos
       // devolvido a mensagem dele. Falhas aqui só ficam em log.
       (async () => {
@@ -274,6 +293,7 @@ const sendMessage = async (req, res) => {
           logger.error(`[Chat.bazarBotReply] ${err.message}`);
         }
       })();
+      }
     } else if (recipientId !== botId) {
       notifSvc.newMessage(recipientId, req.user.name, text || '📷 Imagem');
     }

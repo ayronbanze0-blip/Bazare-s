@@ -181,9 +181,14 @@ const cancelSubscription = async (req, res) => {
     if (sub.userId !== req.user.id && req.user.role !== 'ADMIN') return forbidden(res);
     if (sub.status !== 'PROCESSANDO') return badRequest(res, 'Este pagamento já não está em processamento.');
 
+    // Estado próprio (CANCELADA), distinto de FALHADA (falha do gateway):
+    // se o webhook confirmar o pagamento DEPOIS do utilizador o cancelar
+    // manualmente aqui, não deve ser reprocessado — ver zumboPayWebhook,
+    // que só aceita 'payment.succeeded' quando o estado ainda é
+    // 'PROCESSANDO'.
     const updated = await prisma.premiumSubscription.update({
       where: { id: sub.id },
-      data: { status: 'FALHADA', failReason: 'Cancelado manualmente pelo utilizador.' }
+      data: { status: 'CANCELADA', failReason: 'Cancelado manualmente pelo utilizador.' }
     });
     return ok(res, { subscription: updated }, 'Pagamento cancelado. Já pode tentar novamente.');
   } catch (err) {
@@ -212,7 +217,7 @@ const analytics = async (req, res) => {
     const [orders, topProducts] = await Promise.all([
       prisma.order.findMany({
         where: { sellerId: req.user.id, createdAt: { gte: since }, status: { not: 'CANCELADA' } },
-        select: { total: true, subtotal: true, createdAt: true }
+        select: { total: true, subtotal: true, createdAt: true, status: true }
       }),
       prisma.product.findMany({
         where: { sellerId: req.user.id, active: true },
@@ -222,9 +227,15 @@ const analytics = async (req, res) => {
       })
     ]);
 
-    // Agrupa vendas por dia (YYYY-MM-DD) para o gráfico
+    // Receita só conta encomendas efectivamente ENTREGUES — antes incluía
+    // PENDENTE/ACEITE/EM_PREPARACAO/EM_ENTREGA (tudo menos CANCELADA), o
+    // que mostrava ao vendedor dinheiro que ainda nem chegou a ser
+    // recebido como se já fosse receita confirmada.
+    const deliveredOrders = orders.filter(o => o.status === 'ENTREGUE');
+
+    // Agrupa vendas (ENTREGUES) por dia (YYYY-MM-DD) para o gráfico
     const byDay = {};
-    for (const o of orders) {
+    for (const o of deliveredOrders) {
       const day = o.createdAt.toISOString().slice(0, 10);
       byDay[day] = (byDay[day] || 0) + o.total;
     }
@@ -243,7 +254,7 @@ const analytics = async (req, res) => {
       topProducts,
       categoryBreakdown: Object.entries(byCategory).map(([category, sales]) => ({ category, sales })),
       totalOrders30d: orders.length,
-      totalRevenue30d: orders.reduce((sum, o) => sum + o.total, 0),
+      totalRevenue30d: deliveredOrders.reduce((sum, o) => sum + o.total, 0),
       whatsappClicks: bazar.whatsappClicks
     });
   } catch (err) {

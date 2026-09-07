@@ -8,7 +8,8 @@ const logger = require('../utils/logger');
 const walletService = require('../services/walletService');
 
 const prisma = require('../config/database');
-const FEE_LIMIT = parseFloat(process.env.FEE_LIMIT_MT) || 150;
+const FEE_LIMIT_PARSED = parseFloat(process.env.FEE_LIMIT_MT);
+const FEE_LIMIT = Number.isFinite(FEE_LIMIT_PARSED) ? FEE_LIMIT_PARSED : 150;
 const FEE_PAYMENT_NAME = process.env.FEE_PAYMENT_NAME || 'José Jeque';
 const FEE_PAYMENT_NUMBER = process.env.FEE_PAYMENT_NUMBER || '84 676 1897';
 
@@ -118,18 +119,29 @@ const confirmPayment = async (req, res) => {
     const amount = bazar.pendingFees;
     if (amount <= 0) return badRequest(res, 'Não há contribuição pendente.');
 
-    await prisma.$transaction([
-      prisma.bazar.update({
-        where: { id: bazarId },
+    // Claim atómico: só confirma se `pendingFees` ainda for exactamente o
+    // valor lido acima. Sem isto, dois admins a confirmar em simultâneo
+    // (ou um duplo clique) liam ambos pendingFees=500 e cada um incrementava
+    // paidFees em 500 — 1000 creditados por 500 pendentes reais.
+    const claimed = await prisma.$transaction(async (tx) => {
+      const claim = await tx.bazar.updateMany({
+        where: { id: bazarId, pendingFees: amount },
         data: { paidFees: { increment: amount }, pendingFees: 0 }
-      }),
-      prisma.transaction.create({
+      });
+      if (claim.count === 0) return false;
+
+      await tx.transaction.create({
         data: {
           bazarId, sellerId: bazar.sellerId, type: 'PAGAMENTO',
           amount, fee: 0, description: 'Pagamento de contribuição confirmado pelo administrador'
         }
-      })
-    ]);
+      });
+      return true;
+    });
+
+    if (!claimed) {
+      return badRequest(res, 'Este pagamento já foi confirmado (por outro pedido em simultâneo). Recarregue a página.');
+    }
 
     notifSvc.push(bazar.sellerId, {
       type: 'SUCCESS', title: 'Pagamento confirmado',
@@ -155,18 +167,34 @@ const adjustFee = async (req, res) => {
     if (!bazar) return notFound(res, 'Bazar não encontrado.');
 
     const oldValue = bazar.pendingFees;
-    const updated = await prisma.bazar.update({
-      where: { id: bazarId },
-      data: { pendingFees: Math.max(0, parseFloat(newPendingFee) || 0) }
+    const newValue = Math.max(0, parseFloat(newPendingFee) || 0);
+
+    // Claim atómico com o valor anterior esperado: dois admins a ajustar em
+    // simultâneo a partir da mesma leitura (`oldValue`) só deixam um deles
+    // prosseguir — evita registos de auditoria (Transaction AJUSTE)
+    // incorrectos por causa de uma condição de corrida.
+    const claimed = await prisma.$transaction(async (tx) => {
+      const claim = await tx.bazar.updateMany({
+        where: { id: bazarId, pendingFees: oldValue },
+        data: { pendingFees: newValue }
+      });
+      if (claim.count === 0) return false;
+
+      await tx.transaction.create({
+        data: {
+          bazarId, sellerId: bazar.sellerId, type: 'AJUSTE',
+          amount: oldValue - newValue, fee: 0,
+          description: reason || 'Ajuste administrativo'
+        }
+      });
+      return true;
     });
 
-    await prisma.transaction.create({
-      data: {
-        bazarId, sellerId: bazar.sellerId, type: 'AJUSTE',
-        amount: oldValue - updated.pendingFees, fee: 0,
-        description: reason || 'Ajuste administrativo'
-      }
-    });
+    if (!claimed) {
+      return badRequest(res, 'A contribuição pendente foi alterada por outro pedido entretanto. Recarregue e tente novamente.');
+    }
+
+    const updated = await prisma.bazar.findUnique({ where: { id: bazarId } });
 
     notifSvc.push(bazar.sellerId, {
       type: 'INFO', title: 'Contribuição ajustada',
@@ -181,13 +209,22 @@ const adjustFee = async (req, res) => {
   }
 };
 
+// Limite máximo de taxa de plataforma, partilhado com adminController
+// (setBazarFeeRate) — antes esta rota aceitava até 100% enquanto a
+// outra só aceitava até 20%, uma inconsistência administrativa real:
+// dependendo de qual endpoint o admin usasse, o mesmo valor podia ser
+// aceite ou rejeitado.
+const MAX_PLATFORM_FEE_RATE = 20;
+
 // ─── ADMIN: Set fee rate per bazar ────────────────────────────────
 const setFeeRate = async (req, res) => {
   try {
     const { bazarId } = req.params;
     const { feeRate } = req.body;
     const rate = parseFloat(feeRate);
-    if (isNaN(rate) || rate < 0 || rate > 100) return badRequest(res, 'Taxa inválida.');
+    if (isNaN(rate) || rate < 0 || rate > MAX_PLATFORM_FEE_RATE) {
+      return badRequest(res, `Taxa inválida (0–${MAX_PLATFORM_FEE_RATE}%).`);
+    }
 
     const bazar = await prisma.bazar.update({
       where: { id: bazarId },

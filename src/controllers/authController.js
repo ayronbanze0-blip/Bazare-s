@@ -8,7 +8,7 @@ const { OAuth2Client } = require('google-auth-library');
 
 
 const { ok, created, badRequest, unauthorized, conflict, serverError, validationError } = require('../utils/response');
-const { genCode, genToken, expiresAt } = require('../utils/helpers');
+const { genCode, genToken, expiresAt, hashCode, codeMatches } = require('../utils/helpers');
 const { uniqueUsername } = require('../utils/slugify');
 const emailSvc = require('../services/emailService');
 const logger = require('../utils/logger');
@@ -145,15 +145,26 @@ const login = async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    // Check brute force (max 5 failed attempts in 15 min)
-    const recentFails = await prisma.loginAttempt.count({
-      where: {
-        email: email.toLowerCase(),
-        success: false,
-        createdAt: { gte: new Date(Date.now() - 15 * 60 * 1000) }
-      }
-    });
-    if (recentFails >= 5) {
+    // Brute-force lockout — combinado por (email + IP), não só por email.
+    // Antes disto, bloquear só por email era um Account Lockout DoS: um
+    // atacante que apenas conhecesse o email de alguém podia enviar 5
+    // passwords erradas a partir do seu próprio IP e bloquear a VÍTIMA
+    // durante 15 minutos, sem nunca saber a password dela — e repetir
+    // indefinidamente. Ao exigir a mesma combinação (email + IP) para o
+    // bloqueio principal, o login da vítima a partir do seu próprio
+    // dispositivo/rede continua a funcionar; o atacante só se bloqueia a
+    // si mesmo. Mantemos também um limite (mais alto) só por email, para
+    // ainda apanhar ataques distribuídos por muitos IPs diferentes.
+    const since = new Date(Date.now() - 15 * 60 * 1000);
+    const [failsThisIp, failsAnyIp] = await Promise.all([
+      prisma.loginAttempt.count({
+        where: { email: email.toLowerCase(), success: false, ipAddress: req.ip, createdAt: { gte: since } }
+      }),
+      prisma.loginAttempt.count({
+        where: { email: email.toLowerCase(), success: false, createdAt: { gte: since } }
+      })
+    ]);
+    if (failsThisIp >= 5 || failsAnyIp >= 20) {
       return res.status(429).json({
         success: false,
         message: 'Demasiadas tentativas falhadas. Aguarde 15 minutos.'
@@ -545,7 +556,7 @@ const verifyEmail = async (req, res) => {
       orderBy: { createdAt: 'desc' }
     });
 
-    if (!record || record.code !== code) return badRequest(res, 'Código inválido.');
+    if (!record || !codeMatches(code, record.code)) return badRequest(res, 'Código inválido.');
     if (new Date() > record.expiresAt) return badRequest(res, 'Código expirado.');
 
     await prisma.$transaction([
@@ -580,7 +591,9 @@ const resendVerification = async (req, res) => {
 
     const code = genCode();
     await prisma.verificationCode.create({
-      data: { userId: user.id, code, purpose: 'EMAIL_VERIFY', expiresAt: expiresAt(15) }
+      // Guardamos o HASH do código, nunca o código em texto puro — o
+      // valor em claro só existe no email enviado ao utilizador.
+      data: { userId: user.id, code: hashCode(code), purpose: 'EMAIL_VERIFY', expiresAt: expiresAt(15) }
     });
 
     emailSvc.sendVerificationEmail(user.email, user.name, code).catch(() => {});
@@ -612,7 +625,9 @@ const forgotPassword = async (req, res) => {
 
     const code = genCode();
     await prisma.verificationCode.create({
-      data: { userId: user.id, code, purpose: 'PASSWORD_RESET', expiresAt: expiresAt(15) }
+      // Guardamos o HASH do código, nunca o código em texto puro — o
+      // valor em claro só existe no email enviado ao utilizador.
+      data: { userId: user.id, code: hashCode(code), purpose: 'PASSWORD_RESET', expiresAt: expiresAt(15) }
     });
 
     emailSvc.sendPasswordResetEmail(user.email, user.name, code).catch(() => {});
@@ -640,7 +655,7 @@ const resetPassword = async (req, res) => {
       orderBy: { createdAt: 'desc' }
     });
 
-    if (!record || record.code !== code) return badRequest(res, 'Código inválido.');
+    if (!record || !codeMatches(code, record.code)) return badRequest(res, 'Código inválido.');
     if (new Date() > record.expiresAt) return badRequest(res, 'Código expirado.');
 
     const passwordHash = await bcrypt.hash(newPassword, parseInt(process.env.BCRYPT_ROUNDS) || 12);

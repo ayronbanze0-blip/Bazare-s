@@ -1,5 +1,6 @@
 'use strict';
 
+const fs = require('fs');
 const { ok, created, notFound, forbidden, serverError, badRequest } = require('../utils/response');
 const { sanitize, paginate, paginateMeta } = require('../utils/helpers');
 const uploadSvc = require('../services/uploadService');
@@ -15,6 +16,9 @@ const list = async (req, res) => {
   try {
     const bazar = await resolveBazar(req.params.idOrSlug);
     if (!bazar) return notFound(res, 'Bazar não encontrado.');
+    // Mesma regra do produto único: um bazar suspenso não deve mostrar
+    // o seu conteúdo publicamente, mesmo que se conheça o link directo.
+    if (!bazar.active) return notFound(res, 'Bazar não encontrado.');
 
     const { page = 1, limit = 20 } = req.query;
     const { take, skip } = paginate(page, limit);
@@ -43,9 +47,14 @@ const listGlobal = async (req, res) => {
   try {
     const { page = 1, limit = 10 } = req.query;
     const { take, skip } = paginate(page, limit);
+    // Esconde reels de bazares suspensos do feed global — antes só o
+    // feed por bazar específico existia; este feed cruza todos os
+    // bazares e não filtrava nada.
+    const where = { bazar: { active: true } };
 
     const [reels, total] = await Promise.all([
       prisma.reel.findMany({
+        where,
         take, skip,
         orderBy: { createdAt: 'desc' },
         include: {
@@ -53,7 +62,7 @@ const listGlobal = async (req, res) => {
           product: { select: { id: true, name: true, slug: true, price: true } }
         }
       }),
-      prisma.reel.count()
+      prisma.reel.count({ where })
     ]);
 
     return ok(res, { reels: await attachFollowState(await attachReelEngagement(reels, req.user?.id), req.user?.id), meta: paginateMeta(total, page, limit) });
@@ -87,6 +96,7 @@ const create = async (req, res) => {
     const bazar = await resolveBazar(req.params.idOrSlug);
     if (!bazar) return notFound(res, 'Bazar não encontrado.');
     if (bazar.sellerId !== req.user.id) return forbidden(res);
+    if (!bazar.active) return forbidden(res, 'O seu Bazar está inactivo.');
 
     // Um Reel é vídeo OU foto — nunca ambos. O vídeo já vem editado e
     // processado pelo editor de vídeo (Fase 3): em vez de reenviar o
@@ -107,9 +117,25 @@ const create = async (req, res) => {
     let thumbnailUrl = null, thumbnailPublicId = null, videoDurationSec = null;
 
     if (jobId) {
+      // Se vier jobId E imageFile ao mesmo tempo, o job de vídeo ganha —
+      // mas o ficheiro que o Multer já gravou em disco fica órfão se não
+      // for limpo explicitamente (uploadToCloud nunca chega a correr
+      // para ele, por isso nunca é apagado pelo caminho normal).
+      if (imageFile?.path) fs.unlink(imageFile.path, () => {});
+
       const job = await prisma.videoJob.findUnique({ where: { id: jobId } });
       if (!job || job.userId !== req.user.id) return badRequest(res, 'Vídeo processado não encontrado.');
       if (job.status !== 'DONE') return badRequest(res, 'O vídeo ainda está a ser processado. Aguarda a conclusão antes de publicar.');
+      if (job.targetFolder !== 'bazares/reels') {
+        return badRequest(res, 'Este vídeo foi processado para outro destino (Story), não para Reels.');
+      }
+      // Claim atómico — ver storyController.create para a mesma lógica.
+      const claim = await prisma.videoJob.updateMany({
+        where: { id: jobId, consumedAt: null },
+        data: { consumedAt: new Date() }
+      });
+      if (claim.count === 0) return badRequest(res, 'Este vídeo já foi publicado antes. Processa um novo vídeo.');
+
       videoUrl = job.resultUrl; videoPublicId = job.resultPublicId;
       thumbnailUrl = job.thumbnailUrl; thumbnailPublicId = job.thumbnailPublicId;
       videoDurationSec = job.durationSec;

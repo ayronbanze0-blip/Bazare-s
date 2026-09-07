@@ -49,6 +49,10 @@ const list = async (req, res) => {
 
     const where = {
       active: true,
+      // Esconde produtos de bazares suspensos/inactivos do público — antes
+      // só se filtrava product.active, por isso conteúdo de um vendedor
+      // suspenso continuava a aparecer nas listagens públicas.
+      bazar: { active: true },
       ...(q && {
         OR: [
           { name: { contains: q, mode: 'insensitive' } },
@@ -132,7 +136,7 @@ const categoriesOverview = async (req, res) => {
   try {
     const grouped = await prisma.product.groupBy({
       by: ['category'],
-      where: { active: true },
+      where: { active: true, bazar: { active: true } },
       _count: { _all: true },
       orderBy: { _count: { category: 'desc' } },
       take: 12
@@ -152,7 +156,7 @@ const getOne = async (req, res) => {
     // antigo (UUID), para não partir links já partilhados/indexados.
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.params.id);
     const product = await prisma.product.findFirst({
-      where: { [isUuid ? 'id' : 'slug']: req.params.id, active: true },
+      where: { [isUuid ? 'id' : 'slug']: req.params.id, active: true, bazar: { active: true } },
       include: {
         images: { orderBy: { order: 'asc' } },
         bazar: {
@@ -237,7 +241,7 @@ const create = async (req, res) => {
         description: sanitize(description),
         price: parseFloat(price),
         category,
-        stock: parseInt(stock) || 0,
+        stock: Math.max(0, parseInt(stock, 10) || 0),
         condition: condition || 'Novo',
         size: size || null,
         color: color || null,
@@ -299,12 +303,25 @@ const create = async (req, res) => {
 
 // ─── SELLER: Update product ──────────────────────────────────────
 const update = async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return validationError(res, errors.array());
+
   try {
     const product = await prisma.product.findUnique({ where: { id: req.params.id } });
     if (!product) return notFound(res, 'Produto não encontrado.');
     if (product.sellerId !== req.user.id && req.user.role !== 'ADMIN') return forbidden(res);
 
     const { name, description, price, category, stock, condition, size, color, location, deliveryMethod, active } = req.body;
+
+    // `Boolean("false")` === true em JS — active="false" vindo de
+    // multipart/form-data ficava a ACTIVAR o produto em vez de o
+    // desactivar. parseBoolean interpreta o valor correctamente.
+    const parseBoolean = (value) => {
+      if (value === true || value === 'true') return true;
+      if (value === false || value === 'false') return false;
+      return undefined;
+    };
+    const parsedActive = parseBoolean(active);
 
     const updated = await prisma.product.update({
       where: { id: product.id },
@@ -313,13 +330,13 @@ const update = async (req, res) => {
         ...(description && { description: sanitize(description) }),
         ...(price != null && { price: parseFloat(price) }),
         ...(category && { category }),
-        ...(stock != null && { stock: Math.max(0, parseInt(stock)) }),
+        ...(stock != null && { stock: Math.max(0, parseInt(stock, 10)) }),
         ...(condition && { condition }),
         ...(size != null && { size: size || null }),
         ...(color != null && { color: color || null }),
         ...(location && { location }),
         ...(deliveryMethod && { deliveryMethod }),
-        ...(active != null && { active: Boolean(active) })
+        ...(parsedActive !== undefined && { active: parsedActive })
       },
       include: { images: { orderBy: { order: 'asc' } } }
     });
@@ -516,7 +533,7 @@ const myFavorites = async (req, res) => {
       where: { userId: req.user.id },
       include: {
         product: {
-          include: { images: { orderBy: { order: 'asc' }, take: 1 }, bazar: { select: { name: true, slug: true } } }
+          include: { images: { orderBy: { order: 'asc' }, take: 1 }, bazar: { select: { name: true, slug: true, active: true } } }
         }
       },
       orderBy: { createdAt: 'desc' }
@@ -527,7 +544,18 @@ const myFavorites = async (req, res) => {
     // "favorites" aqui fazia a página aparecer sempre vazia, mesmo com
     // favoritos guardados (o contador do dashboard, que conta directamente
     // na tabela Favorite, continuava certo — só esta listagem estava presa).
-    return ok(res, { products: await attachProductEngagement(favs.map(f => f.product), req.user.id) });
+    //
+    // Marcamos `unavailable` em vez de simplesmente esconder — um produto
+    // desactivado ou de um bazar suspenso continua a aparecer na lista de
+    // favoritos (para o utilizador perceber o que aconteceu), mas
+    // sinalizado para o frontend não o tratar como comprável.
+    const products = favs
+      .filter(f => f.product) // produto pode ter sido apagado entretanto
+      .map(f => ({
+        ...f.product,
+        unavailable: !f.product.active || !f.product.bazar?.active
+      }));
+    return ok(res, { products: await attachProductEngagement(products, req.user.id) });
   } catch (err) {
     logger.error(`[Products.myFavorites] ${err.message}`);
     return serverError(res);
@@ -572,6 +600,8 @@ const remove = async (req, res) => {
 };
 
 
+const { shouldCount } = require('../utils/dedupWindow');
+
 // ─── PUBLIC: Increment product views ────────────────────────────
 // Chamado pelo frontend quando o utilizador abre a página do produto.
 // Fire-and-forget: não bloqueia o carregamento da página.
@@ -579,8 +609,14 @@ const trackView = async (req, res) => {
   // Responde imediatamente — o update é async e não bloqueia
   res.status(204).end();
   try {
+    // Deduplica por (utilizador OU IP) + produto durante 30 min — sem
+    // isto, um bot podia inflacionar `views` com pedidos repetidos ao
+    // mesmo produto.
+    const key = req.user?.id || req.ip;
+    if (!shouldCount('product-view', key, req.params.id, 30 * 60 * 1000)) return;
+
     await prisma.product.updateMany({
-      where: { id: req.params.id, active: true },
+      where: { id: req.params.id, active: true, bazar: { active: true } },
       data: { views: { increment: 1 } }
     });
   } catch (err) {
@@ -599,7 +635,7 @@ const featured = async (req, res) => {
       data: { featured: false, featuredUntil: null }
     });
     const products = await prisma.product.findMany({
-      where: { featured: true, active: true },
+      where: { featured: true, active: true, bazar: { active: true } },
       take: 12,
       orderBy: { sales: 'desc' },
       include: {
@@ -627,6 +663,7 @@ const related = async (req, res) => {
     const products = await prisma.product.findMany({
       where: {
         active: true,
+        bazar: { active: true },
         category: product.category,
         id: { not: req.params.id }
       },
@@ -685,9 +722,9 @@ const pin = async (req, res) => {
     }
 
     const product = await prisma.product.findFirst({
-      where: { id: req.params.id, sellerId: req.user.id }
+      where: { id: req.params.id, sellerId: req.user.id, active: true }
     });
-    if (!product) return notFound(res, 'Produto não encontrado.');
+    if (!product) return notFound(res, 'Produto não encontrado ou inactivo.');
 
     const featuredUntil = new Date(Date.now() + 24 * 60 * 60 * 1000);
 

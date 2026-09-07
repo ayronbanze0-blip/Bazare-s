@@ -13,6 +13,19 @@ const prisma = require('../config/database');
 
 const assertType = (targetType) => VALID_TYPES.includes(targetType);
 
+// Mapa targetType → modelo Prisma, para confirmar que o alvo de facto
+// existe antes de gravar uma reação/partilha. Sem isto, qualquer
+// utilizador autenticado podia criar reações apontando para um
+// targetId inventado/inexistente (não há FK entre FeedReaction e
+// Product/Announcement/Reel).
+const TARGET_MODEL = { PRODUCT: 'product', ANNOUNCEMENT: 'announcement', REEL: 'reel' };
+const targetExists = async (targetType, targetId) => {
+  const model = TARGET_MODEL[targetType];
+  if (!model) return false;
+  const row = await prisma[model].findUnique({ where: { id: targetId }, select: { id: true } });
+  return !!row;
+};
+
 // ─── GET /api/feed/:targetType/:targetId/engagement ──────────────
 // Números de reação/partilha/comentários de UM item — usado fora do
 // feed agregado (ex: página do produto), sem precisar de paginar o
@@ -131,16 +144,29 @@ const react = async (req, res) => {
     const value = parseInt(req.body.value, 10);
     if (!Number.isInteger(value) || value < 1 || value > 7) return badRequest(res, 'value deve ser um número entre 1 e 7.');
 
+    if (!(await targetExists(targetType, targetId))) {
+      return notFound(res, 'Conteúdo não encontrado.');
+    }
+
     const existing = await prisma.feedReaction.findUnique({
       where: { userId_targetType_targetId: { userId: req.user.id, targetType, targetId } }
     });
 
     if (existing && existing.value === value) {
-      await prisma.feedReaction.delete({ where: { id: existing.id } });
-    } else if (existing) {
-      await prisma.feedReaction.update({ where: { id: existing.id }, data: { value } });
+      try {
+        await prisma.feedReaction.delete({ where: { id: existing.id } });
+      } catch (err) {
+        if (err.code !== 'P2025') throw err; // já tinha sido removida por um pedido concorrente
+      }
     } else {
-      await prisma.feedReaction.create({ data: { userId: req.user.id, targetType, targetId, value } });
+      // upsert em vez de create/update separados — dois cliques rápidos
+      // (findUnique → null em ambos, ambos a tentar create) causavam
+      // P2002 e um 500 ao cliente. upsert é atómico e idempotente.
+      await prisma.feedReaction.upsert({
+        where: { userId_targetType_targetId: { userId: req.user.id, targetType, targetId } },
+        create: { userId: req.user.id, targetType, targetId, value },
+        update: { value }
+      });
     }
 
     // likeCount = todas as reações (qualquer uma das 7), não só value===1

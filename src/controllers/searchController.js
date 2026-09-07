@@ -20,6 +20,9 @@ const search = async (req, res) => {
 
     const productWhere = {
       active: true,
+      // Produto de bazar suspenso não deve aparecer na pesquisa — mesma
+      // correcção aplicada às restantes listagens públicas.
+      bazar: { active: true },
       OR: [
         { name: { contains: term, mode: 'insensitive' } },
         { description: { contains: term, mode: 'insensitive' } },
@@ -105,7 +108,7 @@ const suggestions = async (req, res) => {
 
     const [products, bazars] = await Promise.all([
       prisma.product.findMany({
-        where: { active: true, name: { contains: term, mode: 'insensitive' } },
+        where: { active: true, bazar: { active: true }, name: { contains: term, mode: 'insensitive' } },
         take: 5,
         select: { id: true, name: true, category: true },
         orderBy: { sales: 'desc' }

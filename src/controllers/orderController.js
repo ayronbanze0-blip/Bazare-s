@@ -3,16 +3,32 @@
 const { validationResult } = require('express-validator');
 
 const { ok, created, badRequest, forbidden, notFound, serverError, validationError } = require('../utils/response');
-const { paginate, paginateMeta, calcFee, parseLatLng } = require('../utils/helpers');
+const { paginate, paginateMeta, calcFee, parseLatLng, sanitize } = require('../utils/helpers');
 const notifSvc = require('../services/notificationService');
 const emailSvc = require('../services/emailService');
 const premiumService = require('../services/premiumService');
 const logger = require('../utils/logger');
+const { canTransition, isTerminal } = require('../utils/orderStateMachine');
 
 const prisma = require('../config/database');
 
-const FEE_LIMIT = parseFloat(process.env.FEE_LIMIT_MT) || 150;
+const FEE_LIMIT_PARSED = parseFloat(process.env.FEE_LIMIT_MT);
+const FEE_LIMIT = Number.isFinite(FEE_LIMIT_PARSED) ? FEE_LIMIT_PARSED : 150;
 const STATUS_FLOW = ['PENDENTE', 'ACEITE', 'EM_PREPARACAO', 'EM_ENTREGA', 'ENTREGUE', 'CANCELADA'];
+
+// Lançado quando a transição de estado pedida já não é válida no momento
+// exacto em que tentamos aplicá-la — ou porque outra chamada concorrente
+// já mudou o estado entretanto (ex: dois cliques em "cancelar", ou um
+// vendedor a marcar EM_ENTREGA ao mesmo tempo que o comprador cancela),
+// ou porque a transição nunca foi permitida. O `updateMany` condicional
+// abaixo (`where: { status: order.status }`) é a garantia real contra
+// isto — a verificação síncrona é só para dar uma mensagem de erro cedo.
+class InvalidTransitionError extends Error {
+  constructor(message = 'Esta encomenda já não pode ser alterada para este estado — o estado pode ter mudado entretanto.') {
+    super(message);
+    this.name = 'InvalidTransitionError';
+  }
+}
 
 // Lançado quando o stock real (verificado de forma atómica dentro da
 // transacção) já não é suficiente no momento do decremento — por exemplo
@@ -261,22 +277,27 @@ const updateStatus = async (req, res) => {
 
     if (!isSeller && !isAdmin && !isBuyer) return forbidden(res);
 
+    // A partir daqui, TODOS os atores (incluindo admin) são validados pela
+    // mesma máquina de estados — corrige o "admin bypass" que permitia
+    // saltar directamente para qualquer estado (ex: PENDENTE → ENTREGUE,
+    // ou reabrir uma encomenda já ENTREGUE/CANCELADA).
+    if (isTerminal(order.status)) {
+      return badRequest(res, 'Esta encomenda já está num estado final e não pode ser alterada.');
+    }
+    if (!canTransition(order.status, status)) {
+      return badRequest(res, `Não é possível mudar de "${order.status}" para "${status}".`);
+    }
+
     // Buyers can only confirm delivery
     if (isBuyer && !isAdmin) {
       if (status !== 'ENTREGUE') return forbidden(res, 'Compradores só podem confirmar entrega.');
-      if (order.status !== 'EM_ENTREGA') return badRequest(res, 'Encomenda ainda não está em entrega.');
     }
 
-    // Sellers cannot go backwards in flow (except cancel), and cannot
-    // confirm ENTREGUE themselves — só o comprador (ou admin) pode
-    // confirmar que o artigo chegou.
+    // Sellers cannot go backwards in flow, and cannot confirm ENTREGUE
+    // themselves — só o comprador (ou admin) pode confirmar que o artigo
+    // chegou.
     if (isSeller && !isAdmin) {
       if (status === 'ENTREGUE') return forbidden(res, 'Apenas o comprador pode confirmar a entrega.');
-      if (status !== 'CANCELADA') {
-        const curIdx = STATUS_FLOW.indexOf(order.status);
-        const newIdx = STATUS_FLOW.indexOf(status);
-        if (newIdx <= curIdx) return badRequest(res, 'Não é possível retroceder o estado da encomenda.');
-      }
     }
 
     const updateData = {
@@ -285,26 +306,40 @@ const updateStatus = async (req, res) => {
       ...(status === 'ENTREGUE' && { deliveredAt: new Date() })
     };
 
-    const updated = await prisma.order.update({ where: { id: order.id }, data: updateData });
+    // Claim atómico da transição: só prossegue se `order.status` ainda for
+    // exactamente o que lemos acima. Sem isto, dois pedidos concorrentes
+    // (duplo clique em "cancelar", ou o comprador a confirmar entrega ao
+    // mesmo tempo que o vendedor cancela) podiam ambos passar a verificação
+    // síncrona e ambos aplicar os seus efeitos — cancelamento duplo
+    // (stock restaurado 2x) ou entrega processada 2x.
+    let updated;
+    await prisma.$transaction(async (tx) => {
+      const claim = await tx.order.updateMany({
+        where: { id: order.id, status: order.status },
+        data: updateData
+      });
+      if (claim.count === 0) throw new InvalidTransitionError();
 
-    // On ENTREGUE: calculate fee, update bazar, create transaction, bump product sales
-    if (status === 'ENTREGUE') {
-      const [bazar, seller] = await Promise.all([
-        prisma.bazar.findUnique({ where: { id: order.bazarId } }),
-        prisma.user.findUnique({ where: { id: order.sellerId }, select: { isPremium: true, premiumExpiresAt: true } })
-      ]);
-      const sellerPremiumActive = premiumService.isActive(seller);
-      const fee = calcFee(order.total, premiumService.effectiveFeeRate(bazar?.feeRate || 2, sellerPremiumActive));
-      const orderItems = await prisma.orderItem.findMany({ where: { orderId: order.id } });
-      const itemsLabel = orderItems.map(i => `${i.name} ×${i.qty}`).join(', ') || order.id;
+      // On ENTREGUE: calculate fee, update bazar, create transaction, bump
+      // product sales — tudo dentro da MESMA transacção que o claim, para
+      // que "ENTREGUE" nunca fique gravado sem os efeitos financeiros
+      // correspondentes (e vice-versa).
+      if (status === 'ENTREGUE') {
+        const [bazar, seller] = await Promise.all([
+          tx.bazar.findUnique({ where: { id: order.bazarId } }),
+          tx.user.findUnique({ where: { id: order.sellerId }, select: { isPremium: true, premiumExpiresAt: true } })
+        ]);
+        const sellerPremiumActive = premiumService.isActive(seller);
+        const fee = calcFee(order.total, premiumService.effectiveFeeRate(bazar?.feeRate || 2, sellerPremiumActive));
+        const orderItems = await tx.orderItem.findMany({ where: { orderId: order.id } });
+        const itemsLabel = orderItems.map(i => `${i.name} ×${i.qty}`).join(', ') || order.id;
 
-      await prisma.$transaction([
-        prisma.order.update({ where: { id: order.id }, data: { feeAmount: fee } }),
-        prisma.bazar.update({
+        await tx.order.update({ where: { id: order.id }, data: { feeAmount: fee } });
+        await tx.bazar.update({
           where: { id: order.bazarId },
           data: { pendingFees: { increment: fee }, totalSales: { increment: order.total } }
-        }),
-        prisma.transaction.create({
+        });
+        await tx.transaction.create({
           data: {
             bazarId: order.bazarId,
             orderId: order.id,
@@ -314,36 +349,41 @@ const updateStatus = async (req, res) => {
             fee,
             description: `Venda: ${itemsLabel}`
           }
-        }),
-        // Increment sales count for every product in this order
-        ...orderItems.map(i =>
-          prisma.product.update({ where: { id: i.productId }, data: { sales: { increment: i.qty } } })
-        )
-      ]);
+        });
+        for (const i of orderItems) {
+          await tx.product.update({ where: { id: i.productId }, data: { sales: { increment: i.qty } } });
+        }
+      }
 
-      // Check fee limit
+      // If cancelled: restore stock — também dentro da transacção do
+      // claim, para que um cancelamento duplo (que agora é impossível
+      // graças ao `claim.count === 0` acima) nunca possa restaurar o
+      // mesmo stock duas vezes.
+      if (status === 'CANCELADA') {
+        const items = await tx.orderItem.findMany({ where: { orderId: order.id } });
+        for (const item of items) {
+          await tx.product.update({
+            where: { id: item.productId },
+            data: { stock: { increment: item.qty } }
+          }).catch(() => {}); // Product might have been deleted
+        }
+        await tx.user.update({
+          where: { id: order.buyerId },
+          data: { cancelCount: { increment: 1 } }
+        }).catch(() => {});
+      }
+
+      updated = await tx.order.findUnique({ where: { id: order.id } });
+    });
+
+    // Check fee limit (fora da transacção — leitura informativa, não crítica)
+    if (status === 'ENTREGUE') {
       const updatedBazar = await prisma.bazar.findUnique({ where: { id: order.bazarId } });
       if (updatedBazar && updatedBazar.pendingFees >= FEE_LIMIT) {
         notifSvc.feeAlert(order.sellerId, updatedBazar.pendingFees);
         const seller = await prisma.user.findUnique({ where: { id: order.sellerId } });
         if (seller) emailSvc.sendFeeAlertEmail(seller.email, seller.name, updatedBazar.pendingFees).catch(() => {});
       }
-    }
-
-    // If cancelled: restore stock
-    if (status === 'CANCELADA') {
-      const items = await prisma.orderItem.findMany({ where: { orderId: order.id } });
-      for (const item of items) {
-        await prisma.product.update({
-          where: { id: item.productId },
-          data: { stock: { increment: item.qty } }
-        }).catch(() => {}); // Product might have been deleted
-      }
-      // Increment buyer cancel count
-      await prisma.user.update({
-        where: { id: order.buyerId },
-        data: { cancelCount: { increment: 1 } }
-      }).catch(() => {});
     }
 
     // Notifications
@@ -357,6 +397,7 @@ const updateStatus = async (req, res) => {
     logger.info(`[Orders] Status updated: ${order.id} → ${status} by ${req.user.email}`);
     return ok(res, { order: updated }, `Encomenda ${status.toLowerCase()}.`);
   } catch (err) {
+    if (err instanceof InvalidTransitionError) return badRequest(res, err.message);
     logger.error(`[Orders.updateStatus] ${err.message}`);
     return serverError(res);
   }
@@ -378,7 +419,7 @@ const submitReview = async (req, res) => {
   try {
     const order = await prisma.order.findUnique({
       where: { id: req.params.id },
-      include: { items: { take: 1 } }
+      include: { items: true }
     });
 
     if (!order) return notFound(res, 'Encomenda não encontrada.');
@@ -389,7 +430,16 @@ const submitReview = async (req, res) => {
     const existing = await prisma.review.findUnique({ where: { orderId: order.id } });
     if (existing || order.rated) return badRequest(res, 'Esta encomenda já foi avaliada.');
 
-    const productId = order.items[0]?.productId;
+    // A Review é uma por encomenda (Review.orderId é @unique no schema —
+    // mudar isto para "uma review por produto" é uma decisão de produto
+    // que implica também redesenhar o formulário no frontend, por isso
+    // não a fiz sozinho aqui). Guardamos a review "principal" contra o
+    // primeiro produto (como antes), mas agora actualizamos a média de
+    // TODOS os produtos da encomenda — antes só o primeiro produto via
+    // o seu rating actualizado, e os restantes artigos da mesma
+    // encomenda ficavam de fora do cálculo para sempre.
+    const productIds = [...new Set(order.items.map(i => i.productId))];
+    const productId = productIds[0];
     if (!productId) return badRequest(res, 'Produto não encontrado na encomenda.');
 
     await prisma.$transaction(async (tx) => {
@@ -401,7 +451,7 @@ const submitReview = async (req, res) => {
           sellerId: order.sellerId,
           buyerId: req.user.id,
           rating: parseInt(rating),
-          comment: comment || null
+          comment: comment ? sanitize(comment) : null
         }
       });
 
@@ -423,7 +473,12 @@ const submitReview = async (req, res) => {
         data: { rating: Math.round((sellerAgg._avg.rating || 0) * 10) / 10, ratingCount: sellerAgg._count }
       });
 
-      // Recalculate product rating (mesma razão)
+      // Recalculate product rating (mesma razão de performance do
+      // aggregate acima). NOTA: a Review só está ligada a UM produto
+      // (productId = primeiro item da encomenda) — actualizar a média
+      // dos restantes produtos exigiria uma Review por produto, o que
+      // implica mudar o schema (unique constraint) e o formulário do
+      // frontend. Não fiz essa mudança sozinho; ver aviso separado.
       const productAgg = await tx.review.aggregate({
         where: { productId },
         _avg: { rating: true },

@@ -209,9 +209,14 @@ const cancelCommissionPayment = async (req, res) => {
     if (payment.status !== 'PROCESSANDO') {
       return badRequest(res, 'Este pagamento já não está em processamento.');
     }
+    // Estado próprio (CANCELADA), distinto de FALHADA (falha do gateway):
+    // se o webhook confirmar o pagamento DEPOIS do utilizador o cancelar
+    // manualmente aqui, não deve ser reprocessado — ver zumboPayWebhook,
+    // que só aceita 'payment.succeeded' quando o estado ainda é
+    // 'PROCESSANDO'.
     const updated = await prisma.commissionPayment.update({
       where: { id: payment.id },
-      data: { status: 'FALHADA', failReason: 'Cancelado manualmente pelo utilizador.' }
+      data: { status: 'CANCELADA', failReason: 'Cancelado manualmente pelo utilizador.' }
     });
     return ok(res, { payment: updated }, 'Pagamento cancelado. Já pode tentar novamente.');
   } catch (err) {
@@ -290,22 +295,30 @@ const zumboPayWebhook = async (req, res) => {
     if (!payment) {
       const subscription = await prisma.premiumSubscription.findFirst({ where: { gatewayReference: reference } });
 
-      if (subscription && type === 'payment.succeeded' && subscription.status !== 'PAGA') {
-        const claim = await prisma.premiumSubscription.updateMany({
-          where: { id: subscription.id, status: { not: 'PAGA' } },
-          data: { status: 'PAGA', paidAt: new Date() }
+      if (subscription && type === 'payment.succeeded' && subscription.status === 'PROCESSANDO') {
+        // O "claim" (status PAGA) e a activação Premium têm de acontecer na
+        // MESMA transacção: se ficassem separados e activateOrExtend
+        // falhasse depois do claim, o pagamento ficaria marcado como PAGA
+        // sem o utilizador ter recebido o Premium (cliente pagou, não
+        // recebeu). O updateMany condicional (`status: { not: 'PAGA' } }`)
+        // dentro da transacção continua a garantir que webhooks duplicados/
+        // concorrentes só processam a activação uma vez.
+        const periodEnd = await prisma.$transaction(async (tx) => {
+          const claim = await tx.premiumSubscription.updateMany({
+            where: { id: subscription.id, status: 'PROCESSANDO' },
+            data: { status: 'PAGA', paidAt: new Date() }
+          });
+          if (claim.count === 0) return null;
+
+          const end = await premiumService.activateOrExtend(tx, subscription.userId);
+          await tx.premiumSubscription.update({
+            where: { id: subscription.id },
+            data: { periodEnd: end, periodStart: new Date() }
+          });
+          return end;
         });
 
-        if (claim.count > 0) {
-          const periodEnd = await prisma.$transaction(async (tx) => {
-            const end = await premiumService.activateOrExtend(tx, subscription.userId);
-            await tx.premiumSubscription.update({
-              where: { id: subscription.id },
-              data: { periodEnd: end, periodStart: new Date() }
-            });
-            return end;
-          });
-
+        if (periodEnd) {
           notifSvc.push(subscription.userId, {
             type: 'SUCCESS', title: 'Conta Premium activada! ⭐',
             message: `Pagamento de ${subscription.amount.toLocaleString('pt-MZ')} MT confirmado. Premium válido até ${periodEnd.toLocaleDateString('pt-MZ')}.`,
@@ -314,7 +327,7 @@ const zumboPayWebhook = async (req, res) => {
         }
       }
 
-      if (subscription && type === 'payment.failed' && subscription.status !== 'PAGA') {
+      if (subscription && type === 'payment.failed' && subscription.status === 'PROCESSANDO') {
         await prisma.premiumSubscription.update({
           where: { id: subscription.id },
           data: { status: 'FALHADA', failReason: event?.data?.message || 'Pagamento falhou.' }
@@ -329,41 +342,46 @@ const zumboPayWebhook = async (req, res) => {
       return res.status(200).json({ received: true });
     }
 
-    if (payment && type === 'payment.succeeded' && payment.status !== 'PAGA') {
+    if (payment && type === 'payment.succeeded' && payment.status === 'PROCESSANDO') {
       const platformAdmin = await walletService.getPlatformAdmin(prisma);
 
-      // Reclama este pagamento de forma atómica: só prossegue se o status
-      // ainda não for 'PAGA' neste preciso momento. Gateways de pagamento
-      // costumam reenviar o mesmo webhook (garantia "at-least-once") ou
-      // podem chegar duas entregas em paralelo — sem isto, a comissão
-      // seria creditada duas vezes ao admin da plataforma.
-      const claim = await prisma.commissionPayment.updateMany({
-        where: { id: payment.id, status: { not: 'PAGA' } },
-        data: { status: 'PAGA', paidAt: new Date() }
+      // O claim (status PAGA) e os efeitos financeiros (crédito ao admin +
+      // atualização de pendingFees/paidFees) têm de acontecer na MESMA
+      // transacção. Antes, o claim (updateMany) corria fora da transacção:
+      // se o crédito falhasse depois, o pagamento ficava marcado como PAGA
+      // sem o dinheiro ter sido efetivamente movimentado — inconsistência
+      // financeira. O `where: { status: { not: 'PAGA' } }` dentro da
+      // transacção continua a garantir que webhooks duplicados/concorrentes
+      // (entrega "at-least-once" do gateway) só processam uma vez.
+      const claimed = await prisma.$transaction(async (tx) => {
+        const claim = await tx.commissionPayment.updateMany({
+          where: { id: payment.id, status: 'PROCESSANDO' },
+          data: { status: 'PAGA', paidAt: new Date() }
+        });
+        if (claim.count === 0) return false;
+
+        await walletService.credit(tx, {
+          userId: platformAdmin.id,
+          amount: payment.amount,
+          type: 'CREDITO_COMISSAO',
+          description: `Contribuição recebida via ZumboPay (${payment.gatewayChannel || 'mobile money'}) — ref ${reference}`,
+          referenceType: 'COMMISSION',
+          referenceId: payment.bazarId
+        });
+        // Decrementa só o valor efectivamente pago, nunca zera tudo:
+        // entre o STK push ser iniciado e o webhook confirmar (pode
+        // demorar minutos), o vendedor pode ter recebido novas
+        // encomendas ENTREGUE que aumentaram pendingFees. Um `pendingFees:
+        // 0` aqui apagaria essas taxas novas de graça — o mesmo
+        // raciocínio do "claim" atómico usado no caminho WALLET acima.
+        await tx.bazar.update({
+          where: { id: payment.bazarId },
+          data: { paidFees: { increment: payment.amount }, pendingFees: { decrement: payment.amount } }
+        });
+        return true;
       });
 
-      if (claim.count > 0) {
-        await prisma.$transaction(async (tx) => {
-          await walletService.credit(tx, {
-            userId: platformAdmin.id,
-            amount: payment.amount,
-            type: 'CREDITO_COMISSAO',
-            description: `Contribuição recebida via ZumboPay (${payment.gatewayChannel || 'mobile money'}) — ref ${reference}`,
-            referenceType: 'COMMISSION',
-            referenceId: payment.bazarId
-          });
-          // Decrementa só o valor efectivamente pago, nunca zera tudo:
-          // entre o STK push ser iniciado e o webhook confirmar (pode
-          // demorar minutos), o vendedor pode ter recebido novas
-          // encomendas ENTREGUE que aumentaram pendingFees. Um `pendingFees:
-          // 0` aqui apagaria essas taxas novas de graça — o mesmo
-          // raciocínio do "claim" atómico usado no caminho WALLET acima.
-          await tx.bazar.update({
-            where: { id: payment.bazarId },
-            data: { paidFees: { increment: payment.amount }, pendingFees: { decrement: payment.amount } }
-          });
-        });
-
+      if (claimed) {
         notifSvc.push(payment.sellerId, {
           type: 'SUCCESS', title: 'Contribuição paga',
           message: `Pagamento de ${payment.amount.toLocaleString('pt-MZ')} MT confirmado via M-Pesa/e-Mola.`,
@@ -372,7 +390,7 @@ const zumboPayWebhook = async (req, res) => {
       }
     }
 
-    if (payment && type === 'payment.failed' && payment.status !== 'PAGA') {
+    if (payment && type === 'payment.failed' && payment.status === 'PROCESSANDO') {
       await prisma.commissionPayment.update({
         where: { id: payment.id },
         data: { status: 'FALHADA', failReason: event?.data?.message || 'Pagamento falhou.' }

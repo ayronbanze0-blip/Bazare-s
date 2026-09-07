@@ -8,6 +8,7 @@ const emailSvc = require('../services/emailService');
 const logger = require('../utils/logger');
 
 const prisma = require('../config/database');
+const { deleteUserData } = require('../services/accountDeletionService');
 
 // ─── Platform overview ────────────────────────────────────────────
 const overview = async (req, res) => {
@@ -165,12 +166,26 @@ const messageUser = async (req, res) => {
 };
 
 // ─── Broadcast to role ──────────────────────────────────────────────
+const VALID_BROADCAST_ROLES = ['all', 'BUYER', 'SELLER', 'REVENDEDOR', 'ADMIN'];
+const VALID_NOTIFICATION_TYPES = ['INFO', 'SUCCESS', 'WARNING', 'ERROR', 'ORDER', 'CHAT', 'REVIEW', 'SYSTEM', 'SOCIAL'];
+
 const broadcast = async (req, res) => {
   try {
     const { role, message, type = 'INFO' } = req.body;
     if (!message) return badRequest(res, 'Mensagem obrigatória.');
 
-    const where = role && role !== 'all' ? { role: role.toUpperCase(), active: true } : { active: true };
+    // Validação contra os enums reais — antes um `role`/`type` inválido
+    // (ex: erro de digitação no painel admin) chegava directo ao Prisma
+    // e rebentava com 500, em vez de um erro claro de pedido inválido.
+    const normalizedRole = role ? role.toUpperCase() : 'all';
+    if (!VALID_BROADCAST_ROLES.map(r => r.toUpperCase()).includes(normalizedRole)) {
+      return badRequest(res, `Role inválido. Use um de: ${VALID_BROADCAST_ROLES.join(', ')}.`);
+    }
+    if (!VALID_NOTIFICATION_TYPES.includes(type)) {
+      return badRequest(res, `Tipo de notificação inválido. Use um de: ${VALID_NOTIFICATION_TYPES.join(', ')}.`);
+    }
+
+    const where = normalizedRole !== 'ALL' ? { role: normalizedRole, active: true } : { active: true };
     const users = await prisma.user.findMany({ where, select: { id: true } });
 
     await Promise.all(users.map(u => notifSvc.push(u.id, { type, title: 'Aviso da plataforma', message })));
@@ -373,42 +388,25 @@ const toggleFeatured = async (req, res) => {
 };
 
 // ─── Delete user permanently ──────────────────────────────────────
-// O schema já faz cascade automático para Bazar→Product→CartItem/Favorite,
-// Wallet→WalletTransaction, Chat→Message, Thumb e RefreshToken ao apagar o
-// User. Mas Order (buyer/seller), Review e Transaction referenciam o User
-// sem cascade — se não forem tratados à mão primeiro, o delete falha com
-// violação de foreign key. Por isso: 1) apaga Reviews das encomendas do
-// utilizador, 2) desliga (orderId=null) as Transactions dessas encomendas
-// para não apagar o histórico financeiro da OUTRA parte, 3) apaga as
-// Orders, 4) apaga as Transactions do próprio utilizador, 5) apaga
-// RevendedorInvites não usados criados por ele, e só depois 6) apaga o User.
+// Reutiliza exactamente a mesma lógica de limpeza do self-delete
+// (accountDeletionService.deleteUserData) — antes, este endpoint de
+// admin só tratava Order/Review/Transaction/RevendedorInvite, um
+// subconjunto muito menor do que o self-delete, o que fazia algumas
+// contas serem elimináveis por um caminho mas não pelo outro.
 const deleteUser = async (req, res) => {
   try {
     const user = await prisma.user.findUnique({ where: { id: req.params.id } });
     if (!user) return notFound(res);
     if (user.role === 'ADMIN') return badRequest(res, 'Não é possível eliminar um administrador.');
 
-    const orders = await prisma.order.findMany({
-      where: { OR: [{ buyerId: user.id }, { sellerId: user.id }] },
-      select: { id: true }
-    });
-    const orderIds = orders.map(o => o.id);
-
-    await prisma.$transaction([
-      prisma.review.deleteMany({ where: { orderId: { in: orderIds } } }),
-      prisma.transaction.updateMany({ where: { orderId: { in: orderIds } }, data: { orderId: null } }),
-      prisma.order.deleteMany({ where: { id: { in: orderIds } } }),
-      prisma.transaction.deleteMany({ where: { sellerId: user.id } }),
-      prisma.revendedorInvite.deleteMany({ where: { createdById: user.id, used: false } }),
-      prisma.user.delete({ where: { id: user.id } })
-    ]);
+    await prisma.$transaction((tx) => deleteUserData(tx, user.id));
 
     logger.info(`[Admin] User deleted: ${user.email} (${user.id}) by ${req.user.email}`);
     return ok(res, {}, 'Conta eliminada definitivamente.');
   } catch (err) {
     if (err.code === 'P2003') {
       logger.error(`[Admin.deleteUser] FK constraint: ${err.message}`);
-      return conflict(res, 'Não foi possível eliminar: existem dados associados que ainda não podem ser removidos (ex: convites de revendedor já usados).');
+      return conflict(res, 'Não foi possível eliminar: existem dados associados que ainda não podem ser removidos.');
     }
     logger.error(`[Admin.deleteUser] ${err.message}`);
     return serverError(res);

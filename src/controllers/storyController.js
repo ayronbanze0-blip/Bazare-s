@@ -19,9 +19,19 @@ const resolveBazar = (idOrSlug) =>
 // (já vistas por este utilizador).
 const list = async (req, res) => {
   try {
+    // Limites de segurança: no máximo MAX_BAZAR_GROUPS bazares com
+    // histórias, e no máximo MAX_STORIES_PER_BAZAR por bazar. Antes
+    // disto, a query carregava TODAS as stories das últimas 24h de
+    // uma vez — com muitos vendedores activos isto crescia para uma
+    // query e payload enormes. Não é paginação "verdadeira" (a barra
+    // de stories não pagina como um feed), mas limita o pior caso.
+    const MAX_STORIES_PER_BAZAR = 20;
+    const MAX_BAZAR_GROUPS = 60;
+
     const stories = await prisma.story.findMany({
       where: { expiresAt: { gt: new Date() } },
       orderBy: { createdAt: 'desc' },
+      take: MAX_BAZAR_GROUPS * MAX_STORIES_PER_BAZAR,
       include: {
         bazar: { select: { id: true, name: true, slug: true, logoUrl: true } },
         seller: { select: { id: true, name: true, isPremium: true } },
@@ -35,12 +45,15 @@ const list = async (req, res) => {
       const key = s.bazarId;
       if (!byBazar.has(key)) byBazar.set(key, { bazar: s.bazar, seller: s.seller, stories: [], hasUnseen: false });
       const group = byBazar.get(key);
+      if (group.stories.length >= MAX_STORIES_PER_BAZAR) continue;
       const seen = req.user ? (s.views?.length > 0) : false;
       group.stories.push({ id: s.id, imageUrl: s.imageUrl, videoUrl: s.videoUrl, text: s.text, product: s.product, createdAt: s.createdAt, expiresAt: s.expiresAt, seen });
       if (!seen) group.hasUnseen = true;
     }
     // Bazares com história por ver aparecem primeiro (como no Instagram).
-    const groups = [...byBazar.values()].sort((a, b) => (b.hasUnseen - a.hasUnseen));
+    const groups = [...byBazar.values()]
+      .sort((a, b) => (b.hasUnseen - a.hasUnseen))
+      .slice(0, MAX_BAZAR_GROUPS);
 
     return ok(res, { groups });
   } catch (err) {
@@ -55,6 +68,10 @@ const create = async (req, res) => {
     const bazar = await resolveBazar(req.params.idOrSlug);
     if (!bazar) return notFound(res, 'Bazar não encontrado.');
     if (bazar.sellerId !== req.user.id) return forbidden(res);
+    // Mesma verificação aplicada em Product.create — um vendedor suspenso
+    // (bazar.active=false) não deve poder publicar novo conteúdo só
+    // porque o access token ainda não expirou.
+    if (!bazar.active) return forbidden(res, 'O seu Bazar está inactivo.');
 
     // Uma história é imagem OU vídeo — nunca ambos. O vídeo já vem
     // editado e processado pelo editor de vídeo (Fase 3): em vez de
@@ -77,6 +94,21 @@ const create = async (req, res) => {
       const job = await prisma.videoJob.findUnique({ where: { id: jobId } });
       if (!job || job.userId !== req.user.id) return badRequest(res, 'Vídeo processado não encontrado.');
       if (job.status !== 'DONE') return badRequest(res, 'O vídeo ainda está a ser processado. Aguarda a conclusão antes de publicar.');
+      // Um job de vídeo pertence a UM destino (stories OU reels), definido
+      // quando foi pedido o processamento — sem esta verificação, um vídeo
+      // editado para Reel podia ser publicado como Story (ou vice-versa).
+      if (job.targetFolder !== 'bazares/stories') {
+        return badRequest(res, 'Este vídeo foi processado para outro destino (Reel), não para Stories.');
+      }
+      // Claim atómico: um VideoJob só pode ser consumido UMA vez. Sem isto,
+      // o mesmo `processedVideoJobId` podia ser reenviado (duplo clique,
+      // ou reutilização deliberada) e publicar o mesmo vídeo repetidamente.
+      const claim = await prisma.videoJob.updateMany({
+        where: { id: jobId, consumedAt: null },
+        data: { consumedAt: new Date() }
+      });
+      if (claim.count === 0) return badRequest(res, 'Este vídeo já foi publicado antes. Processa um novo vídeo.');
+
       videoUrl = job.resultUrl; videoPublicId = job.resultPublicId;
       thumbnailUrl = job.thumbnailUrl; thumbnailPublicId = job.thumbnailPublicId;
       videoDurationSec = job.durationSec;

@@ -25,30 +25,54 @@ const KNOWN_EVENTS = new Set([
 const MAX_BATCH = 50;          // um pouco acima do MAX_BATCH do frontend (20), por segurança
 const MAX_STRING_LEN = 500;    // corta strings anormalmente grandes (URLs/referrers exóticos)
 const MAX_PROPERTIES_KEYS = 40;
+const MAX_NESTED_KEYS = 10;    // limite para o 1º nível de um objecto aninhado
 
 function clampString(v) {
   if (typeof v !== 'string') return null;
   return v.length > MAX_STRING_LEN ? v.slice(0, MAX_STRING_LEN) : v;
 }
 
-// Sanitiza `properties`: só tipos simples (string/number/boolean/null),
-// nada de objectos aninhados profundos ou arrays gigantes — isto é
-// telemetria, não um lugar para guardar documentos.
+// Sanitiza um valor "raso" (sem descer mais um nível) — usado tanto
+// para as properties de topo como para o único nível de aninhamento
+// que se permite.
+function sanitizeShallow(val) {
+  if (val === null || typeof val === 'number' || typeof val === 'boolean') return val;
+  if (typeof val === 'string') return clampString(val);
+  if (Array.isArray(val)) return val.slice(0, 20).map((v) => (typeof v === 'string' ? clampString(v) : (typeof v === 'object' && v !== null ? undefined : v))).filter((v) => v !== undefined);
+  return undefined; // objectos/funções mais fundos são descartados, não guardados
+}
+
+// Sanitiza `properties`: só tipos simples (string/number/boolean/null)
+// e, no máximo, UM nível de objecto aninhado (também só com tipos
+// simples lá dentro) — isto é telemetria, não um lugar para guardar
+// documentos arbitrários. Antes disto, o comentário dizia "nada de
+// objectos aninhados profundos" mas o código guardava o objecto
+// completo tal e qual (`out[key] = val`), sem limite de profundidade
+// nem de tamanho — um payload measuredamente grande/aninhado passava
+// sem problema pelos 2MB do body e pelas 40 chaves de topo.
 function sanitizeProperties(props) {
   if (!props || typeof props !== 'object' || Array.isArray(props)) return {};
   const out = {};
   let count = 0;
   for (const [key, val] of Object.entries(props)) {
     if (count >= MAX_PROPERTIES_KEYS) break;
-    if (val === null || typeof val === 'number' || typeof val === 'boolean') {
-      out[key] = val;
-    } else if (typeof val === 'string') {
-      out[key] = clampString(val);
-    } else if (Array.isArray(val)) {
-      out[key] = val.slice(0, 20).map((v) => (typeof v === 'string' ? clampString(v) : v));
+    if (val !== null && typeof val === 'object' && !Array.isArray(val)) {
+      // Objecto aninhado: mantém só o 1º nível, com no máximo
+      // MAX_NESTED_KEYS chaves, e cada valor tem de ser ele próprio
+      // simples (nunca outro objecto/array dentro deste).
+      const nested = {};
+      let nestedCount = 0;
+      for (const [nk, nv] of Object.entries(val)) {
+        if (nestedCount >= MAX_NESTED_KEYS) break;
+        if (nv !== null && typeof nv === 'object') continue; // descarta 3º nível em diante
+        const sanitizedNv = sanitizeShallow(nv);
+        if (sanitizedNv !== undefined) nested[nk] = sanitizedNv;
+        nestedCount++;
+      }
+      out[key] = nested;
     } else {
-      // objecto aninhado — mantém, mas raso (não recursa mais fundo)
-      out[key] = val;
+      const sanitizedVal = sanitizeShallow(val);
+      if (sanitizedVal !== undefined) out[key] = sanitizedVal;
     }
     count++;
   }
@@ -134,7 +158,12 @@ exports.routesHealth = async (req, res) => {
         event,
         COUNT(*)::int AS count,
         COUNT(DISTINCT COALESCE("userId", "anonId"))::int AS affected_users,
-        AVG((properties->>'duration_ms')::numeric)::int AS avg_duration_ms
+        AVG(
+          CASE WHEN properties->>'duration_ms' ~ '^[0-9]+(\.[0-9]+)?$'
+               THEN (properties->>'duration_ms')::numeric
+               ELSE NULL
+          END
+        )::int AS avg_duration_ms
       FROM "AnalyticsEvent"
       WHERE event IN ('api_error', 'api_slow')
         AND "receivedAt" >= ${since}

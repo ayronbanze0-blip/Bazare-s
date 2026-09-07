@@ -6,6 +6,7 @@ const { sanitize, paginate, paginateMeta } = require('../utils/helpers');
 const commentService = require('../services/commentService');
 const notifSvc = require('../services/notificationService');
 const mentionSvc = require('../services/mentionService');
+const blockSvc = require('../services/blockService');
 const logger = require('../utils/logger');
 const prisma = require('../config/database');
 
@@ -33,6 +34,12 @@ const create = async (req, res) => {
   try {
     const product = await prisma.product.findUnique({ where: { id: req.params.id }, select: { id: true, name: true, slug: true, bazar: { select: { sellerId: true } } } });
     if (!product) return notFound(res, 'Produto não encontrado.');
+
+    // Impede comentar em produtos de alguém que bloqueaste (ou que te
+    // bloqueou) — consistente com a mesma regra já aplicada em chats.
+    if (product.bazar?.sellerId && await blockSvc.isBlockedEither(req.user.id, product.bazar.sellerId)) {
+      return forbidden(res, 'Não é possível comentar neste conteúdo.');
+    }
 
     let parentId = null;
     let parentAuthorId = null;

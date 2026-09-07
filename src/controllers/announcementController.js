@@ -16,6 +16,7 @@ const list = async (req, res) => {
   try {
     const bazar = await resolveBazar(req.params.idOrSlug);
     if (!bazar) return notFound(res, 'Bazar não encontrado.');
+    if (!bazar.active) return notFound(res, 'Bazar não encontrado.');
 
     const { page = 1, limit = 20 } = req.query;
     const { take, skip } = paginate(page, limit);
@@ -72,6 +73,7 @@ const create = async (req, res) => {
     const bazar = await resolveBazar(req.params.idOrSlug);
     if (!bazar) return notFound(res, 'Bazar não encontrado.');
     if (bazar.sellerId !== req.user.id) return forbidden(res);
+    if (!bazar.active) return forbidden(res, 'O seu Bazar está inactivo.');
 
     const text = sanitize(req.body.text || '');
     if (!text || text.length < 3) return badRequest(res, 'Escreva algo para publicar.');
@@ -161,8 +163,8 @@ const update = async (req, res) => {
     }
 
     let imageUploadErrors = [];
+    let keepIds = null;
     if (req.body.keepImageIds !== undefined) {
-      let keepIds = [];
       try { keepIds = JSON.parse(req.body.keepImageIds); } catch (_) { keepIds = []; }
       if (!Array.isArray(keepIds)) keepIds = [];
 
@@ -171,27 +173,41 @@ const update = async (req, res) => {
         await prisma.announcementImage.deleteMany({ where: { id: { in: toRemove.map(i => i.id) } } });
         toRemove.forEach(img => { if (img.publicId) uploadSvc.deleteFromCloud(img.publicId).catch(() => {}); });
       }
-      // Reordena as que ficaram, respeitando a ordem enviada.
+      // Reordena as que ficaram, respeitando a ordem enviada. `updateMany`
+      // com `announcementId: announcement.id` no where garante que um
+      // imageId de OUTRO anúncio (adivinhado/copiado por outro vendedor)
+      // nunca é alterado por este pedido — antes usava `update({where:{id}})`
+      // sem esse âmbito, o que permitia mexer no `order` de imagens alheias.
       await Promise.all(keepIds.map((id, i) =>
-        prisma.announcementImage.update({ where: { id }, data: { order: i } }).catch(() => {})
+        prisma.announcementImage.updateMany({
+          where: { id, announcementId: announcement.id },
+          data: { order: i }
+        }).catch(() => {})
       ));
+    }
 
-      if (req.files && req.files.length > 0) {
-        const total = keepIds.length + req.files.length;
-        if (total > 6) return badRequest(res, 'Máximo de 6 fotos por anúncio.');
-        const uploadResults = await uploadSvc.uploadMany(req.files, 'bazares/announcements');
-        const validImages = uploadResults.filter(r => r.ok);
-        imageUploadErrors = uploadResults.filter(r => !r.ok).map(r => r.error);
-        if (validImages.length > 0) {
-          await prisma.announcementImage.createMany({
-            data: validImages.map((r, i) => ({
-              announcementId: announcement.id,
-              url: r.url,
-              publicId: r.publicId,
-              order: keepIds.length + i
-            }))
-          });
-        }
+    // Processa novas imagens SEMPRE que vierem no pedido — antes só
+    // acontecia dentro do `if (keepImageIds !== undefined)`, por isso
+    // enviar novas fotos sem enviar keepImageIds fazia o Multer receber
+    // os ficheiros e o backend simplesmente ignorá-los (nunca chegavam
+    // ao Cloudinary/BD). uploadToCloud/uploadMany já apagam o ficheiro
+    // temporário do disco depois do upload (sucesso ou falha).
+    if (req.files && req.files.length > 0) {
+      const currentCount = keepIds !== null ? keepIds.length : announcement.images.length;
+      const total = currentCount + req.files.length;
+      if (total > 6) return badRequest(res, 'Máximo de 6 fotos por anúncio.');
+      const uploadResults = await uploadSvc.uploadMany(req.files, 'bazares/announcements');
+      const validImages = uploadResults.filter(r => r.ok);
+      imageUploadErrors = uploadResults.filter(r => !r.ok).map(r => r.error);
+      if (validImages.length > 0) {
+        await prisma.announcementImage.createMany({
+          data: validImages.map((r, i) => ({
+            announcementId: announcement.id,
+            url: r.url,
+            publicId: r.publicId,
+            order: currentCount + i
+          }))
+        });
       }
     }
 

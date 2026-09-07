@@ -254,15 +254,23 @@ const myBazar = async (req, res) => {
   }
 };
 
+const { shouldCount } = require('../utils/dedupWindow');
+
 // ─── POST /api/bazars/:idOrSlug/whatsapp-click ─────────────────────
 // Fire-and-forget, sem auth: conta cliques no botão "Contactar via
 // WhatsApp" para alimentar a estatística de contactos (Conta Premium).
 const trackWhatsappClick = async (req, res) => {
   try {
-    await prisma.bazar.updateMany({
-      where: { OR: [{ id: req.params.idOrSlug }, { slug: req.params.idOrSlug }] },
-      data: { whatsappClicks: { increment: 1 } }
-    });
+    // Deduplica por (utilizador OU IP) + bazar durante 5 min — sem rate
+    // limit nem deduplicação, um bot podia inflacionar `whatsappClicks`
+    // à vontade (métrica usada nos analytics Premium).
+    const key = req.user?.id || req.ip;
+    if (shouldCount('whatsapp-click', key, req.params.idOrSlug, 5 * 60 * 1000)) {
+      await prisma.bazar.updateMany({
+        where: { OR: [{ id: req.params.idOrSlug }, { slug: req.params.idOrSlug }] },
+        data: { whatsappClicks: { increment: 1 } }
+      });
+    }
   } catch (err) {
     logger.error(`[Bazar.trackWhatsappClick] ${err.message}`);
   }
@@ -285,12 +293,25 @@ const toggleFollow = async (req, res) => {
 
     let following;
     if (existing) {
-      await prisma.follow.delete({ where: { id: existing.id } });
+      try {
+        await prisma.follow.delete({ where: { id: existing.id } });
+      } catch (err) {
+        // P2025 = já não existia (outro pedido concorrente já o apagou) —
+        // não é um erro real, o resultado desejado (não seguir) já foi
+        // alcançado por essa outra chamada.
+        if (err.code !== 'P2025') throw err;
+      }
       following = false;
     } else {
-      await prisma.follow.create({ data: { userId: req.user.id, bazarId: bazar.id } });
+      try {
+        await prisma.follow.create({ data: { userId: req.user.id, bazarId: bazar.id } });
+      notifSvc.newFollower(bazar.sellerId, req.user.name, bazar.id, req.user.id).catch(() => {});
+      } catch (err) {
+        // P2002 = já existia (dois cliques rápidos criaram uma corrida) —
+        // idempotente: o resultado final continua a ser "a seguir".
+        if (err.code !== 'P2002') throw err;
+      }
       following = true;
-      notifSvc.newFollower(bazar.sellerId, req.user.name, bazar.id).catch(() => {});
     }
 
     const followerCount = await prisma.follow.count({ where: { bazarId: bazar.id } });
@@ -352,7 +373,10 @@ const ranking = async (req, res) => {
 
     const sellerIds = grouped.map(g => g.sellerId);
     const sellers = await prisma.user.findMany({
-      where: { id: { in: sellerIds } },
+      // Um vendedor suspenso (active=false) ou com bazar desactivado não
+      // deve aparecer no ranking público, mesmo que tenha tido encomendas
+      // ENTREGUE antes de ser suspenso.
+      where: { id: { in: sellerIds }, active: true, bazar: { active: true } },
       select: {
         id: true, name: true, verifiedSeller: true,
         bazar: { select: { id: true, name: true, slug: true, logoUrl: true } }

@@ -7,6 +7,7 @@ const { uploadAvatar, uploadBazarBanner } = require('../services/uploadService')
 const walletService = require('../services/walletService');
 const logger = require('../utils/logger');
 const prisma = require('../config/database');
+const { deleteUserData } = require('../services/accountDeletionService');
 
 // ─── GET /api/users/me/stats ──────────────────────────────────────
 // Dashboard stats do utilizador autenticado (comprador ou vendedor).
@@ -197,39 +198,54 @@ const sendThumb = async (req, res) => {
     if (!['up', 'down'].includes(thumb)) return badRequest(res, 'Voto inválido.');
     if (sellerId === req.user.id) return badRequest(res, 'Não pode votar em si próprio.');
 
-    const seller = await prisma.user.findUnique({ where: { id: sellerId }, select: { id: true } });
-    if (!seller) return notFound(res, 'Utilizador não encontrado.');
-
-    const vote = thumb === 'up' ? 'UP' : 'DOWN';
-    const existing = await prisma.sellerThumbVote.findUnique({
-      where: { voterId_sellerId: { voterId: req.user.id, sellerId } }
+    // Só faz sentido votar em vendedores (com um Bazar) — antes disto
+    // qualquer utilizador podia receber thumbs up/down (compradores,
+    // admins, revendedores sem loja).
+    const seller = await prisma.user.findUnique({
+      where: { id: sellerId },
+      select: { id: true, role: true, bazar: { select: { id: true } } }
     });
-
-    const inc = { thumbsUp: 0, thumbsDown: 0 };
-    let myVote = vote.toLowerCase();
-
-    if (!existing) {
-      await prisma.sellerThumbVote.create({ data: { voterId: req.user.id, sellerId, vote } });
-      inc[vote === 'UP' ? 'thumbsUp' : 'thumbsDown'] = 1;
-    } else if (existing.vote === vote) {
-      // Mesmo voto de novo — remove (toggle off)
-      await prisma.sellerThumbVote.delete({ where: { id: existing.id } });
-      inc[vote === 'UP' ? 'thumbsUp' : 'thumbsDown'] = -1;
-      myVote = null;
-    } else {
-      // Voto oposto — troca
-      await prisma.sellerThumbVote.update({ where: { id: existing.id }, data: { vote } });
-      inc[existing.vote === 'UP' ? 'thumbsUp' : 'thumbsDown'] = -1;
-      inc[vote === 'UP' ? 'thumbsUp' : 'thumbsDown'] = 1;
+    if (!seller) return notFound(res, 'Utilizador não encontrado.');
+    if (seller.role !== 'SELLER' || !seller.bazar) {
+      return badRequest(res, 'Só é possível votar em vendedores com loja activa.');
     }
 
-    const updated = await prisma.user.update({
-      where: { id: sellerId },
-      data: { thumbsUp: { increment: inc.thumbsUp }, thumbsDown: { increment: inc.thumbsDown } },
-      select: { thumbsUp: true, thumbsDown: true }
+    const vote = thumb === 'up' ? 'UP' : 'DOWN';
+    let myVote = vote.toLowerCase();
+    let result;
+
+    // Voto + contadores agregados no User têm de mudar juntos — antes
+    // corriam como chamadas separadas fora de transacção, o que podia
+    // deixar SellerThumbVote e User.thumbsUp/thumbsDown dessincronizados
+    // sob pedidos concorrentes.
+    await prisma.$transaction(async (tx) => {
+      const existing = await tx.sellerThumbVote.findUnique({
+        where: { voterId_sellerId: { voterId: req.user.id, sellerId } }
+      });
+
+      const inc = { thumbsUp: 0, thumbsDown: 0 };
+
+      if (!existing) {
+        await tx.sellerThumbVote.create({ data: { voterId: req.user.id, sellerId, vote } });
+        inc[vote === 'UP' ? 'thumbsUp' : 'thumbsDown'] = 1;
+      } else if (existing.vote === vote) {
+        await tx.sellerThumbVote.delete({ where: { id: existing.id } });
+        inc[vote === 'UP' ? 'thumbsUp' : 'thumbsDown'] = -1;
+        myVote = null;
+      } else {
+        await tx.sellerThumbVote.update({ where: { id: existing.id }, data: { vote } });
+        inc[existing.vote === 'UP' ? 'thumbsUp' : 'thumbsDown'] = -1;
+        inc[vote === 'UP' ? 'thumbsUp' : 'thumbsDown'] = 1;
+      }
+
+      result = await tx.user.update({
+        where: { id: sellerId },
+        data: { thumbsUp: { increment: inc.thumbsUp }, thumbsDown: { increment: inc.thumbsDown } },
+        select: { thumbsUp: true, thumbsDown: true }
+      });
     });
 
-    return ok(res, { thumbsUp: updated.thumbsUp, thumbsDown: updated.thumbsDown, myVote });
+    return ok(res, { thumbsUp: result.thumbsUp, thumbsDown: result.thumbsDown, myVote });
   } catch (err) {
     logger.error(`[Users.sendThumb] ${err.message}`);
     return serverError(res);
@@ -244,59 +260,9 @@ const deleteAccount = async (req, res) => {
     if (!user) return notFound(res, 'Utilizador não encontrado.');
     if (user.role === 'ADMIN') return badRequest(res, 'Contas de administrador não podem ser eliminadas por aqui.');
 
-    const bazar = await prisma.bazar.findUnique({ where: { sellerId: userId } });
-    const productIds = bazar
-      ? (await prisma.product.findMany({ where: { bazarId: bazar.id }, select: { id: true } })).map(p => p.id)
-      : [];
-    const orderIds = (await prisma.order.findMany({
-      where: { OR: [{ buyerId: userId }, { sellerId: userId }] },
-      select: { id: true }
-    })).map(o => o.id);
-
-    await prisma.$transaction(async (tx) => {
-      const chats = await tx.chat.findMany({
-        where: { OR: [{ userAId: userId }, { userBId: userId }] },
-        select: { id: true }
-      });
-      const chatIds = chats.map(c => c.id);
-      if (chatIds.length) await tx.message.deleteMany({ where: { chatId: { in: chatIds } } });
-      await tx.message.deleteMany({ where: { senderId: userId } });
-      if (chatIds.length) await tx.chat.deleteMany({ where: { id: { in: chatIds } } });
-
-      await tx.notification.deleteMany({ where: { userId } });
-      await tx.favorite.deleteMany({ where: { userId } });
-      await tx.cartItem.deleteMany({ where: { userId } });
-      await tx.refreshToken.deleteMany({ where: { userId } });
-      await tx.verificationCode.deleteMany({ where: { userId } });
-      await tx.loginAttempt.updateMany({ where: { userId }, data: { userId: null } });
-      await tx.report.deleteMany({ where: { OR: [{ reporterId: userId }, { targetUserId: userId }] } });
-
-      if (orderIds.length) {
-        await tx.review.deleteMany({ where: { orderId: { in: orderIds } } });
-        await tx.transaction.deleteMany({ where: { orderId: { in: orderIds } } });
-        await tx.orderItem.deleteMany({ where: { orderId: { in: orderIds } } });
-        await tx.order.deleteMany({ where: { id: { in: orderIds } } });
-      }
-      await tx.review.deleteMany({ where: { sellerId: userId } });
-
-      if (productIds.length) {
-        await tx.report.deleteMany({ where: { targetProductId: { in: productIds } } });
-        await tx.review.deleteMany({ where: { productId: { in: productIds } } });
-        await tx.favorite.deleteMany({ where: { productId: { in: productIds } } });
-        await tx.cartItem.deleteMany({ where: { productId: { in: productIds } } });
-        await tx.orderItem.deleteMany({ where: { productId: { in: productIds } } });
-        await tx.productImage.deleteMany({ where: { productId: { in: productIds } } });
-        await tx.product.deleteMany({ where: { id: { in: productIds } } });
-      }
-      if (bazar) {
-        await tx.transaction.deleteMany({ where: { bazarId: bazar.id } });
-        await tx.bazar.delete({ where: { id: bazar.id } });
-      }
-
-      await tx.revendedorInvite.deleteMany({ where: { createdById: userId } });
-      await tx.user.updateMany({ where: { revendedorId: userId }, data: { revendedorId: null } });
-      await tx.user.delete({ where: { id: userId } });
-    });
+    // Lógica de limpeza partilhada com o admin (adminController.deleteUser)
+    // — ver accountDeletionService para o porquê.
+    await prisma.$transaction((tx) => deleteUserData(tx, userId));
 
     logger.info(`[Account] Deleted by self: ${user.email} (${user.role})`);
     const isProd = process.env.NODE_ENV === 'production';
