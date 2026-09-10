@@ -210,3 +210,50 @@ exports.summary = async (req, res) => {
     return serverError(res);
   }
 };
+
+// GET /api/analytics/events?event=api_error&hours=24&path=/orders&method=POST&page=1&limit=20
+// Drill-down por trás de "Ver ocorrências"/"Erros no cliente" no painel
+// de monitorização — as ocorrências em bruto (mensagem/stack para
+// client_error; rota/estado/duração para api_error e api_slow), já que
+// routesHealth só dá o agregado. Só admin, tal como os outros dois GET
+// deste ficheiro.
+exports.getEvents = async (req, res) => {
+  try {
+    const event = clampString(req.query.event);
+    if (!event || !KNOWN_EVENTS.has(event)) {
+      return badRequest(res, 'Parâmetro "event" inválido ou em falta.');
+    }
+    const hours = Math.min(parseInt(req.query.hours, 10) || 24, 24 * 365);
+    const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const path = clampString(req.query.path);
+    const method = clampString(req.query.method);
+
+    const where = {
+      event,
+      receivedAt: { gte: since },
+      ...(path && { properties: { path: ['path'], string_contains: path } }),
+      ...(method && { properties: { path: ['method'], equals: method } })
+    };
+
+    const [total, rows] = await Promise.all([
+      prisma.analyticsEvent.count({ where }),
+      prisma.analyticsEvent.findMany({
+        where,
+        orderBy: { receivedAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+        select: { id: true, event: true, properties: true, userId: true, userRole: true, page: true, receivedAt: true }
+      })
+    ]);
+
+    return ok(res, {
+      events: rows.map((r) => ({ ...r, timestamp: r.receivedAt })),
+      meta: { page, pages: Math.max(1, Math.ceil(total / limit)), total, limit }
+    });
+  } catch (err) {
+    logger.error(`[Analytics.getEvents] ${err.message}`);
+    return serverError(res);
+  }
+};

@@ -369,5 +369,24 @@ const searchMentionable = async (req, res) => {
   }
 };
 
-module.exports = { myStats, updateProfile, updateCover, changePassword, publicProfile, sendThumb, deleteAccount, onboarding, requestVerification, searchMentionable };
+// ─── GET /api/users/presence?ids=a,b,c ─────────────────────────────
+// Estado "online agora" em lote — usado para o pontinho verde em
+// listas (conversas, cartões de loja). Antes disto o pontinho era só
+// decoração estática (sempre verde, para toda a gente, mesmo offline
+// há dias) — não existia nenhuma leitura real do estado de presença
+// guardado no socket.
+const getPresence = async (req, res) => {
+  try {
+    const ids = String(req.query.ids || '').split(',').map(s => s.trim()).filter(Boolean).slice(0, 100);
+    const { isOnline } = require('../sockets/chatSocket');
+    const online = {};
+    ids.forEach(id => { online[id] = isOnline(id); });
+    return ok(res, { online });
+  } catch (err) {
+    logger.error(`[User.getPresence] ${err.message}`);
+    return serverError(res);
+  }
+};
+
+module.exports = { myStats, updateProfile, updateCover, changePassword, publicProfile, sendThumb, deleteAccount, onboarding, requestVerification, searchMentionable, getPresence };
 

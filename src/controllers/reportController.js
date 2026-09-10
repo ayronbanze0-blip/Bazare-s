@@ -27,6 +27,19 @@ const submit = async (req, res) => {
     if (type === 'PRODUCT') data.targetProductId = targetId;
     else data.targetUserId = targetId;
 
+    // Evita denúncias repetidas do mesmo alvo pela mesma pessoa enquanto
+    // a anterior ainda não foi analisada — sem isto, a mesma pessoa podia
+    // denunciar o mesmo produto/utilizador dezenas de vezes e poluir a
+    // fila de moderação sem nenhum sinal novo.
+    const duplicateWhere = {
+      reporterId: req.user.id,
+      type,
+      status: 'PENDENTE',
+      ...(type === 'PRODUCT' ? { targetProductId: targetId } : { targetUserId: targetId })
+    };
+    const alreadyPending = await prisma.report.findFirst({ where: duplicateWhere, select: { id: true } });
+    if (alreadyPending) return badRequest(res, 'Já denunciou isto anteriormente — a sua denúncia está em análise.');
+
     const report = await prisma.report.create({ data });
 
     // Notify all admins

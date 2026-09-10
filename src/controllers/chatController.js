@@ -217,7 +217,7 @@ const getMessages = async (req, res) => {
 const sendMessage = async (req, res) => {
   try {
     const { chatId } = req.params;
-    const { text } = req.body;
+    const { text, clientMessageId } = req.body;
     const hasImage = !!(req.file);
 
     if ((!text || !text.trim()) && !hasImage) return badRequest(res, 'Mensagem vazia.');
@@ -225,6 +225,19 @@ const sendMessage = async (req, res) => {
     const chat = await prisma.chat.findUnique({ where: { id: chatId } });
     if (!chat) return notFound(res, 'Conversa não encontrada.');
     if (chat.userAId !== req.user.id && chat.userBId !== req.user.id) return forbidden(res);
+
+    // Idempotência: se o cliente reenviar o mesmo pedido (timeout de rede,
+    // duplo toque em "enviar") com o mesmo clientMessageId, devolve a
+    // mensagem já criada em vez de duplicá-la.
+    if (clientMessageId) {
+      const existing = await prisma.message.findUnique({
+        where: { clientMessageId },
+        include: { sender: { select: { id: true, name: true, avatarUrl: true } } }
+      });
+      if (existing && existing.chatId === chatId) {
+        return created(res, { message: existing }, 'Mensagem enviada.');
+      }
+    }
 
     const otherPartyId = chat.userAId === req.user.id ? chat.userBId : chat.userAId;
     if (await blockSvc.isBlockedEither(req.user.id, otherPartyId)) {
@@ -240,16 +253,32 @@ const sendMessage = async (req, res) => {
       imagePublicId = uploadResult.publicId;
     }
 
-    const message = await prisma.message.create({
-      data: {
-        chatId,
-        senderId: req.user.id,
-        text: text ? sanitize(text) : '',
-        imageUrl,
-        imagePublicId
-      },
-      include: { sender: { select: { id: true, name: true, avatarUrl: true } } }
-    });
+    let message;
+    try {
+      message = await prisma.message.create({
+        data: {
+          chatId,
+          senderId: req.user.id,
+          text: text ? sanitize(text) : '',
+          imageUrl,
+          imagePublicId,
+          clientMessageId: clientMessageId || null
+        },
+        include: { sender: { select: { id: true, name: true, avatarUrl: true } } }
+      });
+    } catch (createErr) {
+      // P2002 em clientMessageId: uma corrida rara (dois pedidos com o
+      // mesmo id em simultâneo) — devolve a mensagem que venceu a corrida
+      // em vez de duplicar ou rebentar com 500.
+      if (createErr.code === 'P2002' && clientMessageId) {
+        const winner = await prisma.message.findUnique({
+          where: { clientMessageId },
+          include: { sender: { select: { id: true, name: true, avatarUrl: true } } }
+        });
+        if (winner) return created(res, { message: winner }, 'Mensagem enviada.');
+      }
+      throw createErr;
+    }
 
     await prisma.chat.update({ where: { id: chatId }, data: { updatedAt: new Date() } });
 
@@ -295,7 +324,7 @@ const sendMessage = async (req, res) => {
       })();
       }
     } else if (recipientId !== botId) {
-      notifSvc.newMessage(recipientId, req.user.name, text || '📷 Imagem');
+      notifSvc.newMessage(recipientId, req.user.name, text || '📷 Imagem', chatId);
     }
 
     return created(res, { message }, 'Mensagem enviada.');

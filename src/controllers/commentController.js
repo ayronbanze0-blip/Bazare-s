@@ -123,7 +123,13 @@ const remove = async (req, res) => {
       req.user.role === 'ADMIN';
     if (!canDelete) return forbidden(res);
 
-    await prisma.comment.delete({ where: { id: comment.id } });
+    try {
+      await prisma.comment.delete({ where: { id: comment.id } });
+    } catch (delErr) {
+      // P2025 = já foi apagado entretanto (corrida com outro pedido,
+      // ou duplo toque em "Apagar") — resultado desejado já alcançado.
+      if (delErr.code !== 'P2025') throw delErr;
+    }
     return ok(res, {}, 'Comentário removido.');
   } catch (err) {
     logger.error(`[Comments.remove] ${err.message}`);

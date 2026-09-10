@@ -48,15 +48,46 @@ const engagement = async (req, res) => {
 // misturados por data. Numa v2 isto passa a incluir também produtos
 // novos e anúncios de quem não se segue ainda (descoberta) — fica
 // preparado para isso porque já devolve targetType/targetId genéricos.
+//
+// Paginação por cursor (não por page/skip): junta duas fontes com
+// "data" diferente (featuredUntil dos produtos, createdAt dos
+// anúncios), cada uma pedida de forma independente e limitada — nunca
+// a tabela toda. Um scroll infinito com page/skip degradava-se com o
+// crescimento do feed e saltava/duplicava itens sempre que um anúncio
+// novo entrava a meio da sessão de alguém (o offset da página 2
+// deixava de apontar para onde apontava quando a pessoa viu a página
+// 1). Com cursor, cada pedido só pergunta "o que é mais antigo do que
+// o último item que já vi" — inserções novas no topo não deslocam
+// nada que já foi mostrado.
+const encodeFeedCursor = (isoDate) => Buffer.from(JSON.stringify({ s: isoDate })).toString('base64');
+const decodeFeedCursor = (raw) => {
+  try {
+    const obj = JSON.parse(Buffer.from(String(raw), 'base64').toString('utf8'));
+    const d = new Date(obj?.s);
+    return isNaN(d.getTime()) ? null : d;
+  } catch { return null; }
+};
+
 const list = async (req, res) => {
   try {
-    const { page = 1, limit = 15 } = req.query;
-    const { take, skip } = paginate(page, limit);
+    const { cursor: rawCursor, limit = 15 } = req.query;
+    const take = Math.min(Math.max(parseInt(limit, 10) || 15, 1), 50);
+    const cursorDate = rawCursor ? decodeFeedCursor(rawCursor) : null;
+    // Sobrebusca: o filtro de bloqueio acontece depois de buscar, por
+    // isso pedimos uma margem a mais de cada fonte para não devolver
+    // menos itens do que o pedido só por causa de contas bloqueadas.
+    const FETCH = take + 20;
+
+    const productWhere = { active: true, featuredUntil: { gt: new Date() } };
+    if (cursorDate) productWhere.featuredUntil.lt = cursorDate;
+    const announcementWhere = {};
+    if (cursorDate) announcementWhere.createdAt = { lt: cursorDate };
 
     const [featuredProducts, announcements] = await Promise.all([
       prisma.product.findMany({
-        where: { active: true, featuredUntil: { gt: new Date() } },
+        where: productWhere,
         orderBy: { featuredUntil: 'desc' },
+        take: FETCH,
         include: {
           images: { orderBy: { order: 'asc' }, take: 1 },
           bazar: { select: { id: true, name: true, slug: true } },
@@ -64,8 +95,9 @@ const list = async (req, res) => {
         }
       }),
       prisma.announcement.findMany({
+        where: announcementWhere,
         orderBy: { createdAt: 'desc' },
-        take: 60,
+        take: FETCH,
         include: {
           images: { orderBy: { order: 'asc' } },
           bazar: { select: { id: true, name: true, slug: true } },
@@ -75,6 +107,17 @@ const list = async (req, res) => {
         }
       })
     ]);
+
+    // Se qualquer uma das duas fontes devolveu o máximo pedido, pode
+    // haver mais dessa fonte para além do que já buscámos — usado só
+    // para decidir "hasMore", não muda o que é mostrado agora.
+    const sourceMayHaveMore = featuredProducts.length === FETCH || announcements.length === FETCH;
+    // A data mais antiga vista nesta busca (mesmo que filtrada depois
+    // por bloqueio) — serve de cursor de recurso se o filtro de
+    // bloqueio esvaziar a página toda, para o scroll não ficar preso
+    // sem conseguir avançar para além de um trecho todo bloqueado.
+    const oldestSeen = [...featuredProducts.map(p => p.featuredUntil), ...announcements.map(a => a.createdAt)]
+      .reduce((min, d) => (!min || d < min ? d : min), null);
 
     let items = [
       ...featuredProducts.map((p) => ({
@@ -99,8 +142,15 @@ const list = async (req, res) => {
       }
     }
 
-    const total = items.length;
-    items = items.slice(skip, skip + take);
+    const hasMore = items.length > take || sourceMayHaveMore;
+    items = items.slice(0, take);
+    // Cursor para o próximo pedido: normalmente a data do último item
+    // mostrado; se o bloqueio filtrou tudo desta leva mas ainda há mais
+    // para trás, usa a data mais antiga vista (mesmo filtrada) para o
+    // próximo pedido continuar a avançar em vez de repetir a mesma leva.
+    const lastDate = items.length ? items[items.length - 1].createdAt : (hasMore ? oldestSeen : null);
+    const nextCursor = lastDate ? encodeFeedCursor(lastDate) : null;
+
     items = await attachEngagement(items, req.user?.id);
 
     // Estado real do botão "Seguir" no cartão do feed — sem isto o
@@ -123,7 +173,7 @@ const list = async (req, res) => {
       }
     }
 
-    return ok(res, { items, meta: paginateMeta(total, page, limit) });
+    return ok(res, { items, meta: { hasMore, nextCursor } });
   } catch (err) {
     logger.error(`[Feed.list] ${err.message}`);
     return serverError(res);
@@ -378,11 +428,19 @@ const updateComment = async (req, res) => {
     const text = sanitize(req.body.text || '');
     if (!text) return badRequest(res, 'Escreva um comentário.');
 
-    const updated = await prisma.comment.update({
-      where: { id: comment.id },
-      data: { text, editedAt: new Date() },
-      include: { user: { select: { id: true, name: true, avatarUrl: true } } }
-    });
+    let updated;
+    try {
+      updated = await prisma.comment.update({
+        where: { id: comment.id },
+        data: { text, editedAt: new Date() },
+        include: { user: { select: { id: true, name: true, avatarUrl: true } } }
+      });
+    } catch (updErr) {
+      // Corrida rara: foi apagado (ex. pelo dono do post, a moderar)
+      // entre o findUnique acima e este update.
+      if (updErr.code === 'P2025') return notFound(res, 'Comentário não encontrado.');
+      throw updErr;
+    }
 
     const link = comment.productId ? `product.html?id=${comment.productId}`
       : comment.announcementId ? `home.html?announcement=${comment.announcementId}`
@@ -413,12 +471,23 @@ const removeComment = async (req, res) => {
         reel: { select: { sellerId: true } }
       }
     });
-    if (!comment) return notFound(res, 'Comentário não encontrado.');
+    // Já não existe (ex.: apagado por outro pedido entretanto, ou um
+    // duplo toque em "Apagar" durante a janela de "Desfazer" de 5s da
+    // app) — trata-se como sucesso, não como erro: o resultado que a
+    // pessoa queria (o comentário desaparecido) já está garantido.
+    if (!comment) return ok(res, {}, 'Comentário removido.');
     const ownerId = comment.product?.sellerId || comment.announcement?.sellerId || comment.reel?.sellerId;
     const canDelete = comment.userId === req.user.id || ownerId === req.user.id || req.user.role === 'ADMIN';
     if (!canDelete) return forbidden(res, 'Sem permissão para apagar este comentário.');
 
-    await prisma.comment.delete({ where: { id: comment.id } });
+    try {
+      await prisma.comment.delete({ where: { id: comment.id } });
+    } catch (delErr) {
+      // P2025 = "registo a apagar já não existe" — mesma corrida do
+      // findUnique acima, só que entre a leitura e o delete. Idempotente:
+      // o resultado desejado já está alcançado.
+      if (delErr.code !== 'P2025') throw delErr;
+    }
     return ok(res, {}, 'Comentário removido.');
   } catch (err) {
     logger.error(`[Feed.removeComment] ${err.message}`);

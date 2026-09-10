@@ -87,8 +87,17 @@ const create = async (req, res) => {
       if (product && product.sellerId === req.user.id) productId = product.id;
     }
 
+    // Fundo de post de texto (estilo Facebook) — só faz sentido sem
+    // fotos. Se vierem fotos no mesmo pedido, o fundo é ignorado (a
+    // foto tem prioridade visual, como no Facebook/Instagram).
+    let backgroundId = null;
+    if (req.body.backgroundId && !(req.files && req.files.length > 0)) {
+      const n = parseInt(req.body.backgroundId, 10);
+      if (n >= 1 && n <= 8) backgroundId = n;
+    }
+
     const announcement = await prisma.announcement.create({
-      data: { bazarId: bazar.id, sellerId: req.user.id, text, productId }
+      data: { bazarId: bazar.id, sellerId: req.user.id, text, productId, backgroundId }
     });
 
     // Suporta várias fotos por anúncio (campo multipart "images", até 6).
@@ -153,6 +162,17 @@ const update = async (req, res) => {
     if (text.length > 500) return badRequest(res, 'Máximo de 500 caracteres.');
 
     const data = { text };
+    // Fundo de texto: só aceite explicitamente quando enviado; enviar
+    // `backgroundId: ""` limpa o fundo (ex.: o vendedor acabou de
+    // adicionar uma foto a um post que era só texto).
+    if (req.body.backgroundId !== undefined) {
+      if (!req.body.backgroundId) {
+        data.backgroundId = null;
+      } else {
+        const n = parseInt(req.body.backgroundId, 10);
+        data.backgroundId = (n >= 1 && n <= 8) ? n : null;
+      }
+    }
     if (req.body.productId !== undefined) {
       if (!req.body.productId) {
         data.productId = null;
@@ -208,6 +228,10 @@ const update = async (req, res) => {
             order: currentCount + i
           }))
         });
+        // Uma foto nova chegou e o pedido não disse nada sobre o fundo
+        // — limpa o fundo de texto antigo para a foto não ficar
+        // escondida atrás dele.
+        if (req.body.backgroundId === undefined) data.backgroundId = null;
       }
     }
 

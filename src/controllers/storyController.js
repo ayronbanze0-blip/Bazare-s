@@ -47,7 +47,7 @@ const list = async (req, res) => {
       const group = byBazar.get(key);
       if (group.stories.length >= MAX_STORIES_PER_BAZAR) continue;
       const seen = req.user ? (s.views?.length > 0) : false;
-      group.stories.push({ id: s.id, imageUrl: s.imageUrl, videoUrl: s.videoUrl, text: s.text, product: s.product, createdAt: s.createdAt, expiresAt: s.expiresAt, seen });
+      group.stories.push({ id: s.id, imageUrl: s.imageUrl, videoUrl: s.videoUrl, text: s.text, backgroundId: s.backgroundId, product: s.product, createdAt: s.createdAt, expiresAt: s.expiresAt, seen });
       if (!seen) group.hasUnseen = true;
     }
     // Bazares com história por ver aparecem primeiro (como no Instagram).
@@ -81,7 +81,19 @@ const create = async (req, res) => {
     // ('image').
     const jobId = req.body.processedVideoJobId;
     const imageFile = req.files?.image?.[0];
-    if (!imageFile && !jobId) return badRequest(res, 'A história precisa de uma foto ou de um vídeo (editado).');
+
+    // História de texto puro (sem foto/vídeo): precisa de um fundo
+    // válido (1-8) e de texto — mesma ideia dos Posts de texto.
+    let backgroundId = null;
+    if (!imageFile && !jobId) {
+      const n = parseInt(req.body.backgroundId, 10);
+      const textForBg = (req.body.text || '').trim();
+      if (n >= 1 && n <= 8 && textForBg) {
+        backgroundId = n;
+      } else {
+        return badRequest(res, 'A história precisa de uma foto, de um vídeo (editado), ou de um fundo com texto.');
+      }
+    }
 
     let imageUrl = null, imagePublicId = null, videoUrl = null, videoPublicId = null;
     let thumbnailUrl = null, thumbnailPublicId = null, videoDurationSec = null;
@@ -130,7 +142,7 @@ const create = async (req, res) => {
         sellerId: req.user.id,
         imageUrl, imagePublicId, videoUrl, videoPublicId,
         thumbnailUrl, thumbnailPublicId, videoDurationSec,
-        text, productId,
+        text, backgroundId, productId,
         createdAt: now,
         expiresAt: new Date(now.getTime() + STORY_TTL_MS)
       }
@@ -203,7 +215,7 @@ const reply = async (req, res) => {
       io.to(`chat:${chat.id}`).emit('message:new', message);
       io.to(`user:${story.sellerId}`).emit('chat:unread', { chatId: chat.id });
     }
-    notifSvc.newMessage(story.sellerId, req.user.name, `respondeu à sua história`);
+    notifSvc.newMessage(story.sellerId, req.user.name, `respondeu à sua história`, chat.id);
 
     return created(res, { chatId: chat.id, message }, 'Resposta enviada.');
   } catch (err) {
@@ -263,6 +275,12 @@ const updateText = async (req, res) => {
 
     const text = (req.body.text || '').trim().slice(0, 200) || null;
     const data = { text };
+
+    // Fundo só é editável em histórias de texto puro (sem foto/vídeo).
+    if (!story.imageUrl && !story.videoUrl && req.body.backgroundId !== undefined) {
+      const n = parseInt(req.body.backgroundId, 10);
+      data.backgroundId = (n >= 1 && n <= 8) ? n : story.backgroundId;
+    }
 
     if (req.body.productId !== undefined) {
       if (!req.body.productId) {

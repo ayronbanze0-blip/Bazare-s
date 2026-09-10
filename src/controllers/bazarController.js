@@ -7,6 +7,7 @@ const { paginate, paginateMeta, sanitize, uniqueSlug, startOfMonth, getBadgeTier
 const uploadSvc = require('../services/uploadService');
 const premiumService = require('../services/premiumService');
 const notifSvc = require('../services/notificationService');
+const blockSvc = require('../services/blockService');
 const logger = require('../utils/logger');
 
 const prisma = require('../config/database');
@@ -286,6 +287,9 @@ const toggleFollow = async (req, res) => {
     });
     if (!bazar) return notFound(res, 'Bazar não encontrado.');
     if (bazar.sellerId === req.user.id) return badRequest(res, 'Não pode seguir o seu próprio bazar.');
+    if (await blockSvc.isBlockedEither(req.user.id, bazar.sellerId)) {
+      return forbidden(res, 'Não é possível seguir este bazar.');
+    }
 
     const existing = await prisma.follow.findUnique({
       where: { userId_bazarId: { userId: req.user.id, bazarId: bazar.id } }

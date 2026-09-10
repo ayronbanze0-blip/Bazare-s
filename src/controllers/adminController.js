@@ -9,6 +9,7 @@ const logger = require('../utils/logger');
 
 const prisma = require('../config/database');
 const { deleteUserData } = require('../services/accountDeletionService');
+const { forceDisconnectUser } = require('../sockets/chatSocket');
 
 // ─── Platform overview ────────────────────────────────────────────
 const overview = async (req, res) => {
@@ -113,6 +114,11 @@ const toggleUser = async (req, res) => {
       await prisma.bazar.updateMany({ where: { sellerId: user.id }, data: { active: false } });
       // Revoke sessions
       await prisma.refreshToken.updateMany({ where: { userId: user.id }, data: { revoked: true } });
+      // Corta qualquer sessão de socket já aberta — sem isto, a conta
+      // suspensa continuava a enviar/receber chat em tempo real até o
+      // access token expirar (~15 min), mesmo sem conseguir usar a API REST.
+      const io = req.app.get('io');
+      if (io) forceDisconnectUser(io, user.id);
       notifSvc.accountSuspended(user.id, reason);
       emailSvc.sendAccountSuspendedEmail(user.email, user.name, reason).catch(() => {});
     } else {
