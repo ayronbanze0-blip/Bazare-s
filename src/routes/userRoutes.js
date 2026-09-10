@@ -25,6 +25,8 @@ router.get('/search/mentions', authenticate, ctrl.searchMentionable);
 // rota estática de um segmento só, como '/:id', tinha de vir primeiro
 // ou '/:id' apanhava "blocked" como se fosse um userId). ─────────────
 router.get('/blocked', authenticate, blockCtrl.myBlocked);
+// ─── Presença em lote (pontinho "online") — antes de '/:id' pela mesma razão ──
+router.get('/presence', authenticate, ctrl.getPresence);
 
 // ─── Public ───────────────────────────────────────────────────────
 // Deve ficar por último para não capturar /me como :id

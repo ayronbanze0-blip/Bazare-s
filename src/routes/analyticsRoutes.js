@@ -29,4 +29,7 @@ router.get('/summary', authenticate, isAdmin, ctrl.summary);
 // GET /api/analytics/routes-health — só admin. Ver comentário no controller.
 router.get('/routes-health', authenticate, isAdmin, ctrl.routesHealth);
 
+// GET /api/analytics/events — só admin. Drill-down por trás do painel de monitorização.
+router.get('/events', authenticate, isAdmin, ctrl.getEvents);
+
 module.exports = router;
