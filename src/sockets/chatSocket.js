@@ -5,6 +5,7 @@ const logger = require('../utils/logger');
 const { sanitize } = require('../utils/helpers');
 const notifSvc = require('../services/notificationService');
 const aiSvc = require('../services/aiService');
+const blockSvc = require('../services/blockService');
 
 // Singleton partilhado — ver nota em controllers/chatController.js
 const prisma = require('../config/database');
@@ -23,12 +24,24 @@ const getBazarBotUserId = async (prisma) => {
 };
 
 const setupSocket = (io) => {
-  io.use((socket, next) => {
+  io.use(async (socket, next) => {
     try {
       const token = socket.handshake.auth?.token || socket.handshake.query?.token;
       if (!token) return next(new Error('Token não fornecido'));
       const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
-      socket.user = decoded;
+
+      // Mesma verificação que o middleware `authenticate` do REST faz:
+      // o token pode continuar válido mesmo depois de a conta ter sido
+      // suspensa ou apagada (JWT não é revogável por si só). Sem isto,
+      // uma conta suspensa continuava a receber/enviar eventos em tempo
+      // real até o token expirar (~15 min).
+      const dbUser = await prisma.user.findUnique({
+        where: { id: decoded.id },
+        select: { active: true, role: true }
+      });
+      if (!dbUser || !dbUser.active) return next(new Error('Conta suspensa ou inexistente'));
+
+      socket.user = { ...decoded, role: dbUser.role };
       next();
     } catch (err) {
       next(new Error('Token inválido'));
@@ -62,7 +75,7 @@ const setupSocket = (io) => {
       socket.leave(`chat:${chatId}`);
     });
 
-    socket.on('message:send', async ({ chatId, text }) => {
+    socket.on('message:send', async ({ chatId, text, clientMessageId }) => {
       try {
         if (!text || !text.trim()) return;
         const chat = await prisma.chat.findUnique({ where: { id: chatId } });
@@ -70,10 +83,45 @@ const setupSocket = (io) => {
           return socket.emit('error', { message: 'Acesso negado.' });
         }
 
-        const message = await prisma.message.create({
-          data: { chatId, senderId: userId, text: sanitize(text) },
-          include: { sender: { select: { id: true, name: true, avatarUrl: true } } }
-        });
+        // Mesma regra aplicada no envio via REST (chatController.sendMessage):
+        // se um dos dois bloqueou o outro depois do chat ter começado, a
+        // mensagem não deve ser gravada — só esconder o chat na lista não
+        // impede o socket de continuar entregando mensagens novas.
+        const otherPartyId = chat.userAId === userId ? chat.userBId : chat.userAId;
+        if (await blockSvc.isBlockedEither(userId, otherPartyId)) {
+          return socket.emit('error', { message: 'Não é possível enviar mensagens nesta conversa.' });
+        }
+
+        // Idempotência: mesmo mecanismo do REST — um reenvio (reconexão do
+        // socket a meio do envio, app em background que reenvia ao voltar)
+        // com o mesmo clientMessageId devolve a mensagem já criada em vez
+        // de duplicá-la.
+        if (clientMessageId) {
+          const existing = await prisma.message.findUnique({
+            where: { clientMessageId },
+            include: { sender: { select: { id: true, name: true, avatarUrl: true } } }
+          });
+          if (existing && existing.chatId === chatId) {
+            return socket.emit('message:new', existing);
+          }
+        }
+
+        let message;
+        try {
+          message = await prisma.message.create({
+            data: { chatId, senderId: userId, text: sanitize(text), clientMessageId: clientMessageId || null },
+            include: { sender: { select: { id: true, name: true, avatarUrl: true } } }
+          });
+        } catch (createErr) {
+          if (createErr.code === 'P2002' && clientMessageId) {
+            const winner = await prisma.message.findUnique({
+              where: { clientMessageId },
+              include: { sender: { select: { id: true, name: true, avatarUrl: true } } }
+            });
+            if (winner) return socket.emit('message:new', winner);
+          }
+          throw createErr;
+        }
 
         await prisma.chat.update({ where: { id: chatId }, data: { updatedAt: new Date() } });
 
@@ -107,7 +155,7 @@ const setupSocket = (io) => {
             }
           })();
         } else {
-          notifSvc.newMessage(recipientId, socket.user.name, text);
+          notifSvc.newMessage(recipientId, socket.user.name, text, chatId);
         }
       } catch (err) {
         logger.error(`[Socket message:send] ${err.message}`);
@@ -155,5 +203,14 @@ const setupSocket = (io) => {
 
 const isOnline = (userId) => onlineUsers.has(userId) && onlineUsers.get(userId).size > 0;
 
-module.exports = { setupSocket, isOnline };
+// ─── Desconecta imediatamente todos os sockets de um utilizador ───────
+// Chamado pelo admin ao suspender uma conta (adminController.toggleUser):
+// sem isto, uma sessão de socket já aberta continuava viva e a receber/
+// enviar eventos em tempo real até o token expirar, mesmo com a conta
+// já suspensa (o handshake só é verificado uma vez, na ligação).
+const forceDisconnectUser = (io, userId) => {
+  io.in(`user:${userId}`).disconnectSockets(true);
+};
+
+module.exports = { setupSocket, isOnline, forceDisconnectUser };
 
