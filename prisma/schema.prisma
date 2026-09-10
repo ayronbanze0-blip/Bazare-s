@@ -522,6 +522,10 @@ model Announcement {
   // anúncios antigos já gravados antes desta migração.
   imageUrl      String?
   imagePublicId String?
+  // Fundo (1-8) para posts só de texto, estilo Facebook — só faz
+  // sentido quando não há imagens (`images` vazio). Nulo em posts
+  // antigos e em posts com foto.
+  backgroundId  Int?
   createdAt     DateTime @default(now())
   // Produto associado ao Post (opcional) — mesma ideia dos Reels:
   // mostra um cartão do produto por cima do post, para quem vir
@@ -575,6 +579,9 @@ model Story {
   thumbnailPublicId String?
   videoDurationSec  Int?
   text          String?  @db.Text
+  // Fundo (1-8) para histórias só de texto, estilo Facebook — só
+  // preenchido quando a história não tem imagem nem vídeo.
+  backgroundId  Int?
   createdAt     DateTime @default(now())
   expiresAt     DateTime
   // Produto associado à História (opcional) — mesma ideia dos Reels.
@@ -849,6 +856,12 @@ model Message {
   read      Boolean  @default(false)
   readAt    DateTime?
   createdAt DateTime @default(now())
+  // Chave de idempotência opcional gerada pelo cliente (ex: uuid criado
+  // no momento em que a pessoa carrega em "enviar"). Se o pedido for
+  // repetido — timeout de rede seguido de retry, ou double-tap — o
+  // backend devolve a mensagem já criada em vez de duplicá-la. Nula
+  // para mensagens antigas e para o BazarBot (que não vem do cliente).
+  clientMessageId String? @unique
 
   @@index([chatId])
   @@index([senderId])
