@@ -8,6 +8,7 @@ const uploadSvc = require('../services/uploadService');
 const premiumService = require('../services/premiumService');
 const notifSvc = require('../services/notificationService');
 const blockSvc = require('../services/blockService');
+const affinitySvc = require('../services/affinityService');
 const logger = require('../utils/logger');
 
 const prisma = require('../config/database');
@@ -310,6 +311,7 @@ const toggleFollow = async (req, res) => {
       try {
         await prisma.follow.create({ data: { userId: req.user.id, bazarId: bazar.id } });
       notifSvc.newFollower(bazar.sellerId, req.user.name, bazar.id, req.user.id).catch(() => {});
+      affinitySvc.bump(req.user.id, bazar.id, 'FOLLOW').catch(() => {});
       } catch (err) {
         // P2002 = já existia (dois cliques rápidos criaram uma corrida) —
         // idempotente: o resultado final continua a ser "a seguir".

@@ -5,6 +5,7 @@ const { ok, created, notFound, forbidden, serverError, badRequest } = require('.
 const { sanitize, paginate, paginateMeta } = require('../utils/helpers');
 const uploadSvc = require('../services/uploadService');
 const { attachReelEngagement, attachFollowState } = require('../services/feedEngagementService');
+const affinitySvc = require('../services/affinityService');
 const logger = require('../utils/logger');
 const prisma = require('../config/database');
 
@@ -28,7 +29,7 @@ const list = async (req, res) => {
         where: { bazarId: bazar.id },
         take, skip,
         orderBy: { createdAt: 'desc' },
-        include: { product: { select: { id: true, name: true, slug: true, price: true } } }
+        include: { images: { orderBy: { order: 'asc' } }, product: { select: { id: true, name: true, slug: true, price: true } } }
       }),
       prisma.reel.count({ where: { bazarId: bazar.id } })
     ]);
@@ -58,6 +59,7 @@ const listGlobal = async (req, res) => {
         take, skip,
         orderBy: { createdAt: 'desc' },
         include: {
+          images: { orderBy: { order: 'asc' } },
           bazar: { select: { id: true, name: true, slug: true, logoUrl: true } },
           product: { select: { id: true, name: true, slug: true, price: true } }
         }
@@ -65,7 +67,11 @@ const listGlobal = async (req, res) => {
       prisma.reel.count({ where })
     ]);
 
-    return ok(res, { reels: await attachFollowState(await attachReelEngagement(reels, req.user?.id), req.user?.id), meta: paginateMeta(total, page, limit) });
+    let reelsOrdered = reels;
+    if (req.user?.id) {
+      reelsOrdered = await affinitySvc.applyAffinityOrder(reels, req.user.id, (r) => r.bazarId);
+    }
+    return ok(res, { reels: await attachFollowState(await attachReelEngagement(reelsOrdered, req.user?.id), req.user?.id), meta: paginateMeta(total, page, limit) });
   } catch (err) {
     logger.error(`[Reels.listGlobal] ${err.message}`);
     return serverError(res);
@@ -79,7 +85,7 @@ const getOne = async (req, res) => {
     if (!bazar) return notFound(res, 'Bazar não encontrado.');
     const reel = await prisma.reel.findFirst({
       where: { id: req.params.reelId, bazarId: bazar.id },
-      include: { product: { select: { id: true, name: true, slug: true, price: true } } }
+      include: { images: { orderBy: { order: 'asc' } }, product: { select: { id: true, name: true, slug: true, price: true } } }
     });
     if (!reel) return notFound(res, 'Reel não encontrado.');
     if (reel.sellerId !== req.user.id) return forbidden(res);
@@ -104,8 +110,10 @@ const create = async (req, res) => {
     // por POST /api/media/video/process depois de status=DONE. Fotos
     // continuam a chegar por multipart normal ('image').
     const jobId = req.body.processedVideoJobId;
+    const imageFiles = req.files?.images || [];
     const imageFile = req.files?.image?.[0];
-    if (!jobId && !imageFile) return badRequest(res, 'O Reel precisa de um vídeo (editado) ou de uma foto.');
+    if (!jobId && !imageFile && imageFiles.length === 0) return badRequest(res, 'O Reel precisa de um vídeo (editado) ou de uma/várias fotos.');
+    if (imageFiles.length > 10) return badRequest(res, 'Máximo de 10 fotos por Reel.');
 
     let productId = null;
     if (req.body.productId) {
@@ -117,11 +125,12 @@ const create = async (req, res) => {
     let thumbnailUrl = null, thumbnailPublicId = null, videoDurationSec = null;
 
     if (jobId) {
-      // Se vier jobId E imageFile ao mesmo tempo, o job de vídeo ganha —
-      // mas o ficheiro que o Multer já gravou em disco fica órfão se não
-      // for limpo explicitamente (uploadToCloud nunca chega a correr
-      // para ele, por isso nunca é apagado pelo caminho normal).
+      // Se vier jobId E foto(s) ao mesmo tempo, o job de vídeo ganha —
+      // mas os ficheiros que o Multer já gravou em disco ficam órfãos
+      // se não forem limpos explicitamente (uploadToCloud nunca chega
+      // a correr para eles, por isso nunca são apagados pelo caminho normal).
       if (imageFile?.path) fs.unlink(imageFile.path, () => {});
+      imageFiles.forEach(f => { if (f.path) fs.unlink(f.path, () => {}); });
 
       const job = await prisma.videoJob.findUnique({ where: { id: jobId } });
       if (!job || job.userId !== req.user.id) return badRequest(res, 'Vídeo processado não encontrado.');
@@ -139,6 +148,18 @@ const create = async (req, res) => {
       videoUrl = job.resultUrl; videoPublicId = job.resultPublicId;
       thumbnailUrl = job.thumbnailUrl; thumbnailPublicId = job.thumbnailPublicId;
       videoDurationSec = job.durationSec;
+    } else if (imageFiles.length > 0) {
+      // Reel de várias fotos (carrossel) — sobe todas, guarda a
+      // primeira também nos campos legados `imageUrl`/`imagePublicId`
+      // para código antigo (notificações/miniaturas) que ainda só olhe
+      // para esse campo continuar a mostrar alguma coisa.
+      const uploadResults = await uploadSvc.uploadMany(imageFiles, 'bazares/reels');
+      const validImages = uploadResults.filter(r => r.ok);
+      const imageUploadErrors = uploadResults.filter(r => !r.ok).map(r => r.error);
+      if (validImages.length === 0) return badRequest(res, 'Falha ao enviar as fotos.');
+      imageUrl = validImages[0].url; imagePublicId = validImages[0].publicId;
+      req._reelImagesToCreate = validImages; // consumido depois de criar o Reel
+      req._reelImageUploadErrors = imageUploadErrors.length ? imageUploadErrors : undefined;
     } else {
       const up = await uploadSvc.uploadToCloud(imageFile.path, 'bazares/reels');
       if (!up.ok) return badRequest(res, 'Falha ao enviar a foto.');
@@ -154,11 +175,21 @@ const create = async (req, res) => {
         thumbnailUrl, thumbnailPublicId, videoDurationSec,
         text,
         productId
-      },
-      include: { product: { select: { id: true, name: true, slug: true, price: true } } }
+      }
     });
 
-    return created(res, { reel }, 'Reel publicado!');
+    if (req._reelImagesToCreate?.length) {
+      await prisma.reelImage.createMany({
+        data: req._reelImagesToCreate.map((r, i) => ({ reelId: reel.id, url: r.url, publicId: r.publicId, order: i }))
+      });
+    }
+
+    const full = await prisma.reel.findUnique({
+      where: { id: reel.id },
+      include: { images: { orderBy: { order: 'asc' } }, product: { select: { id: true, name: true, slug: true, price: true } } }
+    });
+
+    return created(res, { reel: full, imageUploadErrors: req._reelImageUploadErrors }, 'Reel publicado!');
   } catch (err) {
     logger.error(`[Reels.create] ${err.message}`);
     return serverError(res);
@@ -174,7 +205,7 @@ const create = async (req, res) => {
 // é que fica de fora.
 const update = async (req, res) => {
   try {
-    const reel = await prisma.reel.findUnique({ where: { id: req.params.reelId } });
+    const reel = await prisma.reel.findUnique({ where: { id: req.params.reelId }, include: { images: true } });
     if (!reel) return notFound(res, 'Reel não encontrado.');
     if (reel.sellerId !== req.user.id) return forbidden(res);
 
@@ -190,23 +221,83 @@ const update = async (req, res) => {
       }
     }
 
-    const imageFile = req.files?.image?.[0];
-    if (imageFile) {
-      if (reel.videoUrl) return badRequest(res, 'Este Reel tem vídeo — não é possível trocar por uma foto. Apaga e publica de novo.');
-      const up = await uploadSvc.uploadToCloud(imageFile.path, 'bazares/reels');
-      if (!up.ok) return badRequest(res, 'Falha ao enviar a foto.');
+    let imageUploadErrors = [];
+    const newFiles = req.files?.images || [];
+
+    if (reel.images.length > 0) {
+      // Reel já criado com várias fotos: gere a lista de `ReelImage`
+      // tal como nos Posts (`keepImageIds` + `images` novas).
+      if (reel.videoUrl) return badRequest(res, 'Este Reel tem vídeo — não é possível trocar por fotos. Apaga e publica de novo.');
+      let keepIds = reel.images.map(i => i.id); // por omissão, mantém tudo
+      if (req.body.keepImageIds !== undefined) {
+        try { keepIds = JSON.parse(req.body.keepImageIds); } catch (_) { keepIds = []; }
+        if (!Array.isArray(keepIds)) keepIds = [];
+
+        const toRemove = reel.images.filter(img => !keepIds.includes(img.id));
+        if (toRemove.length) {
+          await prisma.reelImage.deleteMany({ where: { id: { in: toRemove.map(i => i.id) } } });
+          toRemove.forEach(img => { if (img.publicId) uploadSvc.deleteFromCloud(img.publicId).catch(() => {}); });
+        }
+        await Promise.all(keepIds.map((id, i) =>
+          prisma.reelImage.updateMany({ where: { id, reelId: reel.id }, data: { order: i } }).catch(() => {})
+        ));
+      }
+
+      if (newFiles.length) {
+        if (keepIds.length + newFiles.length > 10) return badRequest(res, 'Máximo de 10 fotos por Reel.');
+        const uploadResults = await uploadSvc.uploadMany(newFiles, 'bazares/reels');
+        const validImages = uploadResults.filter(r => r.ok);
+        imageUploadErrors = uploadResults.filter(r => !r.ok).map(r => r.error);
+        if (validImages.length > 0) {
+          await prisma.reelImage.createMany({
+            data: validImages.map((r, i) => ({ reelId: reel.id, url: r.url, publicId: r.publicId, order: keepIds.length + i }))
+          });
+        }
+      }
+
+      // Mantém o campo legado alinhado com a 1ª foto actual, para código
+      // antigo que ainda só olhe para `imageUrl` (ex.: notificações).
+      const firstImg = await prisma.reelImage.findFirst({ where: { reelId: reel.id }, orderBy: { order: 'asc' } });
+      data.imageUrl = firstImg?.url || null;
+      data.imagePublicId = firstImg?.publicId || null;
+    } else if (newFiles.length > 0) {
+      // Reel antigo de foto única (ou sem foto) a ganhar várias fotos de
+      // uma vez — é sempre uma substituição total (não dá para "manter"
+      // a foto legada individualmente, já que ela não vive em ReelImage).
+      if (reel.videoUrl) return badRequest(res, 'Este Reel tem vídeo — não é possível trocar por fotos. Apaga e publica de novo.');
+      if (newFiles.length > 10) return badRequest(res, 'Máximo de 10 fotos por Reel.');
+      const uploadResults = await uploadSvc.uploadMany(newFiles, 'bazares/reels');
+      const validImages = uploadResults.filter(r => r.ok);
+      imageUploadErrors = uploadResults.filter(r => !r.ok).map(r => r.error);
+      if (validImages.length === 0) return badRequest(res, 'Falha ao enviar as fotos.');
       if (reel.imagePublicId) uploadSvc.deleteFromCloud(reel.imagePublicId).catch(() => {});
-      data.imageUrl = up.url;
-      data.imagePublicId = up.publicId;
+      await prisma.reelImage.createMany({
+        data: validImages.map((r, i) => ({ reelId: reel.id, url: r.url, publicId: r.publicId, order: i }))
+      });
+      data.imageUrl = validImages[0].url;
+      data.imagePublicId = validImages[0].publicId;
+    } else {
+      // Reel antigo de foto única, sem fotos novas neste pedido —
+      // comportamento de sempre: uma foto nova (campo singular `image`)
+      // substitui a única foto; sem ficheiro nenhum, não mexe em nada.
+      const imageFile = req.files?.image?.[0];
+      if (imageFile) {
+        if (reel.videoUrl) return badRequest(res, 'Este Reel tem vídeo — não é possível trocar por uma foto. Apaga e publica de novo.');
+        const up = await uploadSvc.uploadToCloud(imageFile.path, 'bazares/reels');
+        if (!up.ok) return badRequest(res, 'Falha ao enviar a foto.');
+        if (reel.imagePublicId) uploadSvc.deleteFromCloud(reel.imagePublicId).catch(() => {});
+        data.imageUrl = up.url;
+        data.imagePublicId = up.publicId;
+      }
     }
 
     const updated = await prisma.reel.update({
       where: { id: reel.id },
       data,
-      include: { product: { select: { id: true, name: true, slug: true, price: true } } }
+      include: { images: { orderBy: { order: 'asc' } }, product: { select: { id: true, name: true, slug: true, price: true } } }
     });
 
-    return ok(res, { reel: updated }, 'Reel actualizado.');
+    return ok(res, { reel: updated, imageUploadErrors: imageUploadErrors.length ? imageUploadErrors : undefined }, 'Reel actualizado.');
   } catch (err) {
     logger.error(`[Reels.update] ${err.message}`);
     return serverError(res);
@@ -216,13 +307,14 @@ const update = async (req, res) => {
 // ─── SELLER/ADMIN: Apagar um Reel ─────────────────────────────────
 const remove = async (req, res) => {
   try {
-    const reel = await prisma.reel.findUnique({ where: { id: req.params.reelId } });
+    const reel = await prisma.reel.findUnique({ where: { id: req.params.reelId }, include: { images: true } });
     if (!reel) return notFound(res, 'Reel não encontrado.');
     if (reel.sellerId !== req.user.id && req.user.role !== 'ADMIN') return forbidden(res);
 
     if (reel.videoPublicId) uploadSvc.deleteFromCloud(reel.videoPublicId).catch(() => {});
     if (reel.imagePublicId) uploadSvc.deleteFromCloud(reel.imagePublicId).catch(() => {});
     if (reel.thumbnailPublicId) uploadSvc.deleteFromCloud(reel.thumbnailPublicId).catch(() => {});
+    reel.images.forEach(img => { if (img.publicId) uploadSvc.deleteFromCloud(img.publicId).catch(() => {}); });
     await prisma.reel.delete({ where: { id: reel.id } });
     return ok(res, {}, 'Reel removido.');
   } catch (err) {

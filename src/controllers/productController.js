@@ -10,6 +10,7 @@ const { uniqueProductSlug } = require('../utils/slugify');
 const premiumService = require('../services/premiumService');
 const notificationSvc = require('../services/notificationService');
 const { attachProductEngagement, attachFollowState } = require('../services/feedEngagementService');
+const affinitySvc = require('../services/affinityService');
 const logger = require('../utils/logger');
 
 const prisma = require('../config/database');
@@ -513,6 +514,7 @@ const toggleFavorite = async (req, res) => {
     } else {
       try {
         await prisma.favorite.create({ data: { userId: req.user.id, productId } });
+        affinitySvc.bump(req.user.id, product.bazarId, 'FAVORITE').catch(() => {});
       } catch (createErr) {
         // P2002: um pedido concorrente já criou o mesmo favorito
         // (mesma corrida de duplo toque) — idempotente, sucesso na mesma.
@@ -619,6 +621,11 @@ const trackView = async (req, res) => {
       where: { id: req.params.id, active: true, bazar: { active: true } },
       data: { views: { increment: 1 } }
     });
+
+    if (req.user?.id) {
+      const product = await prisma.product.findUnique({ where: { id: req.params.id }, select: { bazarId: true } });
+      if (product) affinitySvc.bump(req.user.id, product.bazarId, 'VIEW').catch(() => {});
+    }
   } catch (err) {
     logger.error(`[Products.trackView] ${err.message}`);
   }

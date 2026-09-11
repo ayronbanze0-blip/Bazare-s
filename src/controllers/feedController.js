@@ -4,6 +4,8 @@ const { ok, created, notFound, badRequest, forbidden, serverError, validationErr
 const { sanitize, paginate, paginateMeta } = require('../utils/helpers');
 const { validationResult } = require('express-validator');
 const { attachEngagement, VALID_TYPES } = require('../services/feedEngagementService');
+const affinitySvc = require('../services/affinityService');
+const { shapePoll } = require('../services/pollService');
 const commentService = require('../services/commentService');
 const notifSvc = require('../services/notificationService');
 const mentionSvc = require('../services/mentionService');
@@ -19,12 +21,14 @@ const assertType = (targetType) => VALID_TYPES.includes(targetType);
 // targetId inventado/inexistente (não há FK entre FeedReaction e
 // Product/Announcement/Reel).
 const TARGET_MODEL = { PRODUCT: 'product', ANNOUNCEMENT: 'announcement', REEL: 'reel' };
-const targetExists = async (targetType, targetId) => {
+const findTarget = async (targetType, targetId) => {
   const model = TARGET_MODEL[targetType];
-  if (!model) return false;
-  const row = await prisma[model].findUnique({ where: { id: targetId }, select: { id: true } });
-  return !!row;
+  if (!model) return null;
+  return prisma[model].findUnique({ where: { id: targetId }, select: { id: true, bazarId: true } });
 };
+// Mantido por compatibilidade com o nome antigo — usa findTarget por
+// baixo para não duplicar a query.
+const targetExists = async (targetType, targetId) => !!(await findTarget(targetType, targetId));
 
 // ─── GET /api/feed/:targetType/:targetId/engagement ──────────────
 // Números de reação/partilha/comentários de UM item — usado fora do
@@ -82,8 +86,28 @@ const list = async (req, res) => {
     if (cursorDate) productWhere.featuredUntil.lt = cursorDate;
     const announcementWhere = {};
     if (cursorDate) announcementWhere.createdAt = { lt: cursorDate };
+    const reelWhere = { bazar: { active: true } };
+    if (cursorDate) reelWhere.createdAt = { lt: cursorDate };
 
-    const [featuredProducts, announcements] = await Promise.all([
+    // "Para si": produtos comuns (não têm de estar em destaque) das
+    // lojas com que já mostraste mais interesse — só entra no feed
+    // enquanto já houver algum histórico de afinidade; sem isso fica
+    // vazio e o feed continua só com destaques + posts + reels, como
+    // já era antes desta fase.
+    let forYouBazarIds = [];
+    if (req.user?.id) {
+      const topAffinity = await prisma.userAffinity.findMany({
+        where: { userId: req.user.id },
+        orderBy: { score: 'desc' },
+        take: 5,
+        select: { bazarId: true }
+      });
+      forYouBazarIds = topAffinity.map(a => a.bazarId);
+    }
+    const forYouWhere = { active: true, bazarId: { in: forYouBazarIds } };
+    if (cursorDate) forYouWhere.createdAt = { lt: cursorDate };
+
+    const [featuredProducts, announcements, reels, forYouProducts] = await Promise.all([
       prisma.product.findMany({
         where: productWhere,
         orderBy: { featuredUntil: 'desc' },
@@ -103,21 +127,52 @@ const list = async (req, res) => {
           bazar: { select: { id: true, name: true, slug: true } },
           seller: { select: { id: true, name: true, avatarUrl: true, isPremium: true } },
           mentions: { select: { mentionedUserId: true, mentionedUser: { select: { username: true } } } },
+          product: { select: { id: true, name: true, slug: true, price: true } },
+          poll: true
+        }
+      }),
+      prisma.reel.findMany({
+        where: reelWhere,
+        orderBy: { createdAt: 'desc' },
+        take: FETCH,
+        include: {
+          images: { orderBy: { order: 'asc' } },
+          bazar: { select: { id: true, name: true, slug: true } },
+          seller: { select: { id: true, name: true, avatarUrl: true, isPremium: true } },
           product: { select: { id: true, name: true, slug: true, price: true } }
         }
-      })
+      }),
+      forYouBazarIds.length ? prisma.product.findMany({
+        where: forYouWhere,
+        orderBy: { createdAt: 'desc' },
+        take: FETCH,
+        include: {
+          images: { orderBy: { order: 'asc' }, take: 1 },
+          bazar: { select: { id: true, name: true, slug: true } },
+          seller: { select: { id: true, name: true, avatarUrl: true, isPremium: true } }
+        }
+      }) : Promise.resolve([])
     ]);
 
-    // Se qualquer uma das duas fontes devolveu o máximo pedido, pode
+    // Um produto em destaque também pode calhar de ser de uma loja com
+    // afinidade alta — não o mostra a dobrar.
+    const featuredIds = new Set(featuredProducts.map(p => p.id));
+    const forYouProductsDeduped = forYouProducts.filter(p => !featuredIds.has(p.id));
+
+    // Se qualquer uma das fontes devolveu o máximo pedido, pode
     // haver mais dessa fonte para além do que já buscámos — usado só
     // para decidir "hasMore", não muda o que é mostrado agora.
-    const sourceMayHaveMore = featuredProducts.length === FETCH || announcements.length === FETCH;
+    const sourceMayHaveMore = featuredProducts.length === FETCH || announcements.length === FETCH || reels.length === FETCH || forYouProducts.length === FETCH;
     // A data mais antiga vista nesta busca (mesmo que filtrada depois
     // por bloqueio) — serve de cursor de recurso se o filtro de
     // bloqueio esvaziar a página toda, para o scroll não ficar preso
     // sem conseguir avançar para além de um trecho todo bloqueado.
-    const oldestSeen = [...featuredProducts.map(p => p.featuredUntil), ...announcements.map(a => a.createdAt)]
-      .reduce((min, d) => (!min || d < min ? d : min), null);
+    const oldestSeen = [
+      ...featuredProducts.map(p => p.featuredUntil),
+      ...announcements.map(a => a.createdAt),
+      ...reels.map(r => r.createdAt),
+      ...forYouProductsDeduped.map(p => p.createdAt)
+    ].reduce((min, d) => (!min || d < min ? d : min), null);
 
     let items = [
       ...featuredProducts.map((p) => ({
@@ -127,6 +182,14 @@ const list = async (req, res) => {
       ...announcements.map((a) => ({
         targetType: 'ANNOUNCEMENT', targetId: a.id, createdAt: a.createdAt,
         announcement: a
+      })),
+      ...reels.map((r) => ({
+        targetType: 'REEL', targetId: r.id, createdAt: r.createdAt,
+        reel: r
+      })),
+      ...forYouProductsDeduped.map((p) => ({
+        targetType: 'PRODUCT', targetId: p.id, createdAt: p.createdAt,
+        product: p, forYou: true
       }))
     ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
@@ -136,7 +199,7 @@ const list = async (req, res) => {
       const hiddenIds = await blockSvc.getHiddenUserIds(req.user.id);
       if (hiddenIds.size) {
         items = items.filter(it => {
-          const sellerId = it.product?.seller?.id || it.announcement?.seller?.id;
+          const sellerId = it.product?.seller?.id || it.announcement?.seller?.id || it.reel?.sellerId;
           return !hiddenIds.has(sellerId);
         });
       }
@@ -151,21 +214,42 @@ const list = async (req, res) => {
     const lastDate = items.length ? items[items.length - 1].createdAt : (hasMore ? oldestSeen : null);
     const nextCursor = lastDate ? encodeFeedCursor(lastDate) : null;
 
+    // Feed inteligente: reordena SÓ dentro desta página já decidida
+    // (mesmos itens, cursor calculado acima já não muda) segundo a
+    // afinidade do utilizador com o bazar de cada item — quem
+    // reage/comenta/segue mais uma loja passa a vê-la mais cedo no
+    // feed, sem mexer em quais itens entram em cada página.
+    if (req.user?.id) {
+      items = await affinitySvc.applyAffinityOrder(
+        items, req.user.id, (it) => it.product?.bazarId || it.announcement?.bazarId || it.reel?.bazarId
+      );
+    }
+
     items = await attachEngagement(items, req.user?.id);
+
+    // Sondagens vêm da query principal só com a linha do Poll em si
+    // (sem opções/contagens) — completa isso aqui, só para os itens
+    // que realmente têm uma (a maioria dos Posts não tem).
+    items = await Promise.all(items.map(async (it) => {
+      if (it.announcement?.poll) {
+        return { ...it, announcement: { ...it.announcement, poll: await shapePoll(it.announcement.poll, req.user?.id) } };
+      }
+      return it;
+    }));
 
     // Estado real do botão "Seguir" no cartão do feed — sem isto o
     // frontend nunca sabia se já seguias a loja (feedFollowBtnHtml
     // recebia sempre `following=false` fixo, mesmo já a seguires).
     // attachFollowState (feedEngagementService) espera `it.bazar`
-    // directo, mas aqui o bazar vem dentro de it.product/it.announcement
+    // directo, mas aqui o bazar vem dentro de it.product/it.announcement/it.reel
     // — por isso aplica-se manualmente em vez de reutilizar essa função.
     if (req.user?.id) {
-      const bazarIds = [...new Set(items.map(it => (it.product?.bazar || it.announcement?.bazar)?.id).filter(Boolean))];
+      const bazarIds = [...new Set(items.map(it => (it.product?.bazar || it.announcement?.bazar || it.reel?.bazar)?.id).filter(Boolean))];
       if (bazarIds.length) {
         const follows = await prisma.follow.findMany({ where: { userId: req.user.id, bazarId: { in: bazarIds } }, select: { bazarId: true } });
         const followedSet = new Set(follows.map(f => f.bazarId));
         items = items.map(it => {
-          const key = it.targetType === 'PRODUCT' ? 'product' : 'announcement';
+          const key = it.targetType === 'PRODUCT' ? 'product' : it.targetType === 'ANNOUNCEMENT' ? 'announcement' : 'reel';
           const content = it[key];
           if (!content?.bazar) return it;
           return { ...it, [key]: { ...content, bazar: { ...content.bazar, isFollowing: followedSet.has(content.bazar.id) } } };
@@ -194,7 +278,8 @@ const react = async (req, res) => {
     const value = parseInt(req.body.value, 10);
     if (!Number.isInteger(value) || value < 1 || value > 7) return badRequest(res, 'value deve ser um número entre 1 e 7.');
 
-    if (!(await targetExists(targetType, targetId))) {
+    const target = await findTarget(targetType, targetId);
+    if (!target) {
       return notFound(res, 'Conteúdo não encontrado.');
     }
 
@@ -217,6 +302,9 @@ const react = async (req, res) => {
         create: { userId: req.user.id, targetType, targetId, value },
         update: { value }
       });
+      // Só reforça o feed inteligente ao ADICIONAR/trocar uma reação —
+      // removê-la não pune, só deixa de reforçar mais.
+      affinitySvc.bump(req.user.id, target.bazarId, 'REACT').catch(() => {});
     }
 
     // likeCount = todas as reações (qualquer uma das 7), não só value===1
@@ -277,10 +365,10 @@ const share = async (req, res) => {
     if (!assertType(targetType)) return badRequest(res, 'Tipo inválido.');
 
     const exists = targetType === 'PRODUCT'
-      ? await prisma.product.findUnique({ where: { id: targetId }, select: { id: true } })
+      ? await prisma.product.findUnique({ where: { id: targetId }, select: { id: true, bazarId: true } })
       : targetType === 'ANNOUNCEMENT'
-      ? await prisma.announcement.findUnique({ where: { id: targetId }, select: { id: true } })
-      : await prisma.reel.findUnique({ where: { id: targetId }, select: { id: true } });
+      ? await prisma.announcement.findUnique({ where: { id: targetId }, select: { id: true, bazarId: true } })
+      : await prisma.reel.findUnique({ where: { id: targetId }, select: { id: true, bazarId: true } });
     if (!exists) return notFound(res, 'Conteúdo não encontrado.');
 
     await prisma.feedShare.upsert({
@@ -288,6 +376,7 @@ const share = async (req, res) => {
       update: {},
       create: { userId: req.user.id, targetType, targetId }
     });
+    affinitySvc.bump(req.user.id, exists.bazarId, 'SHARE').catch(() => {});
 
     const shareCount = await prisma.feedShare.count({ where: { targetType, targetId } });
     return ok(res, { shared: true, shareCount }, 'Partilhado no teu feed.');
@@ -348,10 +437,10 @@ const createComment = async (req, res) => {
     if (!assertType(targetType)) return badRequest(res, 'Tipo inválido.');
 
     const exists = targetType === 'PRODUCT'
-      ? await prisma.product.findUnique({ where: { id: targetId }, select: { id: true, name: true, slug: true, bazar: { select: { sellerId: true } } } })
+      ? await prisma.product.findUnique({ where: { id: targetId }, select: { id: true, name: true, slug: true, bazarId: true, bazar: { select: { sellerId: true } } } })
       : targetType === 'ANNOUNCEMENT'
-      ? await prisma.announcement.findUnique({ where: { id: targetId }, select: { id: true, bazar: { select: { sellerId: true, name: true } } } })
-      : await prisma.reel.findUnique({ where: { id: targetId }, select: { id: true, bazar: { select: { sellerId: true, name: true } } } });
+      ? await prisma.announcement.findUnique({ where: { id: targetId }, select: { id: true, bazarId: true, bazar: { select: { sellerId: true, name: true } } } })
+      : await prisma.reel.findUnique({ where: { id: targetId }, select: { id: true, bazarId: true, bazar: { select: { sellerId: true, name: true } } } });
     if (!exists) return notFound(res, 'Conteúdo não encontrado.');
 
     let parentId = null;
@@ -393,6 +482,7 @@ const createComment = async (req, res) => {
       commentId: comment.id,
       link
     }).catch(() => {});
+    affinitySvc.bump(req.user.id, exists.bazarId, 'COMMENT').catch(() => {});
 
     return created(res, { comment: { ...comment, likeCount: 0, likedByMe: false, replies: [] } }, 'Comentário publicado.');
   } catch (err) {

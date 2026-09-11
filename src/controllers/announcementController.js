@@ -5,6 +5,7 @@ const { sanitize, paginate, paginateMeta } = require('../utils/helpers');
 const uploadSvc = require('../services/uploadService');
 const mentionSvc = require('../services/mentionService');
 const { attachDirectEngagement } = require('../services/feedEngagementService');
+const { shapePoll, attachPollToAnnouncements } = require('../services/pollService');
 const logger = require('../utils/logger');
 const prisma = require('../config/database');
 
@@ -29,7 +30,8 @@ const list = async (req, res) => {
         include: {
           images: { orderBy: { order: 'asc' } },
           mentions: { select: { mentionedUserId: true, mentionedUser: { select: { username: true } } } },
-          product: { select: { id: true, name: true, slug: true, price: true } }
+          product: { select: { id: true, name: true, slug: true, price: true } },
+          poll: true
         }
       }),
       prisma.announcement.count({ where: { bazarId: bazar.id } })
@@ -40,7 +42,8 @@ const list = async (req, res) => {
     // nunca funcionava em bazar.html, meufeed.html e anuncios.html
     // (todos usam este mesmo endpoint), mesmo que a reação/comentário
     // estivesse guardado na base de dados.
-    const withEngagement = await attachDirectEngagement(announcements, req.user?.id, 'ANNOUNCEMENT');
+    let withEngagement = await attachDirectEngagement(announcements, req.user?.id, 'ANNOUNCEMENT');
+    withEngagement = await attachPollToAnnouncements(withEngagement, req.user?.id);
 
     return ok(res, { announcements: withEngagement, meta: paginateMeta(total, page, limit) });
   } catch (err) {
@@ -56,7 +59,7 @@ const getOne = async (req, res) => {
     if (!bazar) return notFound(res, 'Bazar não encontrado.');
     const announcement = await prisma.announcement.findFirst({
       where: { id: req.params.announcementId, bazarId: bazar.id },
-      include: { images: { orderBy: { order: 'asc' } }, product: { select: { id: true, name: true, slug: true, price: true } } }
+      include: { images: { orderBy: { order: 'asc' } }, product: { select: { id: true, name: true, slug: true, price: true } }, poll: { include: { options: true } } }
     });
     if (!announcement) return notFound(res, 'Anúncio não encontrado.');
     if (announcement.sellerId !== req.user.id) return forbidden(res);
@@ -96,9 +99,36 @@ const create = async (req, res) => {
       if (n >= 1 && n <= 8) backgroundId = n;
     }
 
+    // Sondagem (opcional) — vem como JSON no campo "poll":
+    // { options:["Sim","Não"], allowMultiple:false, durationDays:3 }
+    // 2 a 4 opções, texto de 1-80 caracteres cada; um Post só pode ter
+    // uma sondagem (mesma ideia do produto associado: opcional, única).
+    let pollPayload = null;
+    if (req.body.poll) {
+      try { pollPayload = JSON.parse(req.body.poll); } catch (_) { pollPayload = null; }
+      if (pollPayload) {
+        const opts = (pollPayload.options || []).map(o => sanitize(String(o || '')).slice(0, 80)).filter(Boolean);
+        if (opts.length < 2 || opts.length > 4) return badRequest(res, 'Uma sondagem precisa de 2 a 4 opções.');
+        pollPayload.options = opts;
+      }
+    }
+
     const announcement = await prisma.announcement.create({
       data: { bazarId: bazar.id, sellerId: req.user.id, text, productId, backgroundId }
     });
+
+    if (pollPayload) {
+      const days = parseInt(pollPayload.durationDays, 10);
+      const expiresAt = (days > 0 && days <= 30) ? new Date(Date.now() + days * 86400000) : null;
+      await prisma.poll.create({
+        data: {
+          announcementId: announcement.id,
+          allowMultiple: !!pollPayload.allowMultiple,
+          expiresAt,
+          options: { create: pollPayload.options.map((text, order) => ({ text, order })) }
+        }
+      });
+    }
 
     // Suporta várias fotos por anúncio (campo multipart "images", até 6).
     let imageUploadErrors = [];
@@ -120,8 +150,9 @@ const create = async (req, res) => {
 
     const full = await prisma.announcement.findUnique({
       where: { id: announcement.id },
-      include: { images: { orderBy: { order: 'asc' } }, mentions: { select: { mentionedUserId: true, mentionedUser: { select: { username: true } } } }, product: { select: { id: true, name: true, slug: true, price: true } } }
+      include: { images: { orderBy: { order: 'asc' } }, mentions: { select: { mentionedUserId: true, mentionedUser: { select: { username: true } } } }, product: { select: { id: true, name: true, slug: true, price: true } }, poll: true }
     });
+    if (full.poll) full.poll = await shapePoll(full.poll, req.user.id);
 
     mentionSvc.syncMentions({
       text,
