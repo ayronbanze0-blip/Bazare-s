@@ -51,7 +51,9 @@ const orderReceived = (sellerId, orderId, productName, total) =>
     type: 'ORDER',
     title: 'Nova encomenda recebida',
     message: `${productName} — ${total.toLocaleString('pt-MZ')} MT`,
-    link: `/orders/${orderId}`
+    // Rota real do frontend (MPA, não React Router) — "/orders/:id" nunca
+    // existiu como página; o clique na notificação não ia a lugar nenhum.
+    link: `order-detail.html?id=${orderId}`
   });
 
 const orderStatusChanged = (buyerId, orderId, status) =>
@@ -59,15 +61,18 @@ const orderStatusChanged = (buyerId, orderId, status) =>
     type: 'ORDER',
     title: `Encomenda ${status.toLowerCase()}`,
     message: `A sua encomenda #${orderId.slice(-8)} foi ${status.toLowerCase()}.`,
-    link: `/orders/${orderId}`
+    link: `order-detail.html?id=${orderId}`
   });
 
-const newMessage = (toId, fromName, preview) =>
+const newMessage = (toId, fromName, preview, chatId = null) =>
   push(toId, {
     type: 'CHAT',
     title: `Mensagem de ${fromName}`,
     message: preview.slice(0, 80),
-    link: '/chat'
+    // Com chatId abre já a conversa certa; sem ele (ex.: resposta a
+    // história, onde o utilizador que recebe pode não ter ainda uma
+    // entrada visível) cai na lista de conversas.
+    link: chatId ? `chat.html?chatId=${chatId}` : 'chat.html'
   });
 
 const feeAlert = (sellerId, amount) =>
@@ -75,7 +80,7 @@ const feeAlert = (sellerId, amount) =>
     type: 'WARNING',
     title: 'Contribuição pendente',
     message: `A sua contribuição atingiu ${amount.toLocaleString('pt-MZ')} MT. Efectue o pagamento.`,
-    link: '/finance'
+    link: 'finance.html'
   });
 
 const accountSuspended = (userId, reason) =>
@@ -83,7 +88,7 @@ const accountSuspended = (userId, reason) =>
     type: 'ERROR',
     title: 'Conta suspensa',
     message: reason || 'A sua conta foi suspensa. Contacte o suporte.',
-    link: '/support'
+    link: 'support.html'
   });
 
 const accountVerified = (userId) =>
@@ -91,7 +96,7 @@ const accountVerified = (userId) =>
     type: 'SUCCESS',
     title: 'Conta verificada!',
     message: 'A sua conta de vendedor foi verificada pela plataforma.',
-    link: '/profile'
+    link: 'profile.html'
   });
 
 /**
