@@ -101,6 +101,8 @@ model User {
   storyViews        StoryView[]
   feedReactions     FeedReaction[]
   feedShares        FeedShare[]
+  affinities        UserAffinity[]
+  pollVotes         PollVote[]
   commentLikes      CommentLike[]
   cartItems         CartItem[]
   tokens            RefreshToken[]
@@ -257,6 +259,7 @@ model Bazar {
   transactions Transaction[]
   followers   Follow[]
   announcements Announcement[]
+  userAffinities UserAffinity[]
   stories     Story[]
   reels       Reel[]
 
@@ -536,9 +539,52 @@ model Announcement {
   comments      Comment[]
   images        AnnouncementImage[]
   mentions      Mention[]
+  poll          Poll?
 
   @@index([bazarId])
   @@index([sellerId])
+}
+
+// Sondagem — sempre anexada a um Post de texto (Announcement), nunca
+// autónoma: reaproveita toda a infra do feed (reacções, comentários,
+// partilha, bloqueio) que um Post já tem, em vez de duplicar tudo
+// para um tipo de conteúdo novo.
+model Poll {
+  id             String       @id @default(uuid())
+  announcementId String       @unique
+  announcement   Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  allowMultiple  Boolean      @default(false)
+  expiresAt      DateTime?
+  createdAt      DateTime     @default(now())
+  options        PollOption[]
+}
+
+model PollOption {
+  id     String     @id @default(uuid())
+  pollId String
+  poll   Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  text   String
+  order  Int        @default(0)
+  votes  PollVote[]
+
+  @@index([pollId])
+}
+
+// Uma linha por (opção, utilizador) — em sondagem de escolha única,
+// o controller garante que só existe uma linha por (poll, utilizador)
+// de cada vez (apaga a antiga antes de criar a nova); em sondagem de
+// escolha múltipla, o utilizador pode ter uma linha por opção.
+model PollVote {
+  id        String     @id @default(uuid())
+  pollId    String
+  optionId  String
+  option    PollOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime   @default(now())
+
+  @@unique([optionId, userId])
+  @@index([pollId, userId])
 }
 
 model AnnouncementImage {
@@ -622,10 +668,27 @@ model Reel {
   createdAt     DateTime @default(now())
 
   comments      Comment[]
+  images        ReelImage[]
 
   @@index([bazarId])
   @@index([sellerId])
   @@index([createdAt])
+}
+
+// Reel com várias fotos (carrossel, ao estilo Instagram) — o campo
+// legado `imageUrl`/`imagePublicId` acima continua a existir para não
+// perder dados de Reels antigos de foto única gravados antes desta
+// migração; um Reel novo de foto usa OU o legado (1 foto) OU esta
+// tabela (2+ fotos), nunca os dois ao mesmo tempo.
+model ReelImage {
+  id       String @id @default(uuid())
+  reelId   String
+  reel     Reel   @relation(fields: [reelId], references: [id], onDelete: Cascade)
+  url      String
+  publicId String?
+  order    Int    @default(0)
+
+  @@index([reelId])
 }
 
 model StoryView {
@@ -677,6 +740,27 @@ model FeedShare {
 
   @@unique([userId, targetType, targetId])
   @@index([targetType, targetId])
+  @@index([userId])
+}
+
+// Feed inteligente: afinidade agregada de um utilizador por Bazar,
+// construída a partir de gostos/comentários/partilhas/favoritos/
+// visualizações desse utilizador (ver affinityService.js) — não é
+// um registo por interação (isso cresceria sem limite, o mesmo tipo
+// de risco de escala já anotado noutros sítios do schema), é só a
+// pontuação já somada, uma linha por (utilizador, bazar). Usada para
+// reordenar cada página do feed (nunca para decidir QUAIS itens
+// entram na página — isso continua só por data, ver feedController.list).
+model UserAffinity {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bazarId   String
+  bazar     Bazar    @relation(fields: [bazarId], references: [id], onDelete: Cascade)
+  score     Float    @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, bazarId])
   @@index([userId])
 }
 
