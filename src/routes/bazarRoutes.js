@@ -43,13 +43,13 @@ router.get('/:idOrSlug/reels/:reelId', authenticate, isSeller, reelCtrl.getOne);
 router.post(
   '/:idOrSlug/reels',
   authenticate, isSeller,
-  uploadMedia.fields([{ name: 'video', maxCount: 1 }, { name: 'image', maxCount: 1 }]),
+  uploadMedia.fields([{ name: 'video', maxCount: 1 }, { name: 'image', maxCount: 1 }, { name: 'images', maxCount: 10 }]),
   reelCtrl.create
 );
 router.put(
   '/:idOrSlug/reels/:reelId',
   authenticate, isSeller,
-  uploadMedia.fields([{ name: 'image', maxCount: 1 }]),
+  uploadMedia.fields([{ name: 'image', maxCount: 1 }, { name: 'images', maxCount: 10 }]),
   reelCtrl.update
 );
 router.delete('/:idOrSlug/reels/:reelId', authenticate, isSeller, reelCtrl.remove);
