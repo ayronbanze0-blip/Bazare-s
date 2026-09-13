@@ -6,7 +6,7 @@ on:
       base_url:
         description: 'URL do serviço Render TEMPORÁRIO — sem barra no fim'
         required: true
-        default: 'https://bazares.onrender.com'
+        default: 'https://bazare-s-1.onrender.com'
       vendedores:
         description: 'Quantos vendedores simular em simultâneo'
         required: true
