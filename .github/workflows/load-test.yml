@@ -1,0 +1,115 @@
+name: Teste de Carga (simular vendedores)
+
+# Corrido manualmente a partir da app do GitHub (Actions → este
+# workflow → "Run workflow") — nunca corre sozinho num push, porque
+# gera tráfego e dados a sério (mesmo que só contra a Neon de teste).
+on:
+  workflow_dispatch:
+    inputs:
+      vendedores:
+        description: 'Quantos vendedores simular em simultâneo'
+        required: true
+        default: '500'
+      k6_version:
+        description: 'Versão do k6 a instalar'
+        required: false
+        default: '0.54.0'
+
+jobs:
+  load-test:
+    runs-on: ubuntu-latest
+    # Isto corre SEMPRE contra a Neon (secrets.NEON_DATABASE_URL) —
+    # nunca contra a Supabase de produção. Ver scripts/loadtest-reset.js,
+    # que também recusa correr se DATABASE_URL não parecer Neon.
+    env:
+      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+      NODE_ENV: loadtest
+      PORT: '3001'
+      FRONTEND_URL: 'http://localhost:3000'
+      # Limites de segurança propositadamente muito altos só nesta
+      # corrida — sem isto, o próprio rate limiter da API entraria em
+      # acção quase de imediato (todos os "vendedores" simulados saem
+      # do mesmo IP, o do runner do GitHub) e o teste mediria "quão
+      # depressa a API responde 429", não a capacidade real dela.
+      RATE_LIMIT_MAX: '1000000'
+      AUTH_RATE_LIMIT_MAX: '1000000'
+      ORDER_RATE_LIMIT_MAX: '1000000'
+      AI_RATE_LIMIT_MAX: '1000000'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Instalar dependências do backend
+        run: npm ci
+
+      - name: Sincronizar schema Prisma na Neon
+        run: npx prisma db push --accept-data-loss --skip-generate
+
+      - name: Limpar dados de corridas anteriores
+        run: node scripts/loadtest-reset.js
+
+      - name: Gerar segredos JWT efémeros (só para esta corrida)
+        run: |
+          echo "JWT_ACCESS_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "JWT_REFRESH_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+
+      - name: Arrancar o backend em segundo plano
+        run: nohup node src/server.js > server.log 2>&1 &
+
+      - name: Esperar o backend ficar saudável
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3001/api/health | grep -q '"db":"ok"'; then
+              echo "✅ Backend saudável (BD ligada)."
+              exit 0
+            fi
+            echo "A aguardar o backend arrancar... ($i/30)"
+            sleep 2
+          done
+          echo "❌ Backend não ficou saudável a tempo. Log:"
+          cat server.log
+          exit 1
+
+      - name: Instalar k6
+        uses: grafana/setup-k6-action@v1
+        with:
+          k6-version: ${{ github.event.inputs.k6_version }}
+
+      - name: Correr o teste de carga
+        uses: grafana/run-k6-action@v1
+        with:
+          path: tests/load/vendor-simulation.js
+          flags: --vus ${{ github.event.inputs.vendedores }} --iterations ${{ github.event.inputs.vendedores }}
+        env:
+          BASE_URL: 'http://localhost:3001/api'
+
+      - name: Publicar resumo no ecrã do GitHub Actions
+        if: always()
+        run: |
+          if [ -f load-test-summary.md ]; then
+            cat load-test-summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "⚠️ O teste não chegou a gerar resumo (provavelmente falhou a arrancar)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Mostrar o log do backend se algo correu mal
+        if: failure()
+        run: cat server.log || true
+
+      - name: Guardar relatório completo como ficheiro
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorio-teste-de-carga
+          path: |
+            load-test-summary.md
+            load-test-full.json
+            server.log
+          retention-days: 14
