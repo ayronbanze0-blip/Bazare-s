@@ -143,6 +143,11 @@ model User {
   blocking             Block[]   @relation("BlockerOf")
   blockedBy            Block[]   @relation("BlockedBy")
 
+  // Comunidades/Grupos
+  ownedCommunities      Community[]
+  communityMemberships  CommunityMember[]
+  communityPosts        CommunityPost[]
+
   @@unique([provider, providerId])
   @@index([email])
   @@index([username])
@@ -444,6 +449,12 @@ model Comment {
   announcement   Announcement? @relation(fields: [announcementId], references: [id], onDelete: Cascade)
   reelId         String?
   reel           Reel?         @relation(fields: [reelId], references: [id], onDelete: Cascade)
+  // Comentário num Post de uma Comunidade/Grupo — mesmo padrão dos
+  // outros três (campo opcional próprio em vez de um alvo polimórfico),
+  // reaproveita toda a infra de comentários/respostas/gostos já
+  // existente sem duplicar nada.
+  communityPostId String?
+  communityPost  CommunityPost? @relation(fields: [communityPostId], references: [id], onDelete: Cascade)
   userId         String
   user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   text           String        @db.Text
@@ -462,6 +473,7 @@ model Comment {
   @@index([productId])
   @@index([announcementId])
   @@index([reelId])
+  @@index([communityPostId])
   @@index([userId])
   @@index([parentId])
 }
@@ -499,14 +511,20 @@ model Mention {
   comment         Comment?      @relation(fields: [commentId], references: [id], onDelete: Cascade)
   announcementId  String?
   announcement    Announcement? @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  // Menção directa no texto de um Post de Comunidade (comentários em
+  // posts de comunidade já ficam cobertos por `commentId` acima).
+  communityPostId String?
+  communityPost   CommunityPost? @relation(fields: [communityPostId], references: [id], onDelete: Cascade)
   createdAt       DateTime      @default(now())
 
   @@unique([mentionedUserId, commentId])
   @@unique([mentionedUserId, announcementId])
+  @@unique([mentionedUserId, communityPostId])
   @@index([mentionedUserId])
   @@index([authorId])
   @@index([commentId])
   @@index([announcementId])
+  @@index([communityPostId])
 }
 
 // ─────────────────────────────────────────────
@@ -714,6 +732,7 @@ enum FeedTargetType {
   PRODUCT
   ANNOUNCEMENT
   REEL
+  GROUP_POST
 }
 
 model FeedReaction {
@@ -1064,6 +1083,111 @@ model AuditLog {
   @@index([action])
   @@index([createdAt])
   @@index([entityId])
+}
+
+// ─────────────────────────────────────────────
+// COMUNIDADES / GRUPOS (estilo Facebook Groups) — espaços de
+// utilizadores em torno de um interesse comum, independentes de
+// Bazar/vendedor (qualquer utilizador pode criar um). Reaproveita
+// toda a infra de reacções/partilhas/comentários/menções já existente
+// para os Posts do feed (ver FeedTargetType.GROUP_POST e
+// Comment.communityPostId/Mention.communityPostId) em vez de duplicar
+// esse motor — mesma filosofia dos Reels/Anúncios/Sondagens. Rotas
+// expostas em /groups (não /communities) para bater certo com o
+// frontend comunidade.html/comunidades.html/nova-comunidade.html já
+// construído em paralelo (fora desta conversa).
+// ─────────────────────────────────────────────
+enum CommunityPrivacy {
+  // Aparece em /groups (descoberta) e qualquer pessoa vê o conteúdo.
+  PUBLIC
+  // NÃO aparece na listagem de descoberta (só em "As minhas", para
+  // quem já é membro) — mas continua acessível a quem tiver a
+  // ligação directa (GET /groups/:id não é bloqueado). Entrar
+  // continua a ser imediato em ambos os casos — não há pedido de
+  // adesão/aprovação nesta fase (decisão de âmbito: o frontend já
+  // construído em paralelo não tem UI para isso; ver nota no
+  // communityController.js).
+  PRIVATE
+}
+
+enum CommunityRole {
+  ADMIN
+  MODERATOR
+  MEMBER
+}
+
+model Community {
+  id            String   @id @default(uuid())
+  name          String
+  slug          String   @unique
+  description   String?  @db.Text
+  category      String?
+  coverUrl      String?
+  coverPublicId String?
+  privacy       CommunityPrivacy @default(PUBLIC)
+  ownerId       String
+  owner         User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now())
+
+  members       CommunityMember[]
+  posts         CommunityPost[]
+
+  @@index([ownerId])
+  @@index([privacy])
+  @@index([category])
+}
+
+model CommunityMember {
+  id          String   @id @default(uuid())
+  communityId String
+  community   Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // O dono (Community.ownerId) tem sempre ADMIN — MODERATOR/outros
+  // ADMIN só existem se o dono promover alguém (updateMemberRole);
+  // por agora é infra extra pronta a usar, o frontend actual só
+  // conhece "dono vs membro".
+  role        CommunityRole @default(MEMBER)
+  joinedAt    DateTime @default(now())
+
+  @@unique([communityId, userId])
+  @@index([communityId])
+  @@index([userId])
+}
+
+model CommunityPost {
+  id           String   @id @default(uuid())
+  communityId  String
+  community    Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  authorId     String
+  author       User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  text         String   @db.Text
+  // Fundo (1-8) para posts só de texto — mesmos 8 gradientes já usados
+  // em Announcement/Story — reservado para quando o composer do grupo
+  // ganhar essa opção (o composer actual só tem texto+fotos).
+  backgroundId Int?
+  // Destacado no topo da listagem pelo dono/moderador — reservado
+  // (frontend actual não mostra indicação visual disto ainda).
+  pinned       Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  images       CommunityPostImage[]
+  comments     Comment[]
+  mentions     Mention[]
+
+  @@index([communityId, pinned])
+  @@index([authorId])
+}
+
+model CommunityPostImage {
+  id              String        @id @default(uuid())
+  communityPostId String
+  communityPost   CommunityPost @relation(fields: [communityPostId], references: [id], onDelete: Cascade)
+  url             String
+  publicId        String?
+  order           Int           @default(0)
+
+  @@index([communityPostId])
 }
 
 // ─────────────────────────────────────────────
