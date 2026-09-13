@@ -48,14 +48,15 @@ function extractMentionUsernames(text) {
  * @param {string} p.authorName - nome de quem escreveu (para a notificação)
  * @param {string} [p.commentId]
  * @param {string} [p.announcementId]
+ * @param {string} [p.communityPostId]
  * @param {string} p.link - link do conteúdo, para a notificação
  */
-async function syncMentions({ text, authorId, authorName, commentId = null, announcementId = null, link }) {
+async function syncMentions({ text, authorId, authorName, commentId = null, announcementId = null, communityPostId = null, link }) {
   try {
-    if (!commentId && !announcementId) return; // nada para associar
+    if (!commentId && !announcementId && !communityPostId) return; // nada para associar
     const usernames = extractMentionUsernames(text);
 
-    const where = commentId ? { commentId } : { announcementId };
+    const where = commentId ? { commentId } : announcementId ? { announcementId } : { communityPostId };
     const existing = await prisma.mention.findMany({
       where,
       select: { id: true, mentionedUserId: true, mentionedUser: { select: { username: true } } }
@@ -91,7 +92,7 @@ async function syncMentions({ text, authorId, authorName, commentId = null, anno
     for (const u of newTargets) {
       try {
         await prisma.mention.create({
-          data: { mentionedUserId: u.id, authorId, commentId, announcementId }
+          data: { mentionedUserId: u.id, authorId, commentId, announcementId, communityPostId }
         });
         notifSvc.mentioned(u.id, authorName || 'Alguém', link).catch(() => {});
       } catch (err) {
