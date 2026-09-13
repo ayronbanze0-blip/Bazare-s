@@ -4,8 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       base_url:
-        description: 'URL do serviço Render TEMPORÁRIO (ex: https://bazares-loadtest.onrender.com) — sem barra no fim'
+        description: 'URL do serviço Render TEMPORÁRIO — sem barra no fim'
         required: true
+        default: 'https://bazares.onrender.com'
       vendedores:
         description: 'Quantos vendedores simular em simultâneo'
         required: true
