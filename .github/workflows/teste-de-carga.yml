@@ -4,9 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       base_url:
-        description: 'URL do serviço Render TEMPORÁRIO — sem barra no fim'
+        description: 'URL do serviço Render TEMPORÁRIO (ex: https://bazares-loadtest.onrender.com) — sem barra no fim'
         required: true
-        default: 'https://bazare-s-1.onrender.com'
       vendedores:
         description: 'Quantos vendedores simular em simultâneo'
         required: true
@@ -31,9 +30,9 @@ jobs:
       - name: Instalar dependências do backend
         run: npm install
 
-      - name: Limpar dados de corridas anteriores (Postgres de teste no Render)
+      - name: Limpar dados de corridas anteriores (Postgres de teste na Neon)
         env:
-          DATABASE_URL: ${{ secrets.RENDER_TEST_DB_URL }}
+          DATABASE_URL: ${{ secrets.NEON_TEST_DB_URL }}
         run: |
           for i in $(seq 1 6); do
             if node scripts/loadtest-reset.js; then
@@ -42,7 +41,7 @@ jobs:
             echo "Tentativa $i falhou. A aguardar 15s..."
             sleep 15
           done
-          echo "❌ Não consegui ligar à base de dados de teste depois de 6 tentativas — confirma no dashboard do Render se a instância PostgreSQL de teste ainda existe e se o secret RENDER_TEST_DB_URL está correcto."
+          echo "❌ Não consegui ligar à base de dados de teste depois de 6 tentativas — confirma no dashboard da Neon se o projecto de teste ainda existe e se o secret NEON_TEST_DB_URL está correcto (deve incluir ?sslmode=require)."
           exit 1
 
       - name: Esperar o serviço Render ficar saudável
@@ -57,7 +56,7 @@ jobs:
             sleep 5
           done
           echo "❌ O serviço Render em $BASE_URL não respondeu saudável a tempo."
-          echo "Confirma: o serviço está criado e com deploy concluído? As variáveis de ambiente (DATABASE_URL apontando para o Postgres de teste, JWT_ACCESS_SECRET, JWT_REFRESH_SECRET) estão definidas nele?"
+          echo "Confirma: o serviço está criado e com deploy concluído? As variáveis de ambiente (DATABASE_URL apontando para a mesma Neon usada no NEON_TEST_DB_URL, com pooler activado, JWT_ACCESS_SECRET, JWT_REFRESH_SECRET) estão definidas nele?"
           exit 1
 
       - name: Instalar k6
