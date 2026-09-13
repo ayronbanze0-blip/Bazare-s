@@ -27,6 +27,7 @@ router.use('/media', require('./mediaRoutes'));
 router.use('/analytics', require('./analyticsRoutes'));
 router.use('/gamification', require('./gamificationRoutes'));
 router.use('/polls', require('./pollRoutes'));
+router.use('/groups', require('./communityRoutes'));
 router.use('/admin/feature-flags', require('./featureFlagRoutes'));
 
 // Verifica também a ligação à base de dados — se a DB estiver em baixo,
