@@ -4,8 +4,9 @@
  * RESET DA BASE DE DADOS DE TESTE DE CARGA
  * ============================================================
  * Corre SÓ contra a base de dados apontada por DATABASE_URL neste
- * processo — que no workflow de teste de carga é sempre a Neon antiga
- * (nunca a Supabase de produção; ver .github/workflows/load-test.yml).
+ * processo — que no workflow de teste de carga é a base Postgres
+ * de teste dedicada (Render, ou Neon — nunca a Supabase de produção;
+ * ver .github/workflows/load-test.yml).
  *
  * Apaga tudo o que os "vendedores" simulados criam (utilizadores,
  * bazares, publicações, reacções, comentários, tentativas de login),
@@ -23,16 +24,22 @@ const prisma = require('../src/config/database');
 // FK obrigatória a User, por isso vão à parte.
 const TABLES_TO_TRUNCATE = ['User', 'LoginAttempt', 'AuditLog'];
 
+// Domínios conhecidos de bases de dados de TESTE — nunca acrescentar
+// aqui o domínio da Supabase de produção.
+const KNOWN_TEST_DB_HOSTS = ['neon.tech', 'render.com'];
+
 async function main() {
   const dbUrl = process.env.DATABASE_URL || '';
-  if (!dbUrl.includes('neon.tech') && !process.env.LOADTEST_ALLOW_NON_NEON) {
+  const isKnownTestDb = KNOWN_TEST_DB_HOSTS.some((host) => dbUrl.includes(host));
+
+  if (!isKnownTestDb && !process.env.LOADTEST_ALLOW_NON_NEON) {
     // Trava de segurança: este script APAGA dados. Só corre por omissão
-    // contra uma DATABASE_URL que pareça ser a Neon (o domínio do teu
-    // provider aparece na connection string) — nunca contra a Supabase
-    // de produção por engano. Define LOADTEST_ALLOW_NON_NEON=1 se algum
-    // dia mudares de base de dados de teste e isto for um falso negativo.
-    console.error('❌ DATABASE_URL não parece ser a base de dados Neon de teste — a abortar por segurança.');
-    console.error('   (Isto existe para nunca truncar a base de dados de produção por engano.)');
+    // contra uma DATABASE_URL cujo domínio esteja em KNOWN_TEST_DB_HOSTS
+    // — nunca contra a Supabase de produção por engano. Define
+    // LOADTEST_ALLOW_NON_NEON=1 se mudares de base de dados de teste
+    // outra vez e isto for um falso negativo.
+    console.error('❌ DATABASE_URL não parece ser uma base de dados de teste conhecida — a abortar por segurança.');
+    console.error(`   (Domínios aceites: ${KNOWN_TEST_DB_HOSTS.join(', ')}. Isto existe para nunca truncar a base de dados de produção por engano.)`);
     process.exit(1);
   }
 
