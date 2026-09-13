@@ -10,6 +10,7 @@ const commentService = require('../services/commentService');
 const notifSvc = require('../services/notificationService');
 const mentionSvc = require('../services/mentionService');
 const blockSvc = require('../services/blockService');
+const communitySvc = require('../services/communityService');
 const logger = require('../utils/logger');
 const prisma = require('../config/database');
 
@@ -20,11 +21,16 @@ const assertType = (targetType) => VALID_TYPES.includes(targetType);
 // utilizador autenticado podia criar reações apontando para um
 // targetId inventado/inexistente (não há FK entre FeedReaction e
 // Product/Announcement/Reel).
-const TARGET_MODEL = { PRODUCT: 'product', ANNOUNCEMENT: 'announcement', REEL: 'reel' };
+const TARGET_MODEL = { PRODUCT: 'product', ANNOUNCEMENT: 'announcement', REEL: 'reel', GROUP_POST: 'communityPost' };
+// CommunityPost (targetType GROUP_POST) não tem bazarId (não pertence
+// a uma loja) — por isso o select varia consoante o tipo, em vez de
+// pedir sempre bazarId (isso rebentava com "Unknown field" no Prisma
+// para este tipo).
 const findTarget = async (targetType, targetId) => {
   const model = TARGET_MODEL[targetType];
   if (!model) return null;
-  return prisma[model].findUnique({ where: { id: targetId }, select: { id: true, bazarId: true } });
+  const select = targetType === 'GROUP_POST' ? { id: true, communityId: true } : { id: true, bazarId: true };
+  return prisma[model].findUnique({ where: { id: targetId }, select });
 };
 // Mantido por compatibilidade com o nome antigo — usa findTarget por
 // baixo para não duplicar a query.
@@ -368,6 +374,8 @@ const share = async (req, res) => {
       ? await prisma.product.findUnique({ where: { id: targetId }, select: { id: true, bazarId: true } })
       : targetType === 'ANNOUNCEMENT'
       ? await prisma.announcement.findUnique({ where: { id: targetId }, select: { id: true, bazarId: true } })
+      : targetType === 'GROUP_POST'
+      ? await prisma.communityPost.findUnique({ where: { id: targetId }, select: { id: true, communityId: true } })
       : await prisma.reel.findUnique({ where: { id: targetId }, select: { id: true, bazarId: true } });
     if (!exists) return notFound(res, 'Conteúdo não encontrado.');
 
@@ -390,6 +398,8 @@ const targetWhere = (targetType, targetId) => targetType === 'PRODUCT'
   ? { productId: targetId }
   : targetType === 'ANNOUNCEMENT'
   ? { announcementId: targetId }
+  : targetType === 'GROUP_POST'
+  ? { communityPostId: targetId }
   : { reelId: targetId };
 
 // ─── GET /api/feed/:targetType/:targetId/comments ────────────────
@@ -440,6 +450,8 @@ const createComment = async (req, res) => {
       ? await prisma.product.findUnique({ where: { id: targetId }, select: { id: true, name: true, slug: true, bazarId: true, bazar: { select: { sellerId: true } } } })
       : targetType === 'ANNOUNCEMENT'
       ? await prisma.announcement.findUnique({ where: { id: targetId }, select: { id: true, bazarId: true, bazar: { select: { sellerId: true, name: true } } } })
+      : targetType === 'GROUP_POST'
+      ? await prisma.communityPost.findUnique({ where: { id: targetId }, select: { id: true, authorId: true, communityId: true, community: { select: { slug: true } } } })
       : await prisma.reel.findUnique({ where: { id: targetId }, select: { id: true, bazarId: true, bazar: { select: { sellerId: true, name: true } } } });
     if (!exists) return notFound(res, 'Conteúdo não encontrado.');
 
@@ -465,11 +477,12 @@ const createComment = async (req, res) => {
     // Notificações — nunca bloqueiam a resposta nem se avisa a si mesmo.
     const link = targetType === 'PRODUCT' ? `product.html?id=${exists.slug || targetId}`
       : targetType === 'ANNOUNCEMENT' ? `home.html?announcement=${targetId}`
+      : targetType === 'GROUP_POST' ? `comunidade.html?id=${exists.community?.slug || exists.communityId}`
       : `reels.html?reel=${targetId}`;
     if (parentAuthorId && parentAuthorId !== req.user.id) {
       notifSvc.commentReply(parentAuthorId, req.user.name, req.body.text, link).catch(() => {});
     } else if (!parentAuthorId) {
-      const ownerId = exists.bazar?.sellerId;
+      const ownerId = targetType === 'GROUP_POST' ? exists.authorId : exists.bazar?.sellerId;
       if (ownerId && ownerId !== req.user.id) {
         notifSvc.commentOnContent(ownerId, req.user.name, req.body.text, link).catch(() => {});
       }
@@ -534,6 +547,7 @@ const updateComment = async (req, res) => {
 
     const link = comment.productId ? `product.html?id=${comment.productId}`
       : comment.announcementId ? `home.html?announcement=${comment.announcementId}`
+      : comment.communityPostId ? `comunidade.html?post=${comment.communityPostId}`
       : `reels.html?reel=${comment.reelId}`;
 
     mentionSvc.syncMentions({
@@ -558,7 +572,8 @@ const removeComment = async (req, res) => {
       include: {
         product: { select: { sellerId: true } },
         announcement: { select: { sellerId: true } },
-        reel: { select: { sellerId: true } }
+        reel: { select: { sellerId: true } },
+        communityPost: { select: { authorId: true, community: { select: { id: true, ownerId: true } } } }
       }
     });
     // Já não existe (ex.: apagado por outro pedido entretanto, ou um
@@ -566,8 +581,13 @@ const removeComment = async (req, res) => {
     // app) — trata-se como sucesso, não como erro: o resultado que a
     // pessoa queria (o comentário desaparecido) já está garantido.
     if (!comment) return ok(res, {}, 'Comentário removido.');
-    const ownerId = comment.product?.sellerId || comment.announcement?.sellerId || comment.reel?.sellerId;
-    const canDelete = comment.userId === req.user.id || ownerId === req.user.id || req.user.role === 'ADMIN';
+    const ownerId = comment.product?.sellerId || comment.announcement?.sellerId || comment.reel?.sellerId || comment.communityPost?.authorId;
+    let canDelete = comment.userId === req.user.id || ownerId === req.user.id || req.user.role === 'ADMIN';
+    // Num grupo, o dono/administrador/moderador também pode moderar
+    // comentários de outras pessoas — não só o autor do post em si.
+    if (!canDelete && comment.communityPost?.community) {
+      canDelete = await communitySvc.isModOrAdmin(comment.communityPost.community, req.user.id);
+    }
     if (!canDelete) return forbidden(res, 'Sem permissão para apagar este comentário.');
 
     try {
