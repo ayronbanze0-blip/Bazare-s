@@ -1,0 +1,92 @@
+name: Teste de Carga (simular vendedores)
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: 'URL do serviço Render TEMPORÁRIO (ex: https://bazares-loadtest.onrender.com) — sem barra no fim'
+        required: true
+      vendedores:
+        description: 'Quantos vendedores simular em simultâneo'
+        required: true
+        default: '500'
+      k6_version:
+        description: 'Versão do k6 a instalar'
+        required: false
+        default: '0.54.0'
+
+jobs:
+  load-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar dependências do backend
+        run: npm install
+
+      - name: Limpar dados de corridas anteriores (Postgres de teste no Render)
+        env:
+          DATABASE_URL: ${{ secrets.RENDER_TEST_DB_URL }}
+        run: |
+          for i in $(seq 1 6); do
+            if node scripts/loadtest-reset.js; then
+              exit 0
+            fi
+            echo "Tentativa $i falhou. A aguardar 15s..."
+            sleep 15
+          done
+          echo "❌ Não consegui ligar à base de dados de teste depois de 6 tentativas — confirma no dashboard do Render se a instância PostgreSQL de teste ainda existe e se o secret RENDER_TEST_DB_URL está correcto."
+          exit 1
+
+      - name: Esperar o serviço Render ficar saudável
+        run: |
+          BASE_URL="${{ github.event.inputs.base_url }}"
+          for i in $(seq 1 30); do
+            if curl -sf "$BASE_URL/api/health" | grep -q '"db":"ok"'; then
+              echo "✅ Serviço Render saudável (BD ligada)."
+              exit 0
+            fi
+            echo "A aguardar o Render acordar/arrancar... ($i/30)"
+            sleep 5
+          done
+          echo "❌ O serviço Render em $BASE_URL não respondeu saudável a tempo."
+          echo "Confirma: o serviço está criado e com deploy concluído? As variáveis de ambiente (DATABASE_URL apontando para o Postgres de teste, JWT_ACCESS_SECRET, JWT_REFRESH_SECRET) estão definidas nele?"
+          exit 1
+
+      - name: Instalar k6
+        uses: grafana/setup-k6-action@v1
+        with:
+          k6-version: ${{ github.event.inputs.k6_version }}
+
+      - name: Correr o teste de carga
+        uses: grafana/run-k6-action@v1
+        with:
+          path: tests/load/vendor-simulation.js
+          flags: --vus ${{ github.event.inputs.vendedores }} --iterations ${{ github.event.inputs.vendedores }}
+        env:
+          BASE_URL: ${{ github.event.inputs.base_url }}/api
+
+      - name: Publicar resumo no ecrã do GitHub Actions
+        if: always()
+        run: |
+          if [ -f load-test-summary.md ]; then
+            cat load-test-summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "⚠️ O teste não chegou a gerar resumo (provavelmente falhou a arrancar)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Guardar relatório completo como ficheiro
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorio-teste-de-carga
+          path: |
+            load-test-summary.md
+            load-test-full.json
+          retention-days: 14
