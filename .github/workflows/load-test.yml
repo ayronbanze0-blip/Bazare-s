@@ -44,10 +44,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
+          # Sem cache: 'npm' de propósito — isso exige um package-lock.json
+          # committado no repo para calcular a chave de cache, e este repo
+          # (workflow mobile-only) pode não o ter sempre presente.
 
       - name: Instalar dependências do backend
-        run: npm ci
+        # npm install em vez de npm ci pela mesma razão — "ci" exige
+        # sempre um package-lock.json, "install" funciona com ou sem ele.
+        run: npm install
 
       - name: Sincronizar schema Prisma na Neon
         run: npx prisma db push --accept-data-loss --skip-generate
