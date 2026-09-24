@@ -1,0 +1,77 @@
+name: CI
+
+# Corre em todos os PRs para main e em pushes a main.
+# (Antes estava em .github/ci.yml — fora de .github/workflows/ — por isso NUNCA correu.)
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: test
+      # Valores fictícios só para os testes (nada aqui é um segredo real).
+      DATABASE_URL: postgresql://user:pass@localhost:5432/test
+      JWT_ACCESS_SECRET: test-access-secret-test-access-secret-0000
+      JWT_REFRESH_SECRET: test-refresh-secret-test-refresh-secret-111
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      # `npm ci` exige package-lock.json. Se falhar aqui, corra o workflow
+      # "Gerar package-lock.json" (Actions -> Gerar package-lock.json -> Run workflow).
+      - name: Instalar dependências (npm ci)
+        run: npm ci
+
+      - name: Validar schema Prisma
+        run: npx prisma validate
+
+      - name: Testes unitários (node --test)
+        run: npm run test:unit
+
+      - name: Testes Jest (contrato + segurança)
+        run: npm run test:jest
+
+      - name: Auditoria de dependências (não bloqueia, só informa)
+        run: npm audit --omit=dev --audit-level=high || true
+
+  # Garante que prisma/migrations e schema.prisma NÃO divergem (alguém mudou o schema e esqueceu a migration).
+  # Só corre quando já existem migrations.
+  migrations-drift:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: shadow
+          POSTGRES_DB: shadow
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci --ignore-scripts
+      - name: Migrations vs schema.prisma
+        run: |
+          if [ ! -d prisma/migrations ]; then echo "Sem migrations ainda — verificação ignorada."; exit 0; fi
+          npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url postgresql://postgres:shadow@localhost:5432/shadow --exit-code
+
+  # Se este job falhar num PR, o merge fica bloqueado assim que
+  # activares "Require status checks to pass" nas branch protection
+  # rules do repositório (Settings -> Branches -> main).

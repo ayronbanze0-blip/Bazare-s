@@ -1,0 +1,38 @@
+name: Gerar package-lock.json
+
+# Uso (só telemóvel): Actions -> "Gerar package-lock.json" -> Run workflow.
+# Gera o lockfile SEM instalar nada (--package-lock-only) e faz commit para a branch escolhida.
+# Depois disto, `npm ci` (CI e Docker) passa a funcionar e os builds ficam reprodutíveis.
+on: workflow_dispatch
+
+permissions:
+  contents: write
+
+jobs:
+  lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Gerar lockfile
+        run: npm install --package-lock-only --ignore-scripts
+
+      - name: Verificar que `npm ci` funciona com o lockfile gerado
+        run: npm ci --ignore-scripts --dry-run
+
+      - name: Commit do lockfile
+        run: |
+          if git diff --quiet -- package-lock.json && git ls-files --error-unmatch package-lock.json >/dev/null 2>&1; then
+            echo "package-lock.json já está actualizado."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "chore: gerar package-lock.json"
+          git push

@@ -1,0 +1,71 @@
+name: Prisma — gerar nova migration
+
+# Para mudanças de schema DEPOIS do baseline, sem computador (só telemóvel):
+#   1. Edita prisma/schema.prisma (pelo GitHub) e faz commit.
+#   2. Actions -> "Prisma — gerar nova migration" -> Run workflow -> escreve um nome curto (ex.: preferencias_notificacao).
+# O workflow compara prisma/migrations com o schema.prisma numa base de dados temporária (Postgres do
+# próprio runner), gera o SQL e faz commit em prisma/migrations/<timestamp>_<nome>/.
+# Recusa migrations com operações destrutivas (DROP/TRUNCATE/DELETE): essas exigem revisão manual.
+on:
+  workflow_dispatch:
+    inputs:
+      nome:
+        description: 'Nome curto da migration (a-z, 0-9, _)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  migration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: shadow
+          POSTGRES_DB: shadow
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      SHADOW_URL: postgresql://postgres:shadow@localhost:5432/shadow
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - run: npm ci --ignore-scripts
+
+      - name: Validar nome
+        run: |
+          echo "${{ github.event.inputs.nome }}" | grep -Eq '^[a-z0-9_]{3,50}$' || { echo "Nome inválido (use a-z, 0-9, _; 3-50 caracteres)." >&2; exit 1; }
+
+      - name: Gerar SQL (migrations existentes -> schema.prisma)
+        run: |
+          test -d prisma/migrations || { echo "Sem prisma/migrations — corra primeiro o workflow de baseline." >&2; exit 1; }
+          npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url "$SHADOW_URL" --script > /tmp/migration.sql
+          cat /tmp/migration.sql
+          if ! grep -Eq '[A-Za-z]' <(grep -v '^--' /tmp/migration.sql); then
+            echo "Sem diferenças entre migrations e schema — nada a fazer."; echo "EMPTY=1" >> "$GITHUB_ENV"; exit 0
+          fi
+          if grep -Eiq 'DROP |TRUNCATE|DELETE FROM|ALTER TABLE .* DROP' /tmp/migration.sql; then
+            echo "ERRO: migration com operações destrutivas — requer revisão manual (backup + 2 deploys)." >&2
+            exit 1
+          fi
+
+      - name: Commit da migration
+        if: env.EMPTY != '1'
+        run: |
+          dir="prisma/migrations/$(date -u +%Y%m%d%H%M%S)_${{ github.event.inputs.nome }}"
+          mkdir -p "$dir"
+          cp /tmp/migration.sql "$dir/migration.sql"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add prisma/migrations
+          git commit -m "chore(prisma): migration ${{ github.event.inputs.nome }}"
+          git push

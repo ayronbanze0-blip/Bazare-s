@@ -1,0 +1,44 @@
+name: Prisma — marcar baseline como aplicada
+
+# PASSO 2 de 2 (uma única vez, DEPOIS do passo 1). Diz ao Prisma que a base de dados de
+# produção JÁ tem o schema do 0_baseline (foi criada com `db push`), sem executar o SQL.
+# Só escreve na tabela _prisma_migrations. Não altera nem apaga dados.
+#
+# Secret necessário: PRODUCTION_DATABASE_URL — use a ligação DIRECTA (sem pooler/pgbouncer).
+on:
+  workflow_dispatch:
+    inputs:
+      confirmo:
+        description: 'Escreva CONFIRMO para marcar 0_baseline como aplicada na base de PRODUÇÃO'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    if: ${{ github.event.inputs.confirmo == 'CONFIRMO' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Instalar dependências
+        run: npm ci --ignore-scripts
+
+      - name: Confirmar que a migration baseline existe
+        run: test -f prisma/migrations/0_baseline/migration.sql
+
+      - name: Marcar 0_baseline como aplicada
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        run: npx prisma migrate resolve --applied 0_baseline
+
+      - name: Estado das migrations
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        run: npx prisma migrate status
