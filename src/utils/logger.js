@@ -5,6 +5,18 @@ const path = require('path');
 const fs = require('fs');
 
 const { combine, timestamp, printf, colorize, errors, json } = winston.format;
+const { redact } = require('./redact');
+
+// Redacta campos sensíveis (password, token, secret, code, msisdn…) em qualquer
+// metadata passada ao logger — rede de segurança contra `logger.info('x', { body })`.
+const RESERVED = new Set(['level', 'message', 'timestamp', 'stack', 'splat']);
+const redactMeta = winston.format((info) => {
+  for (const key of Object.keys(info)) {
+    if (RESERVED.has(key)) continue;
+    info[key] = redact({ [key]: info[key] })[key];
+  }
+  return info;
+});
 
 const isProduction = process.env.NODE_ENV === 'production';
 
@@ -22,7 +34,7 @@ let transports;
 if (isProduction) {
   transports = [
     new winston.transports.Console({
-      format: combine(errors({ stack: true }), timestamp(), json())
+      format: combine(errors({ stack: true }), redactMeta(), timestamp(), json())
     })
   ];
 } else {
@@ -42,7 +54,7 @@ if (isProduction) {
 
   transports = [
     new winston.transports.Console({
-      format: combine(colorize(), timestamp({ format: 'HH:mm:ss' }), errors({ stack: true }), logFormat)
+      format: combine(colorize(), timestamp({ format: 'HH:mm:ss' }), errors({ stack: true }), redactMeta(), logFormat)
     }),
     ...(fileTransportsAvailable ? [
       new winston.transports.File({
@@ -50,13 +62,13 @@ if (isProduction) {
         level: 'error',
         maxsize: 5 * 1024 * 1024,
         maxFiles: 5,
-        format: combine(timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }), errors({ stack: true }), logFormat)
+        format: combine(timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }), errors({ stack: true }), redactMeta(), logFormat)
       }),
       new winston.transports.File({
         filename: path.join(logsDir, 'combined.log'),
         maxsize: 10 * 1024 * 1024,
         maxFiles: 10,
-        format: combine(timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }), errors({ stack: true }), logFormat)
+        format: combine(timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }), errors({ stack: true }), redactMeta(), logFormat)
       })
     ] : [])
   ];

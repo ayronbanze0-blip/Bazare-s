@@ -88,23 +88,35 @@ const expiresAt = (minutes = 15) => new Date(Date.now() + minutes * 60 * 1000);
 const fmtMT = (amount) => `${Number(amount || 0).toLocaleString('pt-MZ')} MT`;
 
 /**
+ * Paginação — limites globais. Nenhum endpoint pode devolver mais de MAX_LIMIT
+ * registos por pedido, seja qual for o `limit` enviado (limit=1000000 vira 100).
+ */
+const DEFAULT_LIMIT = 20;
+const MAX_LIMIT = 100;
+const MAX_PAGE = 100000; // evita `skip` gigantesco (overflow/queries absurdas)
+
+const normalizePaging = (page, limit) => ({
+  page: Math.min(Math.max(parseInt(page) || 1, 1), MAX_PAGE),
+  limit: Math.min(Math.max(parseInt(limit) || DEFAULT_LIMIT, 1), MAX_LIMIT)
+});
+
+/**
  * Paginate helper for Prisma queries
  */
-const paginate = (page = 1, limit = 20) => {
-  const take = Math.min(Math.max(parseInt(limit) || 20, 1), 100);
-  const skip = (Math.max(parseInt(page) || 1, 1) - 1) * take;
-  return { take, skip };
+const paginate = (page = 1, limit = DEFAULT_LIMIT) => {
+  const n = normalizePaging(page, limit);
+  return { take: n.limit, skip: (n.page - 1) * n.limit };
 };
 
 /**
- * Build pagination metadata
+ * Build pagination metadata — usa a MESMA normalização que `paginate`.
+ * Antes devolvia o `limit` pedido sem o limitar: com limit=500 a query devolvia 100
+ * linhas mas `pages` era calculado com 500, e o cliente achava que não havia mais páginas.
  */
-const paginateMeta = (total, page, limit) => ({
-  total,
-  page: parseInt(page) || 1,
-  limit: parseInt(limit) || 20,
-  pages: Math.ceil(total / (parseInt(limit) || 20))
-});
+const paginateMeta = (total, page, limit) => {
+  const n = normalizePaging(page, limit);
+  return { total, page: n.page, limit: n.limit, pages: Math.ceil(total / n.limit) };
+};
 
 /**
  * Pick only specified keys from object (safe serialization)
@@ -195,6 +207,6 @@ const haversineKm = (lat1, lng1, lat2, lng2) => {
 
 module.exports = {
   toSlug, uniqueSlug, sanitize, genToken, genCode, hashCode, codeMatches,
-  expiresAt, fmtMT, paginate, paginateMeta, pick, omit, calcFee,
+  expiresAt, fmtMT, paginate, paginateMeta, normalizePaging, DEFAULT_LIMIT, MAX_LIMIT, pick, omit, calcFee,
   startOfWeek, startOfMonth, getBadgeTier, parseLatLng, haversineKm
 };
