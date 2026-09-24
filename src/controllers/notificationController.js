@@ -4,6 +4,8 @@
 const { ok, notFound, forbidden, serverError, badRequest } = require('../utils/response');
 const { paginate, paginateMeta } = require('../utils/helpers');
 const logger = require('../utils/logger');
+const notifSvc = require('../services/notificationService');
+const { DEFAULT_PREFS, PREF_FIELDS, parsePrefsInput } = require('../services/notificationPolicy');
 
 const prisma = require('../config/database');
 
@@ -115,4 +117,40 @@ const unregisterDevice = async (req, res) => {
   }
 };
 
-module.exports = { list, markRead, markAllRead, remove, registerDevice, unregisterDevice };
+// ─── Preferências de notificação ─────────────────────────────────
+// GET  /api/notifications/preferences  → as minhas preferências (por omissão: tudo ligado)
+// PUT  /api/notifications/preferences  → actualiza (só campos booleanos conhecidos; upsert)
+const getPreferences = async (req, res) => {
+  try {
+    let row = null;
+    try { row = await prisma.notificationPreference.findUnique({ where: { userId: req.user.id } }); } catch { /* tabela por migrar → omissões */ }
+    const prefs = Object.fromEntries(PREF_FIELDS.map((f) => [f, row ? row[f] : DEFAULT_PREFS[f]]));
+    return ok(res, { preferences: prefs });
+  } catch (err) {
+    logger.error(`[Notifications.getPreferences] ${err.message}`);
+    return serverError(res);
+  }
+};
+
+const updatePreferences = async (req, res) => {
+  try {
+    // Lista branca: userId/role/etc. enviados no corpo são ignorados (mass assignment).
+    const parsed = parsePrefsInput(req.body);
+    if (parsed.error) return badRequest(res, parsed.error);
+
+    const row = await prisma.notificationPreference.upsert({
+      where: { userId: req.user.id },
+      create: { userId: req.user.id, ...parsed.data },
+      update: parsed.data
+    });
+    notifSvc.invalidatePrefs(req.user.id);
+    const prefs = Object.fromEntries(PREF_FIELDS.map((f) => [f, row[f]]));
+    return ok(res, { preferences: prefs }, 'Preferências guardadas.');
+  } catch (err) {
+    logger.error(`[Notifications.updatePreferences] ${err.message}`);
+    return serverError(res, 'Não foi possível guardar as preferências.');
+  }
+};
+
+module.exports = {
+  getPreferences, updatePreferences, list, markRead, markAllRead, remove, registerDevice, unregisterDevice };

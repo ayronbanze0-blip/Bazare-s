@@ -4,6 +4,7 @@ const { ok, created, notFound, forbidden, serverError, badRequest } = require('.
 const { sanitize } = require('../utils/helpers');
 const uploadSvc = require('../services/uploadService');
 const notifSvc = require('../services/notificationService');
+const blockSvc = require('../services/blockService');
 const logger = require('../utils/logger');
 const prisma = require('../config/database');
 
@@ -182,6 +183,11 @@ const reply = async (req, res) => {
     if (!story) return notFound(res, 'História não encontrada.');
     if (story.expiresAt < new Date()) return badRequest(res, 'Esta história já expirou.');
     if (story.sellerId === req.user.id) return badRequest(res, 'Não pode responder à sua própria história.');
+    // A resposta a uma história cria uma mensagem de chat — tem de respeitar os
+    // bloqueios exactamente como o envio normal de mensagens (antes contornava-os).
+    if (await blockSvc.isBlockedEither(req.user.id, story.sellerId)) {
+      return forbidden(res, 'Não é possível responder a esta história.');
+    }
 
     const text = sanitize(req.body.text || '');
     if (!text) return badRequest(res, 'Escreva uma resposta.');
@@ -233,13 +239,19 @@ const viewers = async (req, res) => {
     if (!story) return notFound(res, 'História não encontrada.');
     if (story.sellerId !== req.user.id) return forbidden(res);
 
-    const views = await prisma.storyView.findMany({
-      where: { storyId: story.id },
-      include: { user: { select: { id: true, name: true, avatarUrl: true } } },
-      orderBy: { createdAt: 'desc' }
-    });
+    // Limite de 200 linhas (uma história muito vista podia devolver milhares);
+    // `count` continua a ser o total real.
+    const [views, count] = await Promise.all([
+      prisma.storyView.findMany({
+        where: { storyId: story.id },
+        include: { user: { select: { id: true, name: true, avatarUrl: true } } },
+        orderBy: { createdAt: 'desc' },
+        take: 200
+      }),
+      prisma.storyView.count({ where: { storyId: story.id } })
+    ]);
 
-    return ok(res, { count: views.length, views });
+    return ok(res, { count, views });
   } catch (err) {
     logger.error(`[Stories.viewers] ${err.message}`);
     return serverError(res);

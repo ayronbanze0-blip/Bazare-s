@@ -8,12 +8,18 @@ const notifSvc = require('../services/notificationService');
 const emailSvc = require('../services/emailService');
 const premiumService = require('../services/premiumService');
 const logger = require('../utils/logger');
-const { canTransition, isTerminal } = require('../utils/orderStateMachine');
+const { canTransition, isTerminal, actorMayTransition } = require('../utils/orderStateMachine');
+const audit = require('../services/auditService');
+const { normalizeOrderItems, validateOrderText } = require('../utils/orderItems');
+const { blockedAmong } = require('../services/blockService');
 
 const prisma = require('../config/database');
 
 const FEE_LIMIT_PARSED = parseFloat(process.env.FEE_LIMIT_MT);
 const FEE_LIMIT = Number.isFinite(FEE_LIMIT_PARSED) ? FEE_LIMIT_PARSED : 150;
+// Alerta de stock baixo: dispara UMA vez, quando o stock CRUZA o limiar (ou chega a 0)
+// por causa de uma compra — por isso não repete a notificação a cada encomenda.
+const LOW_STOCK_THRESHOLD = Math.max(1, parseInt(process.env.LOW_STOCK_THRESHOLD, 10) || 3);
 const STATUS_FLOW = ['PENDENTE', 'ACEITE', 'EM_PREPARACAO', 'EM_ENTREGA', 'ENTREGUE', 'CANCELADA'];
 
 // Lançado quando a transição de estado pedida já não é válida no momento
@@ -47,10 +53,17 @@ const placeOrder = async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return validationError(res, errors.array());
 
-  const { items, buyerName, buyerPhone, address, latitude, longitude, payment, size, color, notes } = req.body;
+  const { buyerName, buyerPhone, address, latitude, longitude, payment, size, color, notes } = req.body;
   const geo = parseLatLng(latitude, longitude);
 
-  if (!items || !items.length) return badRequest(res, 'Nenhum item na encomenda.');
+  // Nunca confiar no formato de req.body: quantidades têm de ser inteiros, linhas
+  // repetidas são fundidas e os textos livres têm tipo/tamanho validados.
+  const normalized = normalizeOrderItems(req.body.items);
+  if (normalized.error) return badRequest(res, normalized.error);
+  const items = normalized.items;
+
+  const textError = validateOrderText({ buyerName, buyerPhone, address, payment, size, color, notes });
+  if (textError) return badRequest(res, textError);
 
   try {
     // Validate all items and group by seller
@@ -63,12 +76,21 @@ const placeOrder = async (req, res) => {
     if (products.length !== productIds.length)
       return badRequest(res, 'Um ou mais produtos não estão disponíveis.');
 
+    // Regras de integridade do marketplace
+    if (products.some(p => p.sellerId === req.user.id)) {
+      return forbidden(res, 'Não podes comprar os teus próprios produtos.');
+    }
+    const blockedSellers = await blockedAmong(req.user.id, [...new Set(products.map(p => p.sellerId))]);
+    if (blockedSellers.length) {
+      // Mensagem genérica: não revela quem bloqueou quem.
+      return forbidden(res, 'Não é possível encomendar a este vendedor.');
+    }
+
     // Check stock
     for (const item of items) {
       const product = products.find(p => p.id === item.productId);
       if (!product) return badRequest(res, `Produto ${item.productId} não encontrado.`);
       if (product.stock < item.qty) return badRequest(res, `Stock insuficiente para: ${product.name}`);
-      if (item.qty < 1) return badRequest(res, `Quantidade inválida para: ${product.name}`);
     }
 
     // Group items by seller (one order per seller)
@@ -107,15 +129,15 @@ const placeOrder = async (req, res) => {
             buyerId: req.user.id,
             sellerId: group.sellerId,
             bazarId: group.bazar.id,
-            buyerName: buyerName || req.user.name,
-            buyerPhone,
-            address,
+            buyerName: buyerName ? sanitize(buyerName) : req.user.name,
+            buyerPhone: sanitize(buyerPhone),
+            address: sanitize(address),
             latitude: geo?.latitude ?? null,
             longitude: geo?.longitude ?? null,
-            payment: payment || 'Pagamento na entrega',
-            size: size || null,
-            color: color || null,
-            notes: notes || null,
+            payment: payment ? sanitize(payment) : 'Pagamento na entrega',
+            size: size ? sanitize(size) : null,
+            color: color ? sanitize(color) : null,
+            notes: notes ? sanitize(notes) : null,
             subtotal,
             feeRate,
             feeAmount,
@@ -161,12 +183,32 @@ const placeOrder = async (req, res) => {
     Promise.all(createdOrders.map(async (order) => {
       const seller = await prisma.user.findUnique({ where: { id: order.sellerId } });
       notifSvc.orderReceived(order.sellerId, order.id, order.items.map(i => i.name).join(', '), order.total);
-      if (seller?.email) {
+      // Só envia email se o vendedor não o desligou (emailEnabled + orderNotifications).
+      if (seller?.email && await notifSvc.shouldEmail(order.sellerId, 'orders')) {
         emailSvc.sendOrderNotificationEmail(seller.email, seller.name, order).catch(() => {});
       }
     })).catch((e) => logger.warn(`[Orders.placeOrder] Falha ao notificar vendedor(es): ${e.message}`));
 
-    logger.info(`[Orders] ${createdOrders.length} order(s) placed by ${req.user.email}`);
+    // Alertas de stock baixo / esgotado para o vendedor (só quando o stock cruza o limiar).
+    for (const group of Object.values(sellerGroups)) {
+      for (const { product, qty } of group.items) {
+        const before = product.stock;
+        const after = before - qty;
+        if (after <= 0 && before > 0) {
+          notifSvc.push(group.sellerId, {
+            type: 'WARNING', title: 'Produto esgotado',
+            message: `"${product.name}" ficou sem stock.`, link: `/products/${product.id}`
+          });
+        } else if (after > 0 && after <= LOW_STOCK_THRESHOLD && before > LOW_STOCK_THRESHOLD) {
+          notifSvc.push(group.sellerId, {
+            type: 'WARNING', title: 'Stock baixo',
+            message: `"${product.name}" tem apenas ${after} unidade(s) em stock.`, link: `/products/${product.id}`
+          });
+        }
+      }
+    }
+
+    logger.info(`[Orders] ${createdOrders.length} order(s) placed by ${req.user.id}`);
     return created(res, { orders: createdOrders }, 'Encomenda realizada com sucesso.');
   } catch (err) {
     if (err instanceof StockError) return badRequest(res, err.message);
@@ -288,21 +330,24 @@ const updateStatus = async (req, res) => {
       return badRequest(res, `Não é possível mudar de "${order.status}" para "${status}".`);
     }
 
-    // Buyers can only confirm delivery
-    if (isBuyer && !isAdmin) {
-      if (status !== 'ENTREGUE') return forbidden(res, 'Compradores só podem confirmar entrega.');
-    }
+    // Quem pode fazer o quê (ver utils/orderStateMachine.js):
+    //  - comprador: cancelar ANTES de sair para entrega, ou confirmar a entrega;
+    //  - vendedor: avançar/cancelar, nunca confirmar a entrega;
+    //  - admin: qualquer transição válida (auditada).
+    // Precedência mantida: se for comprador (e não admin) aplica-se a regra do comprador.
+    const actor = isAdmin ? 'admin' : (isBuyer ? 'buyer' : 'seller');
+    const permission = actorMayTransition(actor, order.status, status);
+    if (!permission.ok) return forbidden(res, permission.reason);
 
-    // Sellers cannot go backwards in flow, and cannot confirm ENTREGUE
-    // themselves — só o comprador (ou admin) pode confirmar que o artigo
-    // chegou.
-    if (isSeller && !isAdmin) {
-      if (status === 'ENTREGUE') return forbidden(res, 'Apenas o comprador pode confirmar a entrega.');
+    // Motivo do cancelamento: texto livre → tipo, tamanho e sanitização.
+    if (cancelReason !== undefined && cancelReason !== null && typeof cancelReason !== 'string') {
+      return badRequest(res, 'Motivo inválido.');
     }
+    const cleanReason = cancelReason ? sanitize(cancelReason).slice(0, 300) : null;
 
     const updateData = {
       status,
-      ...(status === 'CANCELADA' && { cancelledAt: new Date(), cancelReason: cancelReason || null }),
+      ...(status === 'CANCELADA' && { cancelledAt: new Date(), cancelReason: cleanReason }),
       ...(status === 'ENTREGUE' && { deliveredAt: new Date() })
     };
 
@@ -367,10 +412,14 @@ const updateStatus = async (req, res) => {
             data: { stock: { increment: item.qty } }
           }).catch(() => {}); // Product might have been deleted
         }
-        await tx.user.update({
-          where: { id: order.buyerId },
-          data: { cancelCount: { increment: 1 } }
-        }).catch(() => {});
+        // `cancelCount` mede cancelamentos FEITOS PELO comprador — antes subia também quando era
+        // o vendedor (ou o admin) a cancelar, penalizando o comprador por uma decisão alheia.
+        if (actor === 'buyer') {
+          await tx.user.update({
+            where: { id: order.buyerId },
+            data: { cancelCount: { increment: 1 } }
+          }).catch(() => {});
+        }
       }
 
       updated = await tx.order.findUnique({ where: { id: order.id } });
@@ -386,15 +435,34 @@ const updateStatus = async (req, res) => {
       }
     }
 
-    // Notifications
-    const targetId = isBuyer ? order.sellerId : order.buyerId;
-    notifSvc.orderStatusChanged(targetId, order.id, status);
+    // Notificações
+    if (actor === 'buyer' && status === 'CANCELADA') {
+      // Vendedor: "O comprador cancelou a encomenda" (o stock já foi devolvido)
+      notifSvc.push(order.sellerId, {
+        type: 'ORDER', title: 'Encomenda cancelada pelo comprador',
+        message: `A encomenda #${order.id.slice(-8)} foi cancelada pelo comprador.`,
+        link: `order-detail.html?id=${order.id}`
+      });
+    } else {
+      const targetId = actor === 'buyer' ? order.sellerId : order.buyerId;
+      notifSvc.orderStatusChanged(targetId, order.id, status);
+    }
 
-    // Email notifications
+    // Email ao comprador (só se não o desligou)
     const buyer = await prisma.user.findUnique({ where: { id: order.buyerId }, select: { email: true, name: true } });
-    if (buyer) emailSvc.sendOrderStatusEmail(buyer.email, buyer.name, order, status).catch(() => {});
+    if (buyer && await notifSvc.shouldEmail(order.buyerId, 'orders')) {
+      emailSvc.sendOrderStatusEmail(buyer.email, buyer.name, order, status).catch(() => {});
+    }
 
-    logger.info(`[Orders] Status updated: ${order.id} → ${status} by ${req.user.email}`);
+    // Admin a intervir numa encomenda que não é sua: fica no AuditLog.
+    if (actor === 'admin' && !isSeller && !isBuyer) {
+      audit.record(req, 'ADMIN_ORDER_STATUS_OVERRIDE', {
+        entity: 'Order', entityId: order.id,
+        oldValue: { status: order.status }, newValue: { status, ...(cleanReason && { reason: cleanReason }) }
+      });
+    }
+
+    logger.info(`[Orders] Status updated: ${order.id} → ${status} by ${req.user.id}`);
     return ok(res, { order: updated }, `Encomenda ${status.toLowerCase()}.`);
   } catch (err) {
     if (err instanceof InvalidTransitionError) return badRequest(res, err.message);

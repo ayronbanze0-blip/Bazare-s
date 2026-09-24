@@ -6,6 +6,7 @@ const { sanitize } = require('../utils/helpers');
 const { uploadAvatar, uploadBazarBanner } = require('../services/uploadService');
 const walletService = require('../services/walletService');
 const logger = require('../utils/logger');
+const audit = require('../services/auditService');
 const prisma = require('../config/database');
 const { deleteUserData } = require('../services/accountDeletionService');
 
@@ -77,12 +78,23 @@ const myStats = async (req, res) => {
 // ─── PUT /api/users/me ────────────────────────────────────────────
 const updateProfile = async (req, res) => {
   try {
+    // Lista branca explícita (nunca role/active/verified/isPremium/…) + tipo e
+    // tamanho: valores não-string (objectos/arrays via JSON) são rejeitados.
     const { name, bio, phone, location } = req.body;
+    const fields = { name, bio, phone, location };
+    for (const [k, v] of Object.entries(fields)) {
+      if (v !== undefined && v !== null && typeof v !== 'string') return badRequest(res, `Campo "${k}" inválido.`);
+    }
+    if (name && name.trim().length > 100) return badRequest(res, 'Nome demasiado longo (máx. 100 caracteres).');
+    if (bio && bio.length > 500) return badRequest(res, 'Bio demasiado longa (máx. 500 caracteres).');
+    if (phone && !/^[+\d\s()-]{6,30}$/.test(phone)) return badRequest(res, 'Número de telefone inválido.');
+    if (location && location.length > 120) return badRequest(res, 'Localização demasiado longa (máx. 120 caracteres).');
+
     const data = {};
     if (name) data.name = sanitize(name);
     if (bio !== undefined) data.bio = sanitize(bio);
-    if (phone !== undefined) data.phone = phone;
-    if (location !== undefined) data.location = location;
+    if (phone !== undefined) data.phone = phone === null ? null : phone.trim();
+    if (location !== undefined) data.location = location === null ? null : sanitize(location);
 
     let avatarUploadError = null;
     if (req.file) {
@@ -127,10 +139,16 @@ const changePassword = async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
     if (!currentPassword || !newPassword) return badRequest(res, 'Preencha todos os campos.');
+    if (typeof currentPassword !== 'string' || typeof newPassword !== 'string') return badRequest(res, 'Dados inválidos.');
+    if (newPassword.length > 128) return badRequest(res, 'Palavra-passe demasiado longa (máx. 128 caracteres).');
     if (newPassword.length < 8) return badRequest(res, 'Nova palavra-passe muito curta (mín. 8 caracteres).');
     if (currentPassword === newPassword) return badRequest(res, 'A nova palavra-passe não pode ser igual à actual.');
 
     const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    // Contas de login social não têm palavra-passe — antes isto rebentava com 500.
+    if (!user || !user.passwordHash) {
+      return badRequest(res, 'Esta conta usa login social e não tem palavra-passe definida. Use "Esqueci a palavra-passe" para criar uma.');
+    }
     const valid = await bcrypt.compare(currentPassword, user.passwordHash);
     if (!valid) return badRequest(res, 'Palavra-passe actual incorrecta.');
 
@@ -138,7 +156,8 @@ const changePassword = async (req, res) => {
     await prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
 
     // Revoga todas as sessões — utilizador terá de fazer login novamente
-    await prisma.refreshToken.updateMany({ where: { userId: user.id }, data: { revoked: true } });
+    await prisma.refreshToken.updateMany({ where: { userId: user.id, revoked: false }, data: { revoked: true, revokedAt: new Date() } });
+    audit.record(req, 'AUTH_PASSWORD_CHANGE', { entity: 'User', entityId: user.id });
 
     return ok(res, {}, 'Palavra-passe alterada com sucesso. Faça login novamente.');
   } catch (err) {

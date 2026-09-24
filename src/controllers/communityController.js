@@ -131,6 +131,11 @@ const create = async (req, res) => {
 // ─── DONO/ADMIN do grupo: editar dados (endpoint pronto — o botão
 // "Editar" no frontend actual ainda só mostra um aviso "em breve",
 // mas a rota já fica disponível para quando isso for ligado). ───────
+// Um ADMIN da comunidade (que não é o dono) NÃO pode remover/despromover outros admins nem promover
+// alguém a ADMIN — senão dois admins podiam expulsar-se mutuamente ou um "sequestrar" a comunidade.
+// Isso é reservado ao dono e ao admin da plataforma.
+const canManageAdmins = (community, user) => community.ownerId === user.id || user.role === 'ADMIN';
+
 const update = async (req, res) => {
   try {
     const community = await resolveCommunity(req.params.idOrSlug);
@@ -289,6 +294,9 @@ const removeMember = async (req, res) => {
       where: { communityId_userId: { communityId: community.id, userId: req.params.userId } }
     });
     if (!member) return ok(res, {}, 'Já não é membro desta comunidade.');
+    if (member.role === 'ADMIN' && !canManageAdmins(community, req.user)) {
+      return forbidden(res, 'Só o dono da comunidade pode remover administradores.');
+    }
 
     await prisma.communityMember.delete({ where: { id: member.id } });
     return ok(res, {}, 'Membro removido da comunidade.');
@@ -316,6 +324,9 @@ const updateMemberRole = async (req, res) => {
       where: { communityId_userId: { communityId: community.id, userId: req.params.userId } }
     });
     if (!member) return notFound(res, 'Membro não encontrado.');
+    if ((role === 'ADMIN' || member.role === 'ADMIN') && !canManageAdmins(community, req.user)) {
+      return forbidden(res, 'Só o dono da comunidade pode promover ou despromover administradores.');
+    }
 
     await prisma.communityMember.update({ where: { id: member.id }, data: { role } });
     return ok(res, {}, 'Papel actualizado.');
@@ -417,9 +428,9 @@ const createPost = async (req, res) => {
       const validImages = uploadResults.filter((r) => r.ok);
       imageUploadErrors = uploadResults.filter((r) => !r.ok).map((r) => r.error);
       if (validImages.length > 0) {
-        await prisma.communityPostImage.createMany({
+        await uploadSvc.withUploadCleanup(validImages, () => prisma.communityPostImage.createMany({
           data: validImages.map((r, i) => ({ communityPostId: post.id, url: r.url, publicId: r.publicId, order: i }))
-        });
+        }));
       }
     }
 

@@ -5,6 +5,8 @@ const { ok, badRequest, forbidden, notFound, serverError } = require('../utils/r
 const { paginate, paginateMeta } = require('../utils/helpers');
 const notifSvc = require('../services/notificationService');
 const logger = require('../utils/logger');
+const audit = require('../services/auditService');
+const { sanitize: sanitizeText } = require('../utils/helpers');
 const walletService = require('../services/walletService');
 
 const prisma = require('../config/database');
@@ -149,7 +151,11 @@ const confirmPayment = async (req, res) => {
       link: '/finance'
     });
 
-    logger.info(`[Finance] Payment confirmed for bazar ${bazarId} by admin ${req.user.email}`);
+    audit.record(req, 'ADMIN_COMMISSION_CONFIRM', {
+      entity: 'Bazar', entityId: bazarId,
+      oldValue: { pendingFees: amount }, newValue: { pendingFees: 0, paidAmount: amount }
+    });
+    logger.info(`[Finance] Payment confirmed for bazar ${bazarId} by admin ${req.user.id}`);
     return ok(res, {}, 'Pagamento confirmado e contador reiniciado.');
   } catch (err) {
     logger.error(`[Finance.confirmPayment] ${err.message}`);
@@ -184,7 +190,7 @@ const adjustFee = async (req, res) => {
         data: {
           bazarId, sellerId: bazar.sellerId, type: 'AJUSTE',
           amount: oldValue - newValue, fee: 0,
-          description: reason || 'Ajuste administrativo'
+          description: reason ? sanitizeText(reason).slice(0, 300) : 'Ajuste administrativo'
         }
       });
       return true;
@@ -195,6 +201,12 @@ const adjustFee = async (req, res) => {
     }
 
     const updated = await prisma.bazar.findUnique({ where: { id: bazarId } });
+
+    audit.record(req, 'ADMIN_WALLET_ADJUSTMENT', {
+      entity: 'Bazar', entityId: bazarId,
+      oldValue: { pendingFees: oldValue },
+      newValue: { pendingFees: newValue, ...(reason && { reason: sanitizeText(reason).slice(0, 300) }) }
+    });
 
     notifSvc.push(bazar.sellerId, {
       type: 'INFO', title: 'Contribuição ajustada',
@@ -226,9 +238,16 @@ const setFeeRate = async (req, res) => {
       return badRequest(res, `Taxa inválida (0–${MAX_PLATFORM_FEE_RATE}%).`);
     }
 
+    const before = await prisma.bazar.findUnique({ where: { id: bazarId }, select: { feeRate: true } });
+    if (!before) return notFound(res, 'Bazar não encontrado.');
     const bazar = await prisma.bazar.update({
       where: { id: bazarId },
       data: { feeRate: rate }
+    });
+
+    audit.record(req, 'ADMIN_FEE_RATE_CHANGE', {
+      entity: 'Bazar', entityId: bazarId,
+      oldValue: { feeRate: before.feeRate }, newValue: { feeRate: rate }
     });
 
     notifSvc.push(bazar.sellerId, {

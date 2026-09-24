@@ -52,6 +52,7 @@ const listInvites = async (req, res) => {
   try {
     const invites = await prisma.revendedorInvite.findMany({
       orderBy: { createdAt: 'desc' },
+      take: 500,
       include: { usedByUsers: { select: { id: true, name: true, email: true } } }
     });
     return ok(res, { invites });
@@ -125,6 +126,8 @@ const myReferralStats = async (req, res) => {
 
     const myInvites = await prisma.revendedorInvite.findMany({
       where: { createdById: req.user.id },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
       include: { usedByUsers: { select: { id: true, name: true } } }
     });
 

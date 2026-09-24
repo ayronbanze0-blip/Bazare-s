@@ -249,9 +249,9 @@ const update = async (req, res) => {
         const validImages = uploadResults.filter(r => r.ok);
         imageUploadErrors = uploadResults.filter(r => !r.ok).map(r => r.error);
         if (validImages.length > 0) {
-          await prisma.reelImage.createMany({
+          await uploadSvc.withUploadCleanup(validImages, () => prisma.reelImage.createMany({
             data: validImages.map((r, i) => ({ reelId: reel.id, url: r.url, publicId: r.publicId, order: keepIds.length + i }))
-          });
+          }));
         }
       }
 
@@ -271,9 +271,9 @@ const update = async (req, res) => {
       imageUploadErrors = uploadResults.filter(r => !r.ok).map(r => r.error);
       if (validImages.length === 0) return badRequest(res, 'Falha ao enviar as fotos.');
       if (reel.imagePublicId) uploadSvc.deleteFromCloud(reel.imagePublicId).catch(() => {});
-      await prisma.reelImage.createMany({
+      await uploadSvc.withUploadCleanup(validImages, () => prisma.reelImage.createMany({
         data: validImages.map((r, i) => ({ reelId: reel.id, url: r.url, publicId: r.publicId, order: i }))
-      });
+      }));
       data.imageUrl = validImages[0].url;
       data.imagePublicId = validImages[0].publicId;
     } else {

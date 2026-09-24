@@ -12,6 +12,8 @@ const { genCode, genToken, expiresAt, hashCode, codeMatches } = require('../util
 const { uniqueUsername } = require('../utils/slugify');
 const emailSvc = require('../services/emailService');
 const logger = require('../utils/logger');
+const audit = require('../services/auditService');
+const { sanitize } = require('../utils/helpers');
 // NOTE: emailSvc e genCode/expiresAt continuam a ser usados em
 // forgotPassword/resetPassword (recuperação de password). A verificação
 // de email no REGISTO foi removida — a conta fica "verified: true" logo.
@@ -60,6 +62,19 @@ const setRefreshCookie = (res, token) => {
   });
 };
 
+class InviteClaimError extends Error {
+  constructor() { super('invite_claimed'); this.name = 'InviteClaimError'; }
+}
+
+// Hash "de mentira" para comparar quando o email não existe (ou a conta não
+// tem password, ex.: login social) — assim o tempo de resposta não revela se
+// o email está registado (ataque de enumeração por timing).
+let _dummyHash = null;
+const dummyCompare = async (password) => {
+  if (!_dummyHash) _dummyHash = await bcrypt.hash('bazares-dummy-password', parseInt(process.env.BCRYPT_ROUNDS) || 12);
+  await bcrypt.compare(String(password || ''), _dummyHash);
+};
+
 // ─── REGISTER ────────────────────────────────────────────────────
 const register = async (req, res) => {
   const errors = validationResult(req);
@@ -72,7 +87,8 @@ const register = async (req, res) => {
     const existing = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
     if (existing) return conflict(res, 'Este email já está registado.');
 
-    // Handle revendedor invite
+    // Handle revendedor invite (validação rápida — a reclamação atómica acontece
+    // dentro da transacção abaixo, em conjunto com a criação do utilizador)
     let inviteId = null;
     let revendedorId = null;
     if (role === 'REVENDEDOR') {
@@ -82,17 +98,6 @@ const register = async (req, res) => {
       if (invite.expiresAt && new Date() > invite.expiresAt) return badRequest(res, 'Código de convite expirado.');
       inviteId = invite.id;
       revendedorId = invite.createdById;
-
-      // Reclama o convite de forma atómica: só marca como usado se ainda
-      // estiver por usar neste preciso momento. Duas tentativas de registo
-      // concorrentes com o mesmo código (ex: link partilhado, duplo clique)
-      // só deixam UMA passar — a pré-verificação acima é só para dar um
-      // erro rápido e amigável, esta é a garantia real contra reutilização.
-      const claim = await prisma.revendedorInvite.updateMany({
-        where: { id: invite.id, used: false },
-        data: { used: true, usedAt: new Date() }
-      });
-      if (claim.count === 0) return badRequest(res, 'Código de convite inválido ou já utilizado.');
     }
 
     // Hash password
@@ -101,24 +106,39 @@ const register = async (req, res) => {
     // Alcunha única para o sistema de menções ("@joaomatavel") —
     // gerada automaticamente a partir do nome, sem pedir nada extra
     // no formulário de registo.
-    const username = await uniqueUsername(name.trim(), async (candidate) => {
+    const cleanName = sanitize(name);
+    const username = await uniqueUsername(cleanName, async (candidate) => {
       const found = await prisma.user.findUnique({ where: { username: candidate }, select: { id: true } });
       return !!found;
     });
 
-    // Create user — já fica verificado, sem fluxo de verificação por email
-    const user = await prisma.user.create({
-      data: {
-        name: name.trim(),
-        email: email.toLowerCase().trim(),
-        passwordHash,
-        username,
-        role: role.toUpperCase(),
-        inviteId,
-        revendedorId,
-        verified: true,
-        emailVerifiedAt: new Date()
+    // Reclamar o convite E criar o utilizador na MESMA transacção: antes, o
+    // convite era marcado como usado primeiro e, se a criação do utilizador
+    // falhasse a seguir (ex.: email duplicado concorrente), o convite ficava
+    // queimado sem ninguém o ter usado. O updateMany condicional continua a
+    // garantir que só UM registo concorrente consegue usar o mesmo código.
+    const user = await prisma.$transaction(async (tx) => {
+      if (inviteId) {
+        const claim = await tx.revendedorInvite.updateMany({
+          where: { id: inviteId, used: false },
+          data: { used: true, usedAt: new Date() }
+        });
+        if (claim.count === 0) throw new InviteClaimError();
       }
+      // Já fica verificado, sem fluxo de verificação por email
+      return tx.user.create({
+        data: {
+          name: cleanName,
+          email: email.toLowerCase().trim(),
+          passwordHash,
+          username,
+          role: role.toUpperCase(),
+          inviteId,
+          revendedorId,
+          verified: true,
+          emailVerifiedAt: new Date()
+        }
+      });
     });
 
     // Log registration
@@ -133,7 +153,10 @@ const register = async (req, res) => {
     }, 'Conta criada com sucesso. Faça login para continuar.');
   } catch (err) {
     logger.error(`[Register] ${err.message}`);
-    return serverError(res, err.message);
+    if (err instanceof InviteClaimError) return badRequest(res, 'Código de convite inválido ou já utilizado.');
+    if (err.code === 'P2002') return conflict(res, 'Este email já está registado.');
+    // Nunca devolver err.message ao cliente (podia expor mensagens do Prisma/BD).
+    return serverError(res, 'Não foi possível criar a conta. Tente novamente.');
   }
 };
 
@@ -184,7 +207,10 @@ const login = async (req, res) => {
         }
       }).catch(() => {});
 
-    if (!user) {
+    if (!user || !user.passwordHash) {
+      // Sem utilizador, ou conta só de login social (sem password): mesma
+      // resposta e mesmo custo que uma password errada.
+      await dummyCompare(password);
       await logAttempt(false);
       return unauthorized(res, 'Credenciais incorrectas.');
     }
@@ -306,6 +332,11 @@ const googleLogin = async (req, res) => {
     const ticket = await googleClient.verifyIdToken({ idToken, audience: process.env.GOOGLE_CLIENT_ID });
     const payload = ticket.getPayload();
     if (!payload?.sub) return unauthorized(res, 'Token do Google inválido.');
+    // Só se confia no email do Google se o próprio Google o marcou como verificado —
+    // caso contrário alguém podia associar-se à conta de outra pessoa pelo email.
+    if (payload.email && payload.email_verified === false) {
+      return unauthorized(res, 'O email da conta Google não está verificado.');
+    }
 
     const user = await findOrCreateSocialUser({
       provider: 'google',
@@ -428,6 +459,19 @@ const _resolveCurrentToken = async (record) => {
   return current;
 };
 
+// Revoga todos os tokens descendentes de `record` (segue replacedByToken até ao fim).
+const _revokeChain = async (record) => {
+  const now = new Date();
+  let next = record.replacedByToken;
+  let guard = 0;
+  while (next && guard++ < 50) {
+    const t = await prisma.refreshToken.findUnique({ where: { token: next } });
+    if (!t) break;
+    if (!t.revoked) await prisma.refreshToken.update({ where: { id: t.id }, data: { revoked: true, revokedAt: now } });
+    next = t.replacedByToken;
+  }
+};
+
 // ─── REFRESH TOKEN ────────────────────────────────────────────────
 const refresh = async (req, res) => {
   // O cookie é a via preferida (não acessível a scripts), mas o Safari
@@ -452,6 +496,20 @@ const refresh = async (req, res) => {
       const current = withinGrace ? await _resolveCurrentToken(record) : null;
 
       if (!current || current.revoked || new Date() > current.expiresAt) {
+        // REUTILIZAÇÃO: um token que JÁ foi rodado (tem replacedByToken) voltou a ser
+        // apresentado fora da janela de tolerância. Ou é um cliente com resposta perdida,
+        // ou alguém copiou o token. Em ambos os casos revoga-se TODA a cadeia descendente
+        // (a sessão actual desse dispositivo) — quem roubou o token fica sem acesso e o
+        // utilizador legítimo volta a autenticar-se. Tokens revogados por logout
+        // (sem replacedByToken) NÃO disparam isto.
+        if (record.replacedByToken && !withinGrace) {
+          await _revokeChain(record);
+          audit.record(req, 'AUTH_REFRESH_TOKEN_REUSE', {
+            entity: 'User', entityId: record.userId, userId: record.userId,
+            newValue: { tokenId: record.id }
+          });
+          logger.warn(`[Auth] Reutilização de refresh token detectada (user ${record.userId}) — cadeia revogada.`);
+        }
         return unauthorized(res, 'Refresh token inválido ou expirado. Faça login novamente.');
       }
 
@@ -520,8 +578,8 @@ const logout = async (req, res) => {
   const token = req.cookies?.refreshToken || req.body?.refreshToken;
   if (token) {
     await prisma.refreshToken.updateMany({
-      where: { token },
-      data: { revoked: true }
+      where: { token, revoked: false },
+      data: { revoked: true, revokedAt: new Date() }
     }).catch(() => {});
   }
   clearRefreshCookie(res);
@@ -531,9 +589,10 @@ const logout = async (req, res) => {
 // ─── LOGOUT ALL (revoke all sessions) ────────────────────────────
 const logoutAll = async (req, res) => {
   await prisma.refreshToken.updateMany({
-    where: { userId: req.user.id },
-    data: { revoked: true }
+    where: { userId: req.user.id, revoked: false },
+    data: { revoked: true, revokedAt: new Date() }
   }).catch(() => {});
+  audit.record(req, 'AUTH_LOGOUT_ALL', { entity: 'User', entityId: req.user.id });
   clearRefreshCookie(res);
   return ok(res, {}, 'Todas as sessões terminadas.');
 };
@@ -548,7 +607,8 @@ const verifyEmail = async (req, res) => {
 
   try {
     const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
-    if (!user) return badRequest(res, 'Utilizador não encontrado.');
+    // Mesma resposta que um código errado — não revela se o email existe.
+    if (!user) return badRequest(res, 'Código inválido.');
     if (user.verified) return ok(res, {}, 'Email já verificado.');
 
     const record = await prisma.verificationCode.findFirst({
@@ -648,7 +708,8 @@ const resetPassword = async (req, res) => {
 
   try {
     const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
-    if (!user) return badRequest(res, 'Utilizador não encontrado.');
+    // Mesma resposta que um código errado — não revela se o email existe.
+    if (!user) return badRequest(res, 'Código inválido.');
 
     const record = await prisma.verificationCode.findFirst({
       where: { userId: user.id, purpose: 'PASSWORD_RESET', usedAt: null },
@@ -667,7 +728,8 @@ const resetPassword = async (req, res) => {
       prisma.refreshToken.updateMany({ where: { userId: user.id }, data: { revoked: true } })
     ]);
 
-    logger.info(`[Auth] Password reset: ${user.email}`);
+    audit.record(req, 'AUTH_PASSWORD_RESET', { entity: 'User', entityId: user.id, userId: user.id });
+    logger.info(`[Auth] Password reset: ${user.id}`);
     return ok(res, {}, 'Palavra-passe redefinida com sucesso. Faça login.');
   } catch (err) {
     logger.error(`[ResetPassword] ${err.message}`);

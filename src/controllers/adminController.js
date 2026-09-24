@@ -2,7 +2,10 @@
 
 
 const { ok, badRequest, notFound, conflict, serverError } = require('../utils/response');
-const { paginate, paginateMeta } = require('../utils/helpers');
+const { paginate, paginateMeta, sanitize } = require('../utils/helpers');
+const audit = require('../services/auditService');
+const analyticsSvc = require('../services/analyticsService');
+const { summarizeHealth } = require('../services/productHealth');
 const notifSvc = require('../services/notificationService');
 const emailSvc = require('../services/emailService');
 const logger = require('../utils/logger');
@@ -10,6 +13,15 @@ const logger = require('../utils/logger');
 const prisma = require('../config/database');
 const { deleteUserData } = require('../services/accountDeletionService');
 const { forceDisconnectUser } = require('../sockets/chatSocket');
+
+// Projecção segura de um utilizador para respostas do painel admin — nunca
+// devolver a linha inteira do Prisma (inclui passwordHash, providerId, etc.).
+const safeUser = (u) => ({
+  id: u.id, name: u.name, email: u.email, role: u.role, active: u.active,
+  verified: u.verified, verifiedSeller: u.verifiedSeller, isPremium: u.isPremium,
+  phone: u.phone, location: u.location, avatarUrl: u.avatarUrl,
+  rating: u.rating, ratingCount: u.ratingCount, createdAt: u.createdAt, lastLoginAt: u.lastLoginAt
+});
 
 // ─── Platform overview ────────────────────────────────────────────
 const overview = async (req, res) => {
@@ -126,8 +138,13 @@ const toggleUser = async (req, res) => {
       notifSvc.push(user.id, { type: 'SUCCESS', title: 'Conta reactivada', message: 'A sua conta foi reactivada pelo administrador.' });
     }
 
-    logger.info(`[Admin] User ${updated.active ? 'reactivated' : 'suspended'}: ${user.email} by ${req.user.email}`);
-    return ok(res, { user: updated }, `Utilizador ${updated.active ? 'reactivado' : 'suspenso'}.`);
+    audit.record(req, updated.active ? 'ADMIN_USER_REACTIVATE' : 'ADMIN_USER_SUSPEND', {
+      entity: 'User', entityId: user.id,
+      oldValue: { active: user.active },
+      newValue: { active: updated.active, ...(reason && { reason: String(reason).slice(0, 300) }) }
+    });
+    logger.info(`[Admin] User ${updated.active ? 'reactivated' : 'suspended'}: ${user.id} by ${req.user.id}`);
+    return ok(res, { user: safeUser(updated) }, `Utilizador ${updated.active ? 'reactivado' : 'suspenso'}.`);
   } catch (err) {
     logger.error(`[Admin.toggleUser] ${err.message}`);
     return serverError(res);
@@ -148,7 +165,12 @@ const verifySeller = async (req, res) => {
 
     if (updated.verifiedSeller) notifSvc.accountVerified(user.id);
 
-    return ok(res, { user: updated }, `Vendedor ${updated.verifiedSeller ? 'verificado' : 'desverificado'}.`);
+    audit.record(req, updated.verifiedSeller ? 'ADMIN_SELLER_VERIFY' : 'ADMIN_SELLER_UNVERIFY', {
+      entity: 'User', entityId: user.id,
+      oldValue: { verifiedSeller: user.verifiedSeller },
+      newValue: { verifiedSeller: updated.verifiedSeller }
+    });
+    return ok(res, { user: safeUser(updated) }, `Vendedor ${updated.verifiedSeller ? 'verificado' : 'desverificado'}.`);
   } catch (err) {
     logger.error(`[Admin.verifySeller] ${err.message}`);
     return serverError(res);
@@ -158,12 +180,14 @@ const verifySeller = async (req, res) => {
 // ─── Send message to user ──────────────────────────────────────────
 const messageUser = async (req, res) => {
   try {
-    const { message } = req.body;
+    const message = sanitize(req.body.message);
     if (!message) return badRequest(res, 'Mensagem obrigatória.');
+    if (message.length > 1000) return badRequest(res, 'Mensagem demasiado longa (máx. 1000 caracteres).');
     const user = await prisma.user.findUnique({ where: { id: req.params.id } });
     if (!user) return notFound(res);
 
     notifSvc.push(user.id, { type: 'INFO', title: 'Mensagem do Administrador', message });
+    audit.record(req, 'ADMIN_MESSAGE_USER', { entity: 'User', entityId: user.id, newValue: { length: message.length } });
     return ok(res, {}, 'Mensagem enviada.');
   } catch (err) {
     logger.error(`[Admin.messageUser] ${err.message}`);
@@ -177,8 +201,13 @@ const VALID_NOTIFICATION_TYPES = ['INFO', 'SUCCESS', 'WARNING', 'ERROR', 'ORDER'
 
 const broadcast = async (req, res) => {
   try {
-    const { role, message, type = 'INFO' } = req.body;
+    const { role, type = 'INFO' } = req.body;
+    // Anúncios são "marketing" (o utilizador pode desligá-los); avisos críticos podem ir como
+    // category:'system' (não desligáveis). Qualquer outro valor cai em marketing.
+    const category = req.body.category === 'system' ? 'system' : 'marketing';
+    const message = sanitize(req.body.message);
     if (!message) return badRequest(res, 'Mensagem obrigatória.');
+    if (message.length > 1000) return badRequest(res, 'Mensagem demasiado longa (máx. 1000 caracteres).');
 
     // Validação contra os enums reais — antes um `role`/`type` inválido
     // (ex: erro de digitação no painel admin) chegava directo ao Prisma
@@ -194,12 +223,61 @@ const broadcast = async (req, res) => {
     const where = normalizedRole !== 'ALL' ? { role: normalizedRole, active: true } : { active: true };
     const users = await prisma.user.findMany({ where, select: { id: true } });
 
-    await Promise.all(users.map(u => notifSvc.push(u.id, { type, title: 'Aviso da plataforma', message })));
+    await notifSvc.warmPrefs(users.map(u => u.id));
+    await Promise.all(users.map(u => notifSvc.push(u.id, { type, category, title: 'Aviso da plataforma', message })));
 
-    logger.info(`[Admin] Broadcast sent to ${users.length} users by ${req.user.email}`);
+    audit.record(req, 'ADMIN_BROADCAST', { entity: 'Notification', newValue: { role: normalizedRole, type, category, recipientCount: users.length } });
+    logger.info(`[Admin] Broadcast sent to ${users.length} users by ${req.user.id}`);
     return ok(res, { recipientCount: users.length }, `Aviso enviado a ${users.length} utilizadores.`);
   } catch (err) {
     logger.error(`[Admin.broadcast] ${err.message}`);
+    return serverError(res);
+  }
+};
+
+// ─── Analytics da plataforma ─────────────────────────────────────
+// GET /api/admin/analytics?period=today|7d|30d|90d|all  (cache 60 s — agregações, não listas)
+const analytics = async (req, res) => {
+  try {
+    const range = analyticsSvc.periodRange(req.query.period);
+    return ok(res, await analyticsSvc.adminAnalytics(prisma, range));
+  } catch (err) {
+    logger.error(`[Admin.analytics] ${err.message}`);
+    return serverError(res, 'Não foi possível carregar as estatísticas.');
+  }
+};
+
+// ─── Produtos que precisam de atenção ────────────────────────────
+// GET /api/admin/products/health?page=1&limit=20&includeInactive=true
+// Filtra na BD os produtos com problema evidente (sem stock, preço inválido, sem imagens, sem
+// categoria/descrição) e detalha os problemas de cada um. Paginado (máx. 100 por página).
+const productsHealth = async (req, res) => {
+  try {
+    const { page = 1, limit = 20, includeInactive } = req.query;
+    const { take, skip } = paginate(page, limit);
+    const problem = [
+      { stock: { lte: 0 } }, { price: { lte: 0 } }, { images: { none: {} } },
+      { category: '' }, { description: '' }
+    ];
+    const where = includeInactive === 'true' ? { OR: [...problem, { active: false }] } : { active: true, OR: problem };
+
+    const [products, total] = await Promise.all([
+      prisma.product.findMany({
+        where, orderBy: { updatedAt: 'desc' }, take, skip,
+        select: {
+          id: true, name: true, sellerId: true, description: true, price: true, category: true, stock: true, active: true,
+          _count: { select: { images: true } }
+        }
+      }),
+      prisma.product.count({ where })
+    ]);
+    const summary = summarizeHealth(products);
+    // sellerId por produto (para o admin contactar o vendedor)
+    const sellerById = new Map(products.map((p) => [p.id, p.sellerId]));
+    const items = summary.items.map((i) => ({ ...i, sellerId: sellerById.get(i.id) }));
+    return ok(res, { items, meta: paginateMeta(total, page, limit) });
+  } catch (err) {
+    logger.error(`[Admin.productsHealth] ${err.message}`);
     return serverError(res);
   }
 };
@@ -232,6 +310,10 @@ const toggleProduct = async (req, res) => {
     notifSvc.push(product.sellerId, {
       type: 'WARNING', title: `Produto ${updated.active ? 'restaurado' : 'removido'}`,
       message: `O produto "${product.name}" foi ${updated.active ? 'restaurado' : 'removido'} pelo administrador.`
+    });
+    audit.record(req, 'ADMIN_PRODUCT_TOGGLE', {
+      entity: 'Product', entityId: product.id,
+      oldValue: { active: product.active }, newValue: { active: updated.active }
     });
     return ok(res, { active: updated.active });
   } catch (err) {
@@ -290,7 +372,8 @@ const listReports = async (req, res) => {
 
 const resolveReport = async (req, res) => {
   try {
-    const { status, resolution } = req.body;
+    const { status } = req.body;
+    const resolution = req.body.resolution ? sanitize(req.body.resolution).slice(0, 1000) : req.body.resolution;
     if (!['RESOLVIDA', 'ARQUIVADA', 'EM_ANALISE'].includes(status)) return badRequest(res, 'Estado inválido.');
 
     const report = await prisma.report.update({
@@ -298,8 +381,10 @@ const resolveReport = async (req, res) => {
       data: { status, resolution, resolvedAt: new Date(), resolvedBy: req.user.id }
     });
 
+    audit.record(req, 'ADMIN_REPORT_RESOLVE', { entity: 'Report', entityId: report.id, newValue: { status } });
     return ok(res, { report }, `Denúncia ${status.toLowerCase().replace('_', ' ')}.`);
   } catch (err) {
+    if (err.code === 'P2025') return notFound(res, 'Denúncia não encontrada.');
     logger.error(`[Admin.resolveReport] ${err.message}`);
     return serverError(res);
   }
@@ -364,7 +449,11 @@ const setBazarFeeRate = async (req, res) => {
       message: `A sua taxa de contribuição foi ajustada para ${rate}% pelo administrador.`,
       link: '/finance'
     });
-    logger.info(`[Admin] feeRate for bazar ${bazar.id} set to ${rate}% by ${req.user.email}`);
+    audit.record(req, 'ADMIN_FEE_RATE_CHANGE', {
+      entity: 'Bazar', entityId: bazar.id,
+      oldValue: { feeRate: bazar.feeRate }, newValue: { feeRate: rate }
+    });
+    logger.info(`[Admin] feeRate for bazar ${bazar.id} set to ${rate}% by ${req.user.id}`);
     return ok(res, { bazar: updated }, 'Taxa actualizada.');
   } catch (err) {
     logger.error(`[Admin.setBazarFeeRate] ${err.message}`);
@@ -385,6 +474,10 @@ const toggleFeatured = async (req, res) => {
       type: updated.featured ? 'SUCCESS' : 'INFO',
       title: updated.featured ? '⭐ Produto em destaque!' : 'Produto removido do destaque',
       message: `"${product.name}" foi ${updated.featured ? 'adicionado ao' : 'removido do'} destaque da plataforma.`
+    });
+    audit.record(req, 'ADMIN_PRODUCT_FEATURE', {
+      entity: 'Product', entityId: product.id,
+      oldValue: { featured: product.featured }, newValue: { featured: updated.featured }
     });
     return ok(res, { featured: updated.featured }, `Produto ${updated.featured ? 'destacado' : 'removido do destaque'}.`);
   } catch (err) {
@@ -407,7 +500,12 @@ const deleteUser = async (req, res) => {
 
     await prisma.$transaction((tx) => deleteUserData(tx, user.id));
 
-    logger.info(`[Admin] User deleted: ${user.email} (${user.id}) by ${req.user.email}`);
+    // O registo de auditoria fica (não depende do utilizador apagado).
+    audit.record(req, 'ADMIN_USER_DELETE', {
+      entity: 'User', entityId: user.id,
+      oldValue: { role: user.role, email: user.email }
+    });
+    logger.info(`[Admin] User deleted: ${user.id} by ${req.user.id}`);
     return ok(res, {}, 'Conta eliminada definitivamente.');
   } catch (err) {
     if (err.code === 'P2003') {
@@ -422,6 +520,6 @@ const deleteUser = async (req, res) => {
 module.exports = {
   overview, listUsers, toggleUser, verifySeller, messageUser, broadcast, deleteUser,
   listProducts, toggleProduct, toggleFeatured, listOrders, listReports, resolveReport, reports, auditLogs,
-  setBazarFeeRate
+  setBazarFeeRate, analytics, productsHealth
 };
 

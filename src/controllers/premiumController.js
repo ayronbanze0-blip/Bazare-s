@@ -4,6 +4,7 @@ const { ok, badRequest, forbidden, notFound, serverError } = require('../utils/r
 const { paginate, paginateMeta } = require('../utils/helpers');
 const notifSvc = require('../services/notificationService');
 const logger = require('../utils/logger');
+const audit = require('../services/auditService');
 const premiumService = require('../services/premiumService');
 const zumboPay = require('../services/zumboPayService');
 
@@ -110,7 +111,8 @@ const subscribe = async (req, res) => {
     }
   } catch (err) {
     logger.error(`[Premium.subscribe] ${err.message}`);
-    return serverError(res, err.message || 'Erro ao iniciar a subscrição Premium.');
+    // Nunca devolver err.message ao cliente (pode conter detalhes internos).
+    return serverError(res, 'Erro ao iniciar a subscrição Premium.');
   }
 };
 
@@ -451,7 +453,12 @@ const adminGrant = async (req, res) => {
       link: '/premium'
     });
 
-    logger.info(`[Admin] Premium concedido a ${target.email} até ${result.toISOString()} por ${req.user.email}`);
+    audit.record(req, 'ADMIN_PREMIUM_GRANT', {
+      entity: 'User', entityId: target.id,
+      oldValue: { isPremium: target.isPremium },
+      newValue: { isPremium: true, premiumExpiresAt: result }
+    });
+    logger.info(`[Admin] Premium concedido a ${target.id} até ${result.toISOString()} por ${req.user.id}`);
     return ok(res, { premiumExpiresAt: result }, 'Conta Premium activada.');
   } catch (err) {
     logger.error(`[Premium.adminGrant] ${err.message}`);
@@ -465,7 +472,11 @@ const adminRevoke = async (req, res) => {
     if (!target) return notFound(res, 'Utilizador não encontrado.');
 
     await prisma.user.update({ where: { id: target.id }, data: { isPremium: false } });
-    logger.info(`[Admin] Premium revogado de ${target.email} por ${req.user.email}`);
+    audit.record(req, 'ADMIN_PREMIUM_REVOKE', {
+      entity: 'User', entityId: target.id,
+      oldValue: { isPremium: target.isPremium }, newValue: { isPremium: false }
+    });
+    logger.info(`[Admin] Premium revogado de ${target.id} por ${req.user.id}`);
     return ok(res, {}, 'Conta Premium revogada.');
   } catch (err) {
     logger.error(`[Premium.adminRevoke] ${err.message}`);
@@ -497,7 +508,8 @@ const adminCreateCodes = async (req, res) => {
     }
 
     await prisma.premiumCode.createMany({ data: codes });
-    logger.info(`[Admin] ${n} código(s) Premium (${m} mês/es cada) gerados por ${req.user.email}.`);
+    audit.record(req, 'ADMIN_PREMIUM_CODES_CREATE', { entity: 'PremiumCode', newValue: { quantity: n, months: m } });
+    logger.info(`[Admin] ${n} código(s) Premium (${m} mês/es cada) gerados por ${req.user.id}.`);
     return ok(res, { codes: codes.map(c => c.code) }, `${n} código(s) Premium gerado(s).`);
   } catch (err) {
     logger.error(`[Premium.adminCreateCodes] ${err.message}`);
@@ -537,6 +549,7 @@ const adminRevokeCode = async (req, res) => {
     if (record.status === 'USADO') return badRequest(res, 'Este código já foi usado — não pode ser revogado.');
 
     await prisma.premiumCode.update({ where: { id: record.id }, data: { status: 'REVOGADO' } });
+    audit.record(req, 'ADMIN_PREMIUM_CODE_REVOKE', { entity: 'PremiumCode', entityId: record.id });
     return ok(res, {}, 'Código revogado.');
   } catch (err) {
     logger.error(`[Premium.adminRevokeCode] ${err.message}`);

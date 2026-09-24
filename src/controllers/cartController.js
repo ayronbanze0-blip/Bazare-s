@@ -3,6 +3,7 @@
 
 const { ok, badRequest, notFound, serverError } = require('../utils/response');
 const logger = require('../utils/logger');
+const { shouldCount } = require('../utils/dedupWindow');
 
 const prisma = require('../config/database');
 
@@ -34,6 +35,8 @@ const addItem = async (req, res) => {
   try {
     const { productId, qty = 1 } = req.body;
     if (!productId) return badRequest(res, 'Produto obrigatório.');
+    // Tipo: um objecto aqui chegava ao Prisma como filtro e rebentava com 500.
+    if (typeof productId !== 'string' || productId.length > 64) return badRequest(res, 'Produto inválido.');
 
     // Faltava validar isto — sem esta linha, dava para enviar qty=-5 (ou
     // 0, ou "abc") e criar uma linha de carrinho inválida: `product.stock
@@ -41,7 +44,7 @@ const addItem = async (req, res) => {
     // que um número negativo), e um qty não-numérico vira NaN só lá
     // adiante, no create, como erro 500 em vez de um 400 claro.
     const qtyNum = parseInt(qty, 10);
-    if (!Number.isInteger(qtyNum) || qtyNum < 1) {
+    if (!Number.isInteger(qtyNum) || qtyNum < 1 || qtyNum > 999) {
       return badRequest(res, 'Quantidade inválida.');
     }
 
@@ -74,6 +77,16 @@ const addItem = async (req, res) => {
           data: { qty: winner.qty + qtyNum }
         });
       }
+    }
+
+    // Analytics: conta 1 "adicionado ao carrinho" por utilizador/produto a cada 30 min. Fire-and-forget
+    // (nunca atrasa nem falha o pedido; se a tabela ainda não existir, o erro é ignorado).
+    if (shouldCount('cart-add', req.user.id, productId, 30 * 60 * 1000)) {
+      prisma.productStat.upsert({
+        where: { productId },
+        create: { productId, cartAdds: 1 },
+        update: { cartAdds: { increment: 1 } }
+      }).catch(() => {});
     }
 
     return ok(res, { item }, 'Adicionado ao carrinho.');

@@ -10,6 +10,7 @@ const commentService = require('../services/commentService');
 const notifSvc = require('../services/notificationService');
 const mentionSvc = require('../services/mentionService');
 const blockSvc = require('../services/blockService');
+const { interleaveByType } = require('../utils/feedMix');
 const communitySvc = require('../services/communityService');
 const logger = require('../utils/logger');
 const prisma = require('../config/database');
@@ -32,6 +33,27 @@ const findTarget = async (targetType, targetId) => {
   const select = targetType === 'GROUP_POST' ? { id: true, communityId: true } : { id: true, bazarId: true };
   return prisma[model].findUnique({ where: { id: targetId }, select });
 };
+// Dono (utilizador) do conteúdo — necessário para aplicar bloqueios no backend
+// (reagir/comentar/partilhar conteúdo de quem te bloqueou, ou de quem bloqueaste).
+const ownerIdOf = async (targetType, target) => {
+  if (!target) return null;
+  if (targetType === 'GROUP_POST') {
+    if (target.authorId) return target.authorId;
+    const post = await prisma.communityPost.findUnique({ where: { id: target.id }, select: { authorId: true } });
+    return post?.authorId || null;
+  }
+  const sellerId = target.bazar?.sellerId;
+  if (sellerId) return sellerId;
+  if (!target.bazarId) return null;
+  const bazar = await prisma.bazar.findUnique({ where: { id: target.bazarId }, select: { sellerId: true } });
+  return bazar?.sellerId || null;
+};
+const isBlockedFromTarget = async (userId, targetType, target) => {
+  const ownerId = await ownerIdOf(targetType, target);
+  return !!ownerId && ownerId !== userId && blockSvc.isBlockedEither(userId, ownerId);
+};
+const BLOCKED_MSG = 'Não é possível interagir com este conteúdo.';
+
 // Mantido por compatibilidade com o nome antigo — usa findTarget por
 // baixo para não duplicar a query.
 const targetExists = async (targetType, targetId) => !!(await findTarget(targetType, targetId));
@@ -88,11 +110,15 @@ const list = async (req, res) => {
     // menos itens do que o pedido só por causa de contas bloqueadas.
     const FETCH = take + 20;
 
-    const productWhere = { active: true, featuredUntil: { gt: new Date() } };
+    // Filtros de qualidade do feed: nunca mostrar conteúdo de contas SUSPENSAS (seller.active) nem de
+    // bazares inactivos, nem produtos bloqueados pela moderação. (Bloqueios entre utilizadores são
+    // aplicados mais abaixo; conteúdo apagado já não existe na BD.)
+    const visibleOwner = { seller: { active: true }, bazar: { active: true } };
+    const productWhere = { active: true, moderationStatus: 'APPROVED', ...visibleOwner, featuredUntil: { gt: new Date() } };
     if (cursorDate) productWhere.featuredUntil.lt = cursorDate;
-    const announcementWhere = {};
+    const announcementWhere = { ...visibleOwner };
     if (cursorDate) announcementWhere.createdAt = { lt: cursorDate };
-    const reelWhere = { bazar: { active: true } };
+    const reelWhere = { ...visibleOwner };
     if (cursorDate) reelWhere.createdAt = { lt: cursorDate };
 
     // "Para si": produtos comuns (não têm de estar em destaque) das
@@ -110,7 +136,7 @@ const list = async (req, res) => {
       });
       forYouBazarIds = topAffinity.map(a => a.bazarId);
     }
-    const forYouWhere = { active: true, bazarId: { in: forYouBazarIds } };
+    const forYouWhere = { active: true, moderationStatus: 'APPROVED', ...visibleOwner, bazarId: { in: forYouBazarIds } };
     if (cursorDate) forYouWhere.createdAt = { lt: cursorDate };
 
     const [featuredProducts, announcements, reels, forYouProducts] = await Promise.all([
@@ -231,6 +257,10 @@ const list = async (req, res) => {
       );
     }
 
+    // Variedade: nenhum tipo de conteúdo domina em sequência (máx. 2 seguidos do mesmo tipo,
+    // quando houver outros tipos disponíveis nesta página). Só reordena; não remove nada.
+    items = interleaveByType(items, { maxRun: 2 });
+
     items = await attachEngagement(items, req.user?.id);
 
     // Sondagens vêm da query principal só com a linha do Poll em si
@@ -288,6 +318,7 @@ const react = async (req, res) => {
     if (!target) {
       return notFound(res, 'Conteúdo não encontrado.');
     }
+    if (await isBlockedFromTarget(req.user.id, targetType, target)) return forbidden(res, BLOCKED_MSG);
 
     const existing = await prisma.feedReaction.findUnique({
       where: { userId_targetType_targetId: { userId: req.user.id, targetType, targetId } }
@@ -378,6 +409,7 @@ const share = async (req, res) => {
       ? await prisma.communityPost.findUnique({ where: { id: targetId }, select: { id: true, communityId: true } })
       : await prisma.reel.findUnique({ where: { id: targetId }, select: { id: true, bazarId: true } });
     if (!exists) return notFound(res, 'Conteúdo não encontrado.');
+    if (await isBlockedFromTarget(req.user.id, targetType, exists)) return forbidden(res, BLOCKED_MSG);
 
     await prisma.feedShare.upsert({
       where: { userId_targetType_targetId: { userId: req.user.id, targetType, targetId } },
@@ -454,6 +486,7 @@ const createComment = async (req, res) => {
       ? await prisma.communityPost.findUnique({ where: { id: targetId }, select: { id: true, authorId: true, communityId: true, community: { select: { slug: true } } } })
       : await prisma.reel.findUnique({ where: { id: targetId }, select: { id: true, bazarId: true, bazar: { select: { sellerId: true, name: true } } } });
     if (!exists) return notFound(res, 'Conteúdo não encontrado.');
+    if (await isBlockedFromTarget(req.user.id, targetType, exists)) return forbidden(res, BLOCKED_MSG);
 
     let parentId = null;
     let parentAuthorId = null;
@@ -462,6 +495,10 @@ const createComment = async (req, res) => {
       if (!parent) return notFound(res, 'Comentário original não encontrado.');
       parentId = parent.parentId || parent.id; // respostas a respostas viram irmãs, thread de 1 nível
       parentAuthorId = parent.userId;
+      // Também não se pode responder a um comentário de alguém com quem há bloqueio.
+      if (parentAuthorId !== req.user.id && await blockSvc.isBlockedEither(req.user.id, parentAuthorId)) {
+        return forbidden(res, BLOCKED_MSG);
+      }
     }
 
     const comment = await prisma.comment.create({

@@ -137,14 +137,14 @@ const create = async (req, res) => {
       const validImages = uploadResults.filter(r => r.ok);
       imageUploadErrors = uploadResults.filter(r => !r.ok).map(r => r.error);
       if (validImages.length > 0) {
-        await prisma.announcementImage.createMany({
+        await uploadSvc.withUploadCleanup(validImages, () => prisma.announcementImage.createMany({
           data: validImages.map((r, i) => ({
             announcementId: announcement.id,
             url: r.url,
             publicId: r.publicId,
             order: i
           }))
-        });
+        }));
       }
     }
 
@@ -251,14 +251,14 @@ const update = async (req, res) => {
       const validImages = uploadResults.filter(r => r.ok);
       imageUploadErrors = uploadResults.filter(r => !r.ok).map(r => r.error);
       if (validImages.length > 0) {
-        await prisma.announcementImage.createMany({
+        await uploadSvc.withUploadCleanup(validImages, () => prisma.announcementImage.createMany({
           data: validImages.map((r, i) => ({
             announcementId: announcement.id,
             url: r.url,
             publicId: r.publicId,
             order: currentCount + i
           }))
-        });
+        }));
         // Uma foto nova chegou e o pedido não disse nada sobre o fundo
         // — limpa o fundo de texto antigo para a foto não ficar
         // escondida atrás dele.

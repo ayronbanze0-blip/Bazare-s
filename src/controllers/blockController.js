@@ -63,6 +63,7 @@ const myBlocked = async (req, res) => {
     const rows = await prisma.block.findMany({
       where: { blockerId: req.user.id },
       orderBy: { createdAt: 'desc' },
+      take: 500, // limite de segurança — a lista nunca é ilimitada
       include: { blocked: { select: { id: true, name: true, avatarUrl: true, role: true, bazar: { select: { id: true, name: true, slug: true } } } } }
     });
     return ok(res, { blocked: rows.map(r => ({ ...r.blocked, blockedAt: r.createdAt })) });

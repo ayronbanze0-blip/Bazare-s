@@ -258,21 +258,22 @@ const create = async (req, res) => {
       const validImages = uploadResults.filter(r => r.ok);
       imageUploadErrors = uploadResults.filter(r => !r.ok).map(r => r.error);
       if (validImages.length > 0) {
-        await prisma.productImage.createMany({
+        await uploadSvc.withUploadCleanup(validImages, () => prisma.productImage.createMany({
           data: validImages.map((r, i) => ({
             productId: product.id,
             url: r.url,
             publicId: r.publicId,
             order: i
           }))
-        });
+        }));
       }
     }
 
     // Handle URL-based images
     if (req.body.imageUrls) {
       const urls = Array.isArray(req.body.imageUrls) ? req.body.imageUrls : [req.body.imageUrls];
-      const validUrls = urls.filter(u => u.startsWith('http')).slice(0, 20);
+      // Só strings https/http com tamanho razoável (antes: qualquer valor → TypeError com objectos).
+      const validUrls = urls.filter(u => typeof u === 'string' && /^https?:\/\//i.test(u) && u.length <= 500).slice(0, 20);
       if (validUrls.length > 0) {
         await prisma.productImage.createMany({
           data: validUrls.map((url, i) => ({ productId: product.id, url, order: i }))
@@ -324,6 +325,14 @@ const update = async (req, res) => {
     };
     const parsedActive = parseBoolean(active);
 
+    // Valores numéricos inválidos (NaN, preço <= 0) rebentavam no Prisma com 500 — agora 400 claro.
+    if (price != null && (!Number.isFinite(parseFloat(price)) || parseFloat(price) <= 0)) {
+      return badRequest(res, 'Preço inválido.');
+    }
+    if (stock != null && !Number.isFinite(parseInt(stock, 10))) {
+      return badRequest(res, 'Stock inválido.');
+    }
+
     const updated = await prisma.product.update({
       where: { id: product.id },
       data: {
@@ -342,6 +351,11 @@ const update = async (req, res) => {
       include: { images: { orderBy: { order: 'asc' } } }
     });
 
+    // Voltou ao stock (0 → >0): avisa quem o tem nos favoritos (fire-and-forget).
+    if (product.stock <= 0 && updated.stock > 0) {
+      notificationSvc.backInStock(updated.id, updated.name).catch(() => {});
+    }
+
     // Handle new uploaded images
     let imageUploadErrors = [];
     if (req.files && req.files.length > 0) {
@@ -350,11 +364,11 @@ const update = async (req, res) => {
       imageUploadErrors = uploadResults.filter(r => !r.ok).map(r => r.error);
       const currentCount = await prisma.productImage.count({ where: { productId: product.id } });
       if (validImages.length > 0 && currentCount < 20) {
-        await prisma.productImage.createMany({
+        await uploadSvc.withUploadCleanup(validImages, () => prisma.productImage.createMany({
           data: validImages.slice(0, 20 - currentCount).map((r, i) => ({
             productId: product.id, url: r.url, publicId: r.publicId, order: currentCount + i
           }))
-        });
+        }));
       }
     }
 
@@ -456,6 +470,7 @@ const toggleStock = async (req, res) => {
       // otherwise default to 1 so the product becomes purchasable again.
       const restoreQty = Math.max(1, parseInt(req.body?.stock) || 1);
       updated = await prisma.product.update({ where: { id: product.id }, data: { stock: restoreQty } });
+      notificationSvc.backInStock(updated.id, updated.name).catch(() => {});
     } else {
       // Remember the previous quantity isn't needed — going to 0 is enough
       // to mark it "esgotado" while keeping the listing visible.

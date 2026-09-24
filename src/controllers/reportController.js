@@ -66,7 +66,8 @@ const myReports = async (req, res) => {
   try {
     const reports = await prisma.report.findMany({
       where: { reporterId: req.user.id },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
+      take: 200
     });
     return ok(res, { reports });
   } catch (err) {
