@@ -71,4 +71,70 @@ const aiLimiter = rateLimit({
   handler: makeHandler('Demasiados pedidos à IA em pouco tempo. Aguarde um minuto.')
 });
 
-module.exports = { apiLimiter, authLimiter, uploadLimiter, emailLimiter, orderLimiter, aiLimiter };
+// ─── Códigos de 6 dígitos (reset de password / verificação de email) ─
+// Um código de 6 dígitos tem só 1.000.000 de combinações. O authLimiter conta
+// por IP — um atacante com muitos IPs contornava-o. Este conta por EMAIL alvo,
+// independentemente do IP: no máximo 8 tentativas falhadas por 15 min.
+// (`skipSuccessfulRequests`: o utilizador legítimo que acerta não é penalizado.)
+const emailFromBody = (req) => String(req.body?.email || '').toLowerCase().trim();
+const codeAttemptLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 8,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  keyGenerator: (req) => `code:${emailFromBody(req) || req.ip}`,
+  handler: makeHandler('Demasiadas tentativas com este código. Aguarde 15 minutos e peça um novo código.')
+});
+
+// ─── Envio de emails por destinatário ────────────────────────────────
+// O emailLimiter conta por IP; isto impede "email bombing" de UMA vítima
+// a partir de muitos IPs: no máximo 3 pedidos por hora para o mesmo email.
+const emailTargetLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 3,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `mail:${emailFromBody(req) || req.ip}`,
+  // Mesma resposta genérica que o sucesso — não revela nada sobre o email.
+  handler: (req, res) => res.status(200).json({ success: true, message: 'Se o email existir, receberá um código em breve.', data: {} })
+});
+
+// ─── Webhooks (por IP) ──────────────────────────────────────────────
+// Generoso (o gateway pode reenviar em rajada) mas impede inundação de
+// pedidos não assinados a gastar CPU em HMAC.
+const webhookLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: parseInt(process.env.WEBHOOK_RATE_LIMIT_MAX) || 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: makeHandler('Demasiados pedidos de webhook.')
+});
+
+// ─── Acções administrativas (por utilizador) ────────────────────────
+// Depois de `authenticate`, conta por admin. Alto o suficiente para uso
+// normal do painel, baixo o suficiente para travar um token admin roubado
+// ou um script em ciclo (broadcast, delete, etc.).
+const adminActionLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: parseInt(process.env.ADMIN_RATE_LIMIT_MAX) || 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: keyByUserOrIp,
+  handler: makeHandler('Demasiadas acções administrativas. Aguarde um momento.')
+});
+
+// ─── Interacções sem autenticação que alteram contadores ────────────
+// (visualizações de produto, cliques de WhatsApp) — impede inflar métricas em ciclo.
+const publicTrackLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => res.status(204).end() // fire-and-forget: o frontend não precisa de erro
+});
+
+module.exports = {
+  apiLimiter, authLimiter, uploadLimiter, emailLimiter, orderLimiter, aiLimiter,
+  codeAttemptLimiter, emailTargetLimiter, webhookLimiter, adminActionLimiter, publicTrackLimiter
+};
