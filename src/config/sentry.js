@@ -18,6 +18,7 @@
 ============================================================ */
 
 const Sentry = require('@sentry/node');
+const { redact } = require('../utils/redact');
 
 const dsn = process.env.SENTRY_DSN
   || 'https://2277ef773e57c6353c15667567b6417d@o4511794897879040.ingest.us.sentry.io/4511794906529792';
@@ -29,6 +30,24 @@ if (dsn) {
     // 10% das transações — suficiente para ver padrões de performance
     // sem consumir a quota gratuita (5k erros/mês) só com tracing.
     tracesSampleRate: 0.1,
+    // Nunca enviar PII por omissão (cookies, IP, headers de autenticação).
+    sendDefaultPii: false,
+    // Rede de segurança: mesmo que o SDK anexe o corpo/query/headers do pedido,
+    // campos como password/token/secret/code chegam ao Sentry como [REDACTED].
+    beforeSend(event) {
+      try {
+        if (event.request) {
+          if (event.request.data) event.request.data = redact(event.request.data);
+          if (event.request.headers) event.request.headers = redact(event.request.headers);
+          if (event.request.cookies) event.request.cookies = '[REDACTED]';
+          if (event.request.query_string && typeof event.request.query_string === 'object') {
+            event.request.query_string = redact(event.request.query_string);
+          }
+        }
+        if (event.extra) event.extra = redact(event.extra);
+      } catch { /* nunca impedir o envio do erro por falha de redacção */ }
+      return event;
+    },
   });
 }
 
