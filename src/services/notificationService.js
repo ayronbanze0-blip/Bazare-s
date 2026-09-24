@@ -2,6 +2,8 @@
 
 const logger = require('../utils/logger');
 const pushService = require('./pushService');
+const policy = require('./notificationPolicy');
+const { shouldCount } = require('../utils/dedupWindow');
 
 let prismaClient;
 let ioClient;
@@ -11,15 +13,83 @@ const init = (prisma, io) => {
   ioClient = io;
 };
 
+// ─── Preferências do utilizador ─────────────────────────────────────
+// Cache curta em memória (30 s) — push() é chamado com muita frequência e não deve fazer uma
+// query extra por cada notificação. Fail-open: se a tabela não existir (migration por aplicar)
+// ou a BD falhar, aplicam-se as preferências por omissão (tudo ligado) — nunca se perde uma
+// notificação por causa das preferências.
+const PREF_TTL_MS = 30 * 1000;
+const PREF_CACHE_MAX = 5000;
+const prefCache = new Map(); // userId -> { prefs|null, at }
+
+const getPrefs = async (userId) => {
+  const hit = prefCache.get(userId);
+  if (hit && Date.now() - hit.at < PREF_TTL_MS) return hit.prefs;
+  let prefs = null;
+  try {
+    prefs = await prismaClient.notificationPreference.findUnique({ where: { userId } });
+  } catch { /* tabela em falta / BD indisponível → omissões */ }
+  if (prefCache.size >= PREF_CACHE_MAX) prefCache.clear();
+  prefCache.set(userId, { prefs, at: Date.now() });
+  return prefs;
+};
+
+/** Pré-carrega as preferências de vários utilizadores com UMA query (broadcasts / seguidores). */
+const warmPrefs = async (userIds) => {
+  if (!prismaClient || !userIds.length) return;
+  try {
+    const rows = await prismaClient.notificationPreference.findMany({ where: { userId: { in: userIds } } });
+    const byUser = new Map(rows.map((r) => [r.userId, r]));
+    const now = Date.now();
+    if (prefCache.size + userIds.length >= PREF_CACHE_MAX) prefCache.clear();
+    for (const id of userIds) prefCache.set(id, { prefs: byUser.get(id) || null, at: now });
+  } catch { /* fail-open */ }
+};
+
+const invalidatePrefs = (userId) => prefCache.delete(userId);
+
+/** Deve enviar email a este utilizador para esta categoria? (respeita emailEnabled + categoria) */
+const shouldEmail = async (userId, category) => {
+  if (!prismaClient) return true;
+  return policy.allowedEmail(await getPrefs(userId), category);
+};
+
 /**
  * Create a notification and emit via Socket.IO
+ *
+ * Opções extra (todas opcionais, retrocompatíveis):
+ *   category  'orders'|'messages'|'social'|'marketing'|'system' (por omissão deriva do `type`)
+ *   collapse  true → em vez de criar outra, actualiza a notificação NÃO LIDA mais recente do mesmo
+ *             tipo/título/link (ex.: 10 mensagens do mesmo chat = 1 notificação com a última)
+ * Respeita as preferências (in-app / push) e evita duplicados de SOCIAL (10 min).
  */
-const push = async (userId, { type = 'INFO', title, message, link = null }) => {
+const push = async (userId, { type = 'INFO', title, message, link = null, category, collapse = false }) => {
   if (!prismaClient) { logger.warn('[Notif] Prisma not initialized'); return null; }
   try {
-    const notif = await prismaClient.notification.create({
-      data: { userId, type, title, message, link }
-    });
+    const cat = category || policy.categoryFor(type);
+    const prefs = await getPrefs(userId);
+    if (!policy.allowedInApp(prefs, cat)) return null; // desligada pelo utilizador
+
+    // Deduplicação: o mesmo evento social repetido (gosto/desgosto/gosto…) não gera spam.
+    if (type === 'SOCIAL' && !shouldCount('notif-dedupe', userId, `${type}|${title}|${link}|${message}`, 10 * 60 * 1000)) {
+      return null;
+    }
+
+    let notif = null;
+    if (collapse) {
+      const existing = await prismaClient.notification.findFirst({
+        where: { userId, read: false, type, title, link, createdAt: { gte: new Date(Date.now() - 5 * 60 * 1000) } },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true }
+      });
+      if (existing) {
+        notif = await prismaClient.notification.update({ where: { id: existing.id }, data: { message, createdAt: new Date() } });
+      }
+    }
+    if (!notif) {
+      notif = await prismaClient.notification.create({ data: { userId, type, title, message, link } });
+    }
+
     // Emit real-time via Socket.IO
     if (ioClient) {
       ioClient.to(`user:${userId}`).emit('notification', {
@@ -35,7 +105,9 @@ const push = async (userId, { type = 'INFO', title, message, link = null }) => {
     // Push nativo (FCM) — "fire and forget": não bloqueia nem faz
     // falhar o resto do fluxo (ex.: criação da encomenda) se a
     // Firebase estiver indisponível ou não configurada.
-    pushService.sendToUser(prismaClient, userId, { title, body: message, link }).catch(() => {});
+    if (policy.allowedPush(prefs, cat)) {
+      pushService.sendToUser(prismaClient, userId, { title, body: message, link }).catch(() => {});
+    }
     return notif;
   } catch (err) {
     logger.error(`[Notif] Failed to push for user ${userId}: ${err.message}`);
@@ -72,7 +144,8 @@ const newMessage = (toId, fromName, preview, chatId = null) =>
     // Com chatId abre já a conversa certa; sem ele (ex.: resposta a
     // história, onde o utilizador que recebe pode não ter ainda uma
     // entrada visível) cai na lista de conversas.
-    link: chatId ? `chat.html?chatId=${chatId}` : 'chat.html'
+    link: chatId ? `chat.html?chatId=${chatId}` : 'chat.html',
+    collapse: true // várias mensagens seguidas do mesmo chat = 1 notificação (a mais recente)
   });
 
 const feeAlert = (sellerId, amount) =>
@@ -113,9 +186,11 @@ const newProductFromFollowed = async (bazarId, sellerName, productName) => {
       select: { userId: true }
     });
     if (followers.length === 0) return;
+    await warmPrefs(followers.map((f) => f.userId));
     await Promise.all(followers.map((f) =>
       push(f.userId, {
         type: 'INFO',
+        category: 'social',
         title: `${sellerName} publicou um novo produto`,
         message: productName,
         link: `bazar.html?id=${bazarId}`
@@ -126,6 +201,31 @@ const newProductFromFollowed = async (bazarId, sellerName, productName) => {
   }
 };
 
+/**
+ * "Produto voltou ao stock" — avisa quem tem o produto nos favoritos (máx. 200).
+ * Chamado quando o stock passa de 0 para > 0. No máximo 1 vez por produto a cada 6 h
+ * (evita spam se o vendedor alternar esgotado/disponível).
+ */
+const backInStock = async (productId, productName) => {
+  if (!prismaClient) return;
+  try {
+    if (!shouldCount('back-in-stock', productId, 'all', 6 * 60 * 60 * 1000)) return;
+    const favs = await prismaClient.favorite.findMany({
+      where: { productId }, select: { userId: true }, take: 200
+    });
+    if (!favs.length) return;
+    await warmPrefs(favs.map((f) => f.userId));
+    await Promise.all(favs.map((f) => push(f.userId, {
+      type: 'INFO', category: 'orders',
+      title: 'Produto de volta ao stock',
+      message: `"${productName}" já está novamente disponível.`,
+      link: `product.html?id=${productId}`
+    }).catch(() => {})));
+  } catch (err) {
+    logger.error(`[Notif] backInStock falhou: ${err.message}`);
+  }
+};
+
 const broadcastToRole = async (role, notification) => {
   if (!prismaClient) return;
   try {
@@ -133,16 +233,12 @@ const broadcastToRole = async (role, notification) => {
       where: { role, active: true },
       select: { id: true }
     });
-    await Promise.all(users.map(u => push(u.id, notification)));
+    await warmPrefs(users.map((u) => u.id));
+    await Promise.all(users.map(u => push(u.id, { category: 'marketing', ...notification })));
   } catch (err) {
     logger.error(`[Notif] Broadcast failed: ${err.message}`);
   }
 };
-
-// ─────────────────────────────────────────────
-// ACTIVIDADE SOCIAL (seguir, comentar, responder, gostar de comentário)
-// ─────────────────────────────────────────────
-const { shouldCount } = require('../utils/dedupWindow');
 
 // ─────────────────────────────────────────────
 // ACTIVIDADE SOCIAL (seguir, comentar, responder, gostar de comentário)
@@ -193,8 +289,8 @@ const mentioned = (userId, authorName, link) =>
   });
 
 module.exports = {
-  init, push, orderReceived, orderStatusChanged,
+  init, push, warmPrefs, invalidatePrefs, shouldEmail, orderReceived, orderStatusChanged,
   newMessage, feeAlert, accountSuspended, accountVerified, broadcastToRole,
-  newProductFromFollowed, newFollower, commentOnContent, commentReply, commentLiked,
+  newProductFromFollowed, backInStock, newFollower, commentOnContent, commentReply, commentLiked,
   mentioned
 };

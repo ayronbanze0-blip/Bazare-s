@@ -35,4 +35,12 @@ async function isBlockedEither(userIdA, userIdB) {
   return !!block;
 }
 
-module.exports = { getHiddenUserIds, isBlockedEither };
+// ─── Dos `otherIds` dados, devolve os que têm bloqueio com userId (qualquer
+// sentido) — UMA query, para verificar vários vendedores/autores de uma vez.
+async function blockedAmong(userId, otherIds = []) {
+  if (!userId || !otherIds.length) return [];
+  const hidden = await getHiddenUserIds(userId);
+  return otherIds.filter((id) => hidden.has(id));
+}
+
+module.exports = { getHiddenUserIds, isBlockedEither, blockedAmong };

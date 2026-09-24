@@ -11,6 +11,7 @@
 
 const logger = require('../utils/logger');
 const notifSvc = require('./notificationService');
+const blockSvc = require('./blockService');
 const prisma = require('../config/database');
 
 // username: letras/números/underscore/ponto, 3 a 30 caracteres.
@@ -54,7 +55,8 @@ function extractMentionUsernames(text) {
 async function syncMentions({ text, authorId, authorName, commentId = null, announcementId = null, communityPostId = null, link }) {
   try {
     if (!commentId && !announcementId && !communityPostId) return; // nada para associar
-    const usernames = extractMentionUsernames(text);
+    // Máx. 10 menções por texto — impede spam de notificações em massa.
+    const usernames = extractMentionUsernames(text).slice(0, 10);
 
     const where = commentId ? { commentId } : announcementId ? { announcementId } : { communityPostId };
     const existing = await prisma.mention.findMany({
@@ -68,10 +70,13 @@ async function syncMentions({ text, authorId, authorName, commentId = null, anno
       return;
     }
 
-    const targetUsers = await prisma.user.findMany({
-      where: { username: { in: usernames, mode: 'insensitive' } },
+    // Só utilizadores activos, e nunca alguém com bloqueio (em qualquer sentido) com o
+    // autor — quem bloqueou não pode ser mencionado nem notificado.
+    const hiddenIds = await blockSvc.getHiddenUserIds(authorId);
+    const targetUsers = (await prisma.user.findMany({
+      where: { username: { in: usernames, mode: 'insensitive' }, active: true },
       select: { id: true, username: true }
-    });
+    })).filter((u) => !hiddenIds.has(u.id));
 
     const targetLower = new Set(targetUsers.map(u => u.username.toLowerCase()));
     const existingLower = new Set(

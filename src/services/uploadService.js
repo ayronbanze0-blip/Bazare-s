@@ -5,6 +5,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const logger = require('../utils/logger');
+const { categoryFromMime, verifyFile } = require('../utils/fileSignature');
 
 // ─── Cloudinary Config ───────────────────────────────────────────
 cloudinary.config({
@@ -21,18 +22,48 @@ if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !pr
 const uploadsDir = path.join(__dirname, '../../uploads/temp');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
-const storage = multer.diskStorage({
+const diskStorage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadsDir),
   filename: (req, file, cb) => {
     const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    cb(null, unique + path.extname(file.originalname));
+    // Extensão em minúsculas e só com caracteres seguros (o nome original nunca é usado no disco).
+    const ext = path.extname(file.originalname).toLowerCase().replace(/[^.a-z0-9]/g, '').slice(0, 8);
+    cb(null, unique + ext);
   }
 });
 
+// Depois de o ficheiro chegar ao disco, confirma pelos primeiros bytes ("magic bytes")
+// que o CONTEÚDO é mesmo imagem/vídeo/áudio — a extensão e o Content-Type vêm do
+// cliente e são falsificáveis. Se não bater, apaga o ficheiro e rejeita (400).
+// Está aqui, no storage partilhado, para cobrir TODAS as rotas com upload de uma vez.
+const REJECT_MSG = { image: 'Apenas imagens são permitidas (conteúdo do ficheiro inválido).', video: 'Apenas vídeos são permitidos (conteúdo do ficheiro inválido).', audio: 'Apenas áudio é permitido (conteúdo do ficheiro inválido).' };
+const storage = {
+  _handleFile(req, file, cb) {
+    diskStorage._handleFile(req, file, (err, info) => {
+      if (err) return cb(err);
+      const category = categoryFromMime(file.mimetype);
+      verifyFile(info.path, category, (_e, ok) => {
+        if (ok) return cb(null, info);
+        fs.unlink(info.path, () => {});
+        logger.warn(`[Upload] Ficheiro rejeitado (conteúdo não corresponde a ${category}): campo=${file.fieldname}`);
+        cb(new Error(REJECT_MSG[category] || 'Apenas imagens são permitidas (conteúdo do ficheiro inválido).'));
+      });
+    });
+  },
+  _removeFile(req, file, cb) { diskStorage._removeFile(req, file, cb); }
+};
+
+// Listas EXACTAS (antes eram regex sem âncoras: ".jpgx" ou "text/x-jpg" passavam).
+const IMAGE_EXT = new Set(['.jpeg', '.jpg', '.png', '.gif', '.webp']);
+const IMAGE_MIME = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp']);
+const VIDEO_EXT = new Set(['.mp4', '.webm', '.mov']);
+const VIDEO_MIME = new Set(['video/mp4', 'video/webm', 'video/quicktime']);
+const AUDIO_EXT = new Set(['.mp3', '.m4a', '.aac', '.wav', '.ogg']);
+const extOf = (name) => path.extname(String(name || '')).toLowerCase();
+
 const fileFilter = (req, file, cb) => {
-  const allowed = /jpeg|jpg|png|gif|webp/;
-  const ext = allowed.test(path.extname(file.originalname).toLowerCase());
-  const mime = allowed.test(file.mimetype);
+  const ext = IMAGE_EXT.has(extOf(file.originalname));
+  const mime = IMAGE_MIME.has(String(file.mimetype).toLowerCase());
   if (ext && mime) cb(null, true);
   else cb(new Error('Apenas imagens são permitidas (jpeg, jpg, png, gif, webp)'));
 };
@@ -45,10 +76,8 @@ const upload = multer({
 
 // ─── Multer para vídeo (Histórias em vídeo, Reels) ───────────────
 const videoFileFilter = (req, file, cb) => {
-  const allowedExt = /mp4|webm|mov|quicktime/;
-  const allowedMime = /video\/(mp4|webm|quicktime)/;
-  const ext = allowedExt.test(path.extname(file.originalname).toLowerCase());
-  const mime = allowedMime.test(file.mimetype);
+  const ext = VIDEO_EXT.has(extOf(file.originalname));
+  const mime = VIDEO_MIME.has(String(file.mimetype).toLowerCase());
   if (ext && mime) cb(null, true);
   else cb(new Error('Apenas vídeos são permitidos (mp4, webm, mov)'));
 };
@@ -81,10 +110,8 @@ const uploadMedia = multer({
 // seguir para o Cloudinary — só o resultado final é que respeita o
 // limite normal.
 const audioFileFilter = (req, file, cb) => {
-  const allowedExt = /mp3|m4a|aac|wav|ogg/;
-  const allowedMime = /audio\//;
-  const ext = allowedExt.test(path.extname(file.originalname).toLowerCase());
-  const mime = allowedMime.test(file.mimetype);
+  const ext = AUDIO_EXT.has(extOf(file.originalname));
+  const mime = /^audio\/[a-z0-9.+-]+$/i.test(String(file.mimetype));
   if (ext && mime) cb(null, true);
   else cb(new Error('Apenas áudio é permitido (mp3, m4a, aac, wav, ogg)'));
 };
@@ -136,7 +163,8 @@ const friendlyUploadError = (err) => {
   if (/file size|too large/i.test(err.message || '')) {
     return 'Imagem demasiado grande.';
   }
-  return `Não foi possível processar a imagem (${err.message || 'erro desconhecido'}).`;
+  // Nunca devolver a mensagem crua do Cloudinary ao utilizador (fica só no log do servidor).
+  return 'Não foi possível processar o ficheiro. Verifica o formato e tenta novamente.';
 };
 
 // ─── Upload to Cloudinary (com retry para falhas transitórias) ───
@@ -183,6 +211,22 @@ const deleteFromCloud = async (publicId, resourceType = 'image') => {
   } catch (err) {
     logger.error(`[Cloudinary] Delete failed: ${err.message}`);
     return { ok: false, error: err.message };
+  }
+};
+
+// Se o upload para o Cloudinary correu bem mas a escrita na BD falhou, as imagens ficariam
+// órfãs (a ocupar quota e sem dono). Apaga-as (fire-and-forget) e volta a lançar o erro.
+const cleanupUploaded = (results = []) => {
+  for (const r of results) {
+    if (r && r.ok && r.publicId) deleteFromCloud(r.publicId).catch(() => {});
+  }
+};
+const withUploadCleanup = async (uploaded, dbWrite) => {
+  try {
+    return await dbWrite();
+  } catch (err) {
+    cleanupUploaded(uploaded);
+    throw err;
   }
 };
 
@@ -290,6 +334,8 @@ module.exports = {
   uploadAudioToCloud,
   uploadMany,
   deleteFromCloud,
+  cleanupUploaded,
+  withUploadCleanup,
   uploadAvatar,
   uploadBazarBanner
 };

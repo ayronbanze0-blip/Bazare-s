@@ -24,6 +24,7 @@
 
 const crypto = require('crypto');
 const logger = require('../utils/logger');
+const { redact } = require('../utils/redact');
 
 const BASE_URL = process.env.ZUMBOPAY_BASE_URL || 'https://zumbopay.com/api/public/v1';
 const API_KEY = process.env.ZUMBOPAY_API_KEY;
@@ -166,7 +167,7 @@ const initiateCharge = async ({ amount, msisdn, customerName, sourceId }) => {
       // gatewayReference), por isso ficaria PROCESSANDO para sempre.
       // Tratamos como erro para que o caller marque FALHADA de imediato,
       // em vez de deixar o utilizador bloqueado indefinidamente.
-      logger.error(`[ZumboPay] charge HTTP 200 sem status=success e sem reference: ${JSON.stringify(data)}`);
+      logger.error(`[ZumboPay] charge HTTP 200 sem status=success e sem reference: ${JSON.stringify(redact(data))}`);
       throw new Error('Resposta inesperada da ZumboPay (sem referência). Tente novamente.');
     }
     return {
@@ -197,7 +198,7 @@ const initiateCharge = async ({ amount, msisdn, customerName, sourceId }) => {
   // 400/401/403/404/429/5xx — erro de pedido/infra
   const message = data?.error?.message || `Erro inesperado da ZumboPay (HTTP ${httpStatus}).`;
   logger.error(`[ZumboPay] charge failed: HTTP ${httpStatus} — ${message}`);
-  logger.error(`[ZumboPay] resposta completa: ${JSON.stringify(data)}`);
+  logger.error(`[ZumboPay] resposta completa: ${JSON.stringify(redact(data))}`);
   logger.error(`[ZumboPay] payload enviado: ${JSON.stringify({ ...body, msisdn: '***' })}`);
   throw new Error(message);
 };
