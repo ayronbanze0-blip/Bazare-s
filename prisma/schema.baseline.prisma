@@ -138,7 +138,6 @@ model User {
 
   // Push notifications (Firebase Cloud Messaging)
   deviceTokens         DeviceToken[]
-  notificationPreference NotificationPreference?
 
   // Bloqueios — ver model Block acima
   blocking             Block[]   @relation("BlockerOf")
@@ -329,9 +328,6 @@ model Product {
   reels          Reel[]
   announcements  Announcement[]
   stories        Story[]
-  // Contadores extra (analytics) numa tabela à parte — assim NENHUMA coluna nova é acrescentada a
-  // Product e as leituras de produtos não dependem desta migração.
-  stat           ProductStat?
 
   @@index([bazarId])
   @@index([category])
@@ -1373,67 +1369,11 @@ model PremiumSubscription {
   @@index([gatewayReference])
 }
 
-// ─────────────────────────────────────────────
-// Registo de eventos de webhook de pagamento recebidos (idempotência + auditoria)
-// ─────────────────────────────────────────────
-// Cada evento autêntico (assinatura válida) do provider fica registado UMA vez:
-// (provider, eventKey) é UNIQUE — eventKey é o id do evento enviado pelo provider ou,
-// na falta dele, o SHA-256 do corpo em bruto (reenvios idênticos → mesma chave).
-// Se o evento já foi PROCESSED, a repetição responde 200 sem repetir NADA (não credita,
-// não activa Premium, não duplica movimentos de wallet). Nunca é apagado.
-model PaymentWebhookEvent {
-  id          String    @id @default(uuid())
-  provider    String                    // ex.: "zumbopay"
-  eventKey    String                    // id do evento do provider, ou SHA-256 do corpo em bruto
-  type        String?                   // ex.: "payment.succeeded"
-  reference   String?                   // referência do pagamento no provider
-  status      String    @default("RECEIVED") // RECEIVED | PROCESSED | FAILED
-  attempts    Int       @default(1)
-  error       String?                   // resumo do último erro (nunca o payload nem segredos)
-  receivedAt  DateTime  @default(now())
-  processedAt DateTime?
-
-  @@unique([provider, eventKey])
-  @@index([reference])
-  @@index([status, receivedAt])
-}
-
 enum PremiumSubStatus {
   PROCESSANDO
   PAGA
   FALHADA
   CANCELADA
-}
-
-// ─────────────────────────────────────────────
-// Estatísticas extra de produto (analytics do vendedor)
-// ─────────────────────────────────────────────
-// `cartAdds`: vezes que o produto foi adicionado ao carrinho (1 por utilizador a cada 30 min).
-// Tabela separada de Product de propósito: acrescentar colunas a Product faria TODAS as leituras
-// de produtos depender desta migração.
-model ProductStat {
-  productId String   @id
-  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-  cartAdds  Int      @default(0)
-  updatedAt DateTime @updatedAt
-}
-
-// ─────────────────────────────────────────────
-// PREFERÊNCIAS DE NOTIFICAÇÃO (uma linha por utilizador; ausente = tudo por omissão)
-// ─────────────────────────────────────────────
-// Notificações de sistema (conta suspensa, pagamentos, segurança) ignoram as preferências
-// por categoria — só o interruptor de push desliga o push nativo.
-model NotificationPreference {
-  userId                 String   @id
-  user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  notificationsEnabled   Boolean  @default(true)
-  pushEnabled            Boolean  @default(true)
-  emailEnabled           Boolean  @default(true)
-  orderNotifications     Boolean  @default(true)
-  messageNotifications   Boolean  @default(true)
-  socialNotifications    Boolean  @default(true)
-  marketingNotifications Boolean  @default(true)
-  updatedAt              DateTime @updatedAt
 }
 
 // ─────────────────────────────────────────────
