@@ -1,0 +1,67 @@
+name: Prisma — resolver migration falhada
+
+# Usar quando o deploy falha com "Error: P3009: migrate found failed migrations". Antes de correr,
+# confirma no Supabase (Table Editor) se as tabelas da migration já existem:
+#   PaymentWebhookEvent, ProductStat, NotificationPreference
+#
+#   - NENHUMA existe   -> acao "rolled-back" (diz ao Prisma que nada foi aplicado; o próximo
+#                          deploy volta a tentar a migration do zero)
+#   - TODAS existem     -> acao "applied" (diz ao Prisma que a migration terminou com sucesso,
+#                          só a marcação é que falhou; não mexe em nada)
+#   - só ALGUMAS existem -> NÃO uses este workflow ainda. Apaga manualmente (SQL editor do Supabase)
+#                          as tabelas que já foram criadas, e só depois corre com "rolled-back".
+#
+# Nunca apaga nem cria dados sozinho — só escreve na tabela de controlo _prisma_migrations.
+on:
+  workflow_dispatch:
+    inputs:
+      migration:
+        description: 'Nome exacto da migration falhada (ver o log do deploy)'
+        required: true
+        default: '1_evolucao_schema_v2'
+      acao:
+        description: 'O que aconteceu de facto na base de dados'
+        required: true
+        type: choice
+        options:
+          - rolled-back (nenhuma tabela foi criada)
+          - applied (todas as tabelas já existem)
+      confirmo:
+        description: 'Escreva CONFIRMO'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    if: ${{ github.event.inputs.confirmo == 'CONFIRMO' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - run: npm ci --ignore-scripts
+
+      - name: Determinar a flag
+        id: flag
+        run: |
+          if [[ "${{ github.event.inputs.acao }}" == rolled-back* ]]; then
+            echo "value=--rolled-back" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=--applied" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolver a migration
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        run: npx prisma migrate resolve ${{ steps.flag.outputs.value }} "${{ github.event.inputs.migration }}"
+
+      - name: Estado das migrations (informativo)
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        run: npx prisma migrate status || true
