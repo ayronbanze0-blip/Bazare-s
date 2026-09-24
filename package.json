@@ -4,7 +4,7 @@
   "description": "Bazares Marketplace — Backend API",
   "main": "src/server.js",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.0.0 <23"
   },
   "scripts": {
     "dev": "nodemon src/server.js",
@@ -19,7 +19,11 @@
     "db:backup": "node scripts/backup-db.js",
     "db:backfill-usernames": "node scripts/backfill-usernames.js",
     "smoke-test": "node scripts/smoke-test.js",
-    "test": "jest tests/contract"
+    "test": "npm run test:unit && npm run test:jest",
+    "test:unit": "node --test \"tests/unit/**/*.test.js\"",
+    "test:jest": "jest --ci",
+    "lockfile": "npm install --package-lock-only --ignore-scripts",
+    "prisma:validate": "prisma validate"
   },
   "dependencies": {
     "@prisma/client": "^5.10.2",
@@ -35,14 +39,15 @@
     "express-validator": "^7.0.1",
     "ffmpeg-static": "^5.2.0",
     "ffprobe-static": "^3.1.0",
-    "fluent-ffmpeg": "^2.1.2",
     "firebase-admin": "^12.1.0",
+    "fluent-ffmpeg": "^2.1.2",
     "google-auth-library": "^9.11.0",
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
     "nodemailer": "^6.9.13",
+    "prisma": "^5.10.2",
     "socket.io": "^4.7.5",
     "uuid": "^9.0.1",
     "winston": "^3.13.0",
@@ -50,7 +55,14 @@
   },
   "devDependencies": {
     "jest": "^29.7.0",
-    "nodemon": "^3.1.0",
-    "prisma": "^5.10.2"
+    "nodemon": "^3.1.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/tests/contract/**/*.test.js",
+      "**/tests/security/**/*.test.js"
+    ],
+    "clearMocks": true
   }
 }
