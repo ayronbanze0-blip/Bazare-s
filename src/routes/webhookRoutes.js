@@ -9,11 +9,13 @@
 const router = require('express').Router();
 const express = require('express');
 const ctrl = require('../controllers/walletController');
+const { webhookLimiter } = require('../middleware/rateLimiter');
 
 // express.raw() preserva o corpo como Buffer em req.body; convertemos
 // para string/JSON manualmente dentro do controller via req.rawBody.
 router.post(
   '/zumbopay',
+  webhookLimiter,
   express.raw({ type: '*/*', limit: '1mb' }),
   (req, res, next) => {
     req.rawBody = req.body; // Buffer em bruto, usado para validar a assinatura

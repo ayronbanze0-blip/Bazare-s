@@ -1,12 +1,13 @@
 'use strict';
 
+const { requireFeature } = require('../middleware/featureGate');
 const router = require('express').Router();
 const ctrl = require('../controllers/premiumController');
 const { authenticate, isAdmin } = require('../middleware/auth');
 
 // ─── ME ──────────────────────────────────────────────────────────
 router.get('/me', authenticate, ctrl.myStatus);
-router.post('/subscribe', authenticate, ctrl.subscribe);
+router.post('/subscribe', authenticate, requireFeature('ENABLE_PAYMENTS'), ctrl.subscribe);
 router.post('/redeem', authenticate, ctrl.redeemCode);
 router.get('/subscriptions/:id', authenticate, ctrl.subscriptionStatus);
 router.post('/subscriptions/:id/cancel', authenticate, ctrl.cancelSubscription);

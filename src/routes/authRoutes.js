@@ -4,7 +4,7 @@ const router = require('express').Router();
 const { body } = require('express-validator');
 const ctrl = require('../controllers/authController');
 const { authenticate } = require('../middleware/auth');
-const { authLimiter, emailLimiter } = require('../middleware/rateLimiter');
+const { authLimiter, emailLimiter, codeAttemptLimiter, emailTargetLimiter } = require('../middleware/rateLimiter');
 
 const registerValidation = [
   body('name').trim().isLength({ min: 2, max: 100 }).withMessage('Nome deve ter entre 2 e 100 caracteres.'),
@@ -32,10 +32,10 @@ router.post('/apple', authLimiter, ctrl.appleLogin);
 router.post('/refresh', ctrl.refresh);
 router.post('/logout', ctrl.logout);
 router.post('/logout-all', authenticate, ctrl.logoutAll);
-router.post('/forgot-password', emailLimiter, ctrl.forgotPassword);
-router.post('/reset-password', authLimiter, resetPasswordValidation, ctrl.resetPassword);
-router.post('/verify-email', authLimiter, ctrl.verifyEmail);
-router.post('/resend-verification', emailLimiter, ctrl.resendVerification);
+router.post('/forgot-password', emailLimiter, emailTargetLimiter, ctrl.forgotPassword);
+router.post('/reset-password', authLimiter, codeAttemptLimiter, resetPasswordValidation, ctrl.resetPassword);
+router.post('/verify-email', authLimiter, codeAttemptLimiter, ctrl.verifyEmail);
+router.post('/resend-verification', emailLimiter, emailTargetLimiter, ctrl.resendVerification);
 router.get('/me', authenticate, ctrl.me);
 
 module.exports = router;

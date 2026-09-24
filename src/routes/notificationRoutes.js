@@ -6,6 +6,9 @@ const { authenticate } = require('../middleware/auth');
 
 router.get('/', authenticate, ctrl.list);
 router.patch('/read-all', authenticate, ctrl.markAllRead);
+// Preferências (antes de '/:id' — mesmo cuidado que '/device-token')
+router.get('/preferences', authenticate, ctrl.getPreferences);
+router.put('/preferences', authenticate, ctrl.updatePreferences);
 router.post('/device-token', authenticate, ctrl.registerDevice);
 // '/device-token' tem de vir ANTES de '/:id' — como ambas são rotas de um
 // único segmento no mesmo método (DELETE), o Express corria pela ordem de

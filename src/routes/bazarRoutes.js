@@ -1,5 +1,6 @@
 'use strict';
 
+const { publicTrackLimiter } = require('../middleware/rateLimiter');
 const router = require('express').Router();
 const { body } = require('express-validator');
 const ctrl = require('../controllers/bazarController');
@@ -19,7 +20,7 @@ router.get('/', ctrl.list);
 router.get('/me', authenticate, isSeller, ctrl.myBazar);
 router.get('/ranking', ctrl.ranking);
 router.get('/:idOrSlug', optionalAuth, ctrl.getOne);
-router.post('/:idOrSlug/whatsapp-click', ctrl.trackWhatsappClick);
+router.post('/:idOrSlug/whatsapp-click', publicTrackLimiter, ctrl.trackWhatsappClick);
 router.get('/:idOrSlug/follow-status', optionalAuth, ctrl.followStatus);
 router.post('/:idOrSlug/follow', authenticate, ctrl.toggleFollow);
 router.get('/:idOrSlug/announcements', announcementCtrl.list);

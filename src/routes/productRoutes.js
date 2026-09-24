@@ -4,8 +4,9 @@ const router = require('express').Router();
 const { body } = require('express-validator');
 const ctrl = require('../controllers/productController');
 const commentCtrl = require('../controllers/commentController');
+const sellerCtrl = require('../controllers/sellerController');
 const { authenticate, isSeller, optionalAuth } = require('../middleware/auth');
-const { uploadLimiter } = require('../middleware/rateLimiter');
+const { uploadLimiter, publicTrackLimiter } = require('../middleware/rateLimiter');
 const { upload } = require('../services/uploadService');
 
 const productValidation = [
@@ -61,8 +62,10 @@ router.post('/:id/comments/:commentId/like', authenticate, commentCtrl.like);
 router.delete('/:id/comments/:commentId', authenticate, commentCtrl.remove);
 
 // ─── Public — lookup genérico (deve ser o último) ────────────────
+// Analytics do produto: só o vendedor dono ou um admin (totais, sem dados de compradores)
+router.get('/:id/analytics', authenticate, sellerCtrl.productAnalyticsOwnerOrAdmin);
 router.get('/:id', optionalAuth, ctrl.getOne);
 router.get('/:id/related', optionalAuth, ctrl.related);
-router.post('/:id/viewed', ctrl.trackView);   // fire-and-forget, sem auth
+router.post('/:id/viewed', publicTrackLimiter, ctrl.trackView);   // fire-and-forget, sem auth
 
 module.exports = router;

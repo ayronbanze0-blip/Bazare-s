@@ -3,10 +3,14 @@
 const router = require('express').Router();
 const ctrl = require('../controllers/adminController');
 const { authenticate, isAdmin } = require('../middleware/auth');
+const { adminActionLimiter } = require('../middleware/rateLimiter');
 
-router.use(authenticate, isAdmin);
+// TODAS as rotas /admin passam por autenticação + role ADMIN + limite por admin.
+// (Verificado por tests/unit/route-security.test.js: nenhuma rota pode ficar de fora.)
+router.use(authenticate, isAdmin, adminActionLimiter);
 
 router.get('/overview', ctrl.overview);
+router.get('/analytics', ctrl.analytics);
 
 // Utilizadores
 router.get('/users', ctrl.listUsers);
@@ -18,6 +22,7 @@ router.post('/broadcast', ctrl.broadcast);
 
 // Produtos
 router.get('/products', ctrl.listProducts);
+router.get('/products/health', ctrl.productsHealth);
 router.patch('/products/:id/toggle', ctrl.toggleProduct);
 router.patch('/products/:id/featured', ctrl.toggleFeatured);
 
