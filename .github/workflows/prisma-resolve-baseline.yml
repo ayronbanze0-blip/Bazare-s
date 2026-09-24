@@ -38,7 +38,10 @@ jobs:
           DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
         run: npx prisma migrate resolve --applied 0_baseline
 
-      - name: Estado das migrations
+      # `prisma migrate status` termina sempre com código de saída 1 quando há migrations por
+      # aplicar — isso é o ESPERADO aqui (1_evolucao_schema_v2 só é aplicada no deploy real,
+      # via `prisma migrate deploy`). `|| true` evita que esta informação apareça como falha do job.
+      - name: Estado das migrations (informativo — pendentes são esperadas)
         env:
           DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
-        run: npx prisma migrate status
+        run: npx prisma migrate status || true
