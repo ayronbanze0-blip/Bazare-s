@@ -21,7 +21,7 @@ const attachEngagement = async (items, userId) => {
   const activeTypes = VALID_TYPES.filter((t) => byType[t].length);
   if (activeTypes.length === 0) return items;
 
-  const [reactions, shares, comments, myReactions, myShares] = await Promise.all([
+  const [reactions, shares, comments, myReactions, myShares, mySaves] = await Promise.all([
     prisma.feedReaction.groupBy({
       by: ['targetType', 'targetId', 'value'],
       where: { OR: activeTypes.map((t) => ({ targetType: t, targetId: { in: byType[t] } })) },
@@ -38,7 +38,8 @@ const attachEngagement = async (items, userId) => {
       _count: true
     }),
     userId ? prisma.feedReaction.findMany({ where: { userId, OR: activeTypes.map((t) => ({ targetType: t, targetId: { in: byType[t] } })) } }) : [],
-    userId ? prisma.feedShare.findMany({ where: { userId, OR: activeTypes.map((t) => ({ targetType: t, targetId: { in: byType[t] } })) } }) : []
+    userId ? prisma.feedShare.findMany({ where: { userId, OR: activeTypes.map((t) => ({ targetType: t, targetId: { in: byType[t] } })) } }) : [],
+    userId ? prisma.save.findMany({ where: { userId, OR: activeTypes.map((t) => ({ targetType: t, targetId: { in: byType[t] } })) } }) : []
   ]);
 
   const key = (t, id) => `${t}:${id}`;
@@ -63,6 +64,7 @@ const attachEngagement = async (items, userId) => {
   const myReactionMap = {};
   myReactions.forEach((r) => { myReactionMap[key(r.targetType, r.targetId)] = r.value; });
   const mySharedSet = new Set(myShares.map((s) => key(s.targetType, s.targetId)));
+  const mySavedSet = new Set(mySaves.map((s) => key(s.targetType, s.targetId)));
 
   return items.map((it) => {
     const k = key(it.targetType, it.targetId);
@@ -73,7 +75,8 @@ const attachEngagement = async (items, userId) => {
       shareCount: shareMap[k] || 0,
       commentCount: commentMap[k] || 0,
       myReaction: myReactionMap[k] || 0,
-      sharedByMe: mySharedSet.has(k)
+      sharedByMe: mySharedSet.has(k),
+      savedByMe: mySavedSet.has(k)
     };
   });
 };
