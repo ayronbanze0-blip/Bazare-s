@@ -101,6 +101,7 @@ model User {
   storyViews        StoryView[]
   feedReactions     FeedReaction[]
   feedShares        FeedShare[]
+  saves             Save[]
   affinities        UserAffinity[]
   pollVotes         PollVote[]
   commentLikes      CommentLike[]
@@ -754,6 +755,24 @@ model FeedReaction {
 }
 
 model FeedShare {
+  id         String         @id @default(uuid())
+  userId     String
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  targetType FeedTargetType
+  targetId   String
+  createdAt  DateTime       @default(now())
+
+  @@unique([userId, targetType, targetId])
+  @@index([targetType, targetId])
+  @@index([userId])
+}
+
+// Guardar/Favoritar genérico — igual a FeedReaction/FeedShare no formato,
+// mas para qualquer tipo de conteúdo (não só Product, que já tinha o
+// Favorite antigo). Mantido separado de Favorite para não arriscar
+// migrar dados existentes; Favorite (produto) continua a servir de fonte
+// para product.isFavorite — Save cobre POST/REEL/GROUP_POST em falta.
+model Save {
   id         String         @id @default(uuid())
   userId     String
   user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
