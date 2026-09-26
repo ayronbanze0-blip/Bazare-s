@@ -426,6 +426,79 @@ const share = async (req, res) => {
   }
 };
 
+// ─── POST /api/feed/:targetType/:targetId/save ───────────────────
+// Guardar/Favoritar genérico para qualquer tipo de conteúdo (Post,
+// Reel, Post de comunidade) — para Product continua a valer
+// product.isFavorite (Favorite), este endpoint é o que faltava para
+// os outros tipos. Toggle: chamar de novo remove.
+const toggleSave = async (req, res) => {
+  try {
+    const { targetType, targetId } = req.params;
+    if (!assertType(targetType)) return badRequest(res, 'Tipo inválido.');
+
+    const target = await findTarget(targetType, targetId);
+    if (!target) return notFound(res, 'Conteúdo não encontrado.');
+    if (await isBlockedFromTarget(req.user.id, targetType, target)) return forbidden(res, BLOCKED_MSG);
+
+    const existing = await prisma.save.findUnique({
+      where: { userId_targetType_targetId: { userId: req.user.id, targetType, targetId } }
+    });
+
+    let saved;
+    if (existing) {
+      try {
+        await prisma.save.delete({ where: { id: existing.id } });
+      } catch (err) {
+        if (err.code !== 'P2025') throw err; // já removido por um pedido concorrente
+      }
+      saved = false;
+    } else {
+      await prisma.save.upsert({
+        where: { userId_targetType_targetId: { userId: req.user.id, targetType, targetId } },
+        update: {},
+        create: { userId: req.user.id, targetType, targetId }
+      });
+      affinitySvc.bump(req.user.id, target.bazarId, 'SAVE').catch(() => {});
+      saved = true;
+    }
+
+    return ok(res, { saved }, saved ? 'Guardado.' : 'Removido dos guardados.');
+  } catch (err) {
+    logger.error(`[Feed.toggleSave] ${err.message}`);
+    return serverError(res);
+  }
+};
+
+// ─── GET /api/feed/saved ──────────────────────────────────────────
+// Tudo o que o utilizador guardou (qualquer tipo), mais recente primeiro.
+const mySaved = async (req, res) => {
+  try {
+    const { page = 1, limit = 20 } = req.query;
+    const { take, skip } = paginate(page, limit);
+    const where = { userId: req.user.id };
+    const [rows, total] = await Promise.all([
+      prisma.save.findMany({ where, take, skip, orderBy: { createdAt: 'desc' } }),
+      prisma.save.count({ where })
+    ]);
+    const byType = { PRODUCT: [], ANNOUNCEMENT: [], REEL: [], GROUP_POST: [] };
+    rows.forEach((r) => byType[r.targetType].push(r.targetId));
+    const [products, announcements, reels, groupPosts] = await Promise.all([
+      byType.PRODUCT.length ? prisma.product.findMany({ where: { id: { in: byType.PRODUCT } }, include: { images: { take: 1, orderBy: { order: 'asc' } } } }) : [],
+      byType.ANNOUNCEMENT.length ? prisma.announcement.findMany({ where: { id: { in: byType.ANNOUNCEMENT } }, include: { images: { take: 1, orderBy: { order: 'asc' } } } }) : [],
+      byType.REEL.length ? prisma.reel.findMany({ where: { id: { in: byType.REEL } }, include: { images: { take: 1, orderBy: { order: 'asc' } } } }) : [],
+      byType.GROUP_POST.length ? prisma.communityPost.findMany({ where: { id: { in: byType.GROUP_POST } } }) : []
+    ]);
+    const byId = {};
+    [...products, ...announcements, ...reels, ...groupPosts].forEach((it) => { byId[it.id] = it; });
+    const items = rows.map((r) => ({ targetType: r.targetType, targetId: r.targetId, savedAt: r.createdAt, item: byId[r.targetId] || null }))
+      .filter((it) => it.item);
+    return ok(res, { items, meta: paginateMeta(total, page, limit) });
+  } catch (err) {
+    logger.error(`[Feed.mySaved] ${err.message}`);
+    return serverError(res);
+  }
+};
+
 const targetWhere = (targetType, targetId) => targetType === 'PRODUCT'
   ? { productId: targetId }
   : targetType === 'ANNOUNCEMENT'
@@ -642,5 +715,5 @@ const removeComment = async (req, res) => {
   }
 };
 
-module.exports = { list, react, reactors, share, listComments, listReplies, createComment, updateComment, removeComment, likeComment, engagement };
+module.exports = { list, react, reactors, share, toggleSave, mySaved, listComments, listReplies, createComment, updateComment, removeComment, likeComment, engagement };
 

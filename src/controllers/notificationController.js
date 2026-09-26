@@ -2,7 +2,7 @@
 
 
 const { ok, notFound, forbidden, serverError, badRequest } = require('../utils/response');
-const { paginate, paginateMeta } = require('../utils/helpers');
+const { paginate, paginateMeta, cursorArgs, cursorResult } = require('../utils/helpers');
 const logger = require('../utils/logger');
 const notifSvc = require('../services/notificationService');
 const { DEFAULT_PREFS, PREF_FIELDS, parsePrefsInput } = require('../services/notificationPolicy');
@@ -12,14 +12,23 @@ const prisma = require('../config/database');
 // ─── List my notifications ────────────────────────────────────────
 const list = async (req, res) => {
   try {
-    const { page = 1, limit = 30, unreadOnly } = req.query;
-    const { take, skip } = paginate(page, limit);
-
+    const { page = 1, limit = 30, unreadOnly, cursor } = req.query;
     const where = {
       userId: req.user.id,
       ...(unreadOnly === 'true' && { read: false })
     };
 
+    if (cursor !== undefined) {
+      const rows = await prisma.notification.findMany({
+        where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        ...cursorArgs(cursor || undefined, limit)
+      });
+      const { items, hasNext, nextCursor } = cursorResult(rows, limit);
+      const unreadCount = await prisma.notification.count({ where: { userId: req.user.id, read: false } });
+      return ok(res, { notifications: items, unreadCount, meta: { limit: Number(limit) || 30, hasNext, nextCursor } });
+    }
+
+    const { take, skip } = paginate(page, limit);
     const [notifications, total, unreadCount] = await Promise.all([
       prisma.notification.findMany({ where, orderBy: { createdAt: 'desc' }, take, skip }),
       prisma.notification.count({ where }),
