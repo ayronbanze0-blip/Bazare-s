@@ -4,6 +4,8 @@ const { publicTrackLimiter } = require('../middleware/rateLimiter');
 const router = require('express').Router();
 const { body } = require('express-validator');
 const ctrl = require('../controllers/bazarController');
+const experienceCtrl = require('../controllers/experienceController');
+const browse = require('../controllers/browseController');
 const announcementCtrl = require('../controllers/announcementController');
 const storyCtrl = require('../controllers/storyController');
 const reelCtrl = require('../controllers/reelController');
@@ -19,6 +21,11 @@ const bazarValidation = [
 router.get('/', ctrl.list);
 router.get('/me', authenticate, isSeller, ctrl.myBazar);
 router.get('/ranking', ctrl.ranking);
+router.get('/:idOrSlug/products', optionalAuth, browse.bazarProducts);
+router.get('/:idOrSlug/posts', optionalAuth, announcementCtrl.list);   // alias de /announcements (nome do documento)
+router.get('/:idOrSlug/reviews', browse.bazarReviews);
+router.get('/:idOrSlug/followers', browse.bazarFollowers);
+router.get('/:idOrSlug/view', optionalAuth, experienceCtrl.bazarView); // experiência: bazar + dono + produtos + posts + reels, 1 pedido
 router.get('/:idOrSlug', optionalAuth, ctrl.getOne);
 router.post('/:idOrSlug/whatsapp-click', publicTrackLimiter, ctrl.trackWhatsappClick);
 router.get('/:idOrSlug/follow-status', optionalAuth, ctrl.followStatus);

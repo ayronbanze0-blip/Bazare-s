@@ -8,4 +8,8 @@ const { optionalAuth } = require('../middleware/auth');
 // Complementa GET /bazars/:idOrSlug/reels (reels de um único bazar).
 router.get('/', optionalAuth, ctrl.listGlobal);
 
+const browse = require('../controllers/browseController');
+router.get('/:id', optionalAuth, browse.reelOne);
+router.get('/:id/comments', optionalAuth, browse.reelComments);
+
 module.exports = router;

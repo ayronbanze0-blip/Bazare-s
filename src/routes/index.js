@@ -4,6 +4,12 @@ const router = require('express').Router();
 const { requireFeature } = require('../middleware/featureGate');
 const prisma = require('../config/database');
 
+const { optionalAuth } = require('../middleware/auth');
+const experienceCtrl = require('../controllers/experienceController');
+// Camada de experiência (1 pedido por ecrã) — só agrega endpoints existentes
+router.get('/home', optionalAuth, experienceCtrl.home);
+router.get('/explore', optionalAuth, experienceCtrl.explore);
+
 router.use('/auth', require('./authRoutes'));
 router.use('/products', require('./productRoutes'));
 router.use('/bazars', require('./bazarRoutes'));
@@ -22,6 +28,8 @@ router.use('/reviews', require('./reviewRoutes'));
 router.use('/wallet', require('./walletRoutes'));
 router.use('/premium', requireFeature('ENABLE_PREMIUM', { except: /^\/admin(\/|$)/ }), require('./premiumRoutes'));
 router.use('/feed', requireFeature('ENABLE_SOCIAL_FEED'), require('./feedRoutes'));
+router.use('/posts', requireFeature('ENABLE_SOCIAL_FEED'), require('./postRoutes'));
+router.use('/content', require('./contentRoutes'));
 router.use('/reels', requireFeature('ENABLE_REELS'), require('./reelRoutes'));
 router.use('/stories', require('./storyRoutes'));
 router.use('/ai', requireFeature('ENABLE_AI'), require('./aiRoutes'));

@@ -8,6 +8,7 @@ const { upload } = require('../services/uploadService');
 const { uploadLimiter } = require('../middleware/rateLimiter');
 
 // ─── Authenticated ────────────────────────────────────────────────
+const browse = require('../controllers/browseController');
 router.get('/me/stats', authenticate, ctrl.myStats);
 router.put('/me', authenticate, uploadLimiter, upload.single('avatar'), ctrl.updateProfile);
 router.put('/me/cover', authenticate, uploadLimiter, upload.single('cover'), ctrl.updateCover);
@@ -30,6 +31,12 @@ router.get('/presence', authenticate, ctrl.getPresence);
 
 // ─── Public ───────────────────────────────────────────────────────
 // Deve ficar por último para não capturar /me como :id
+router.get('/:id/view', optionalAuth, browse.userView);
+router.get('/:id/posts', optionalAuth, browse.userPosts);
+router.get('/:id/reels', optionalAuth, browse.userReels);
+router.get('/:id/products', optionalAuth, browse.userProducts);
+router.get('/:id/followers', optionalAuth, browse.userFollowers);
+router.get('/:id/following', authenticate, browse.userFollowing);
 router.get('/:id', optionalAuth, ctrl.publicProfile);
 
 module.exports = router;

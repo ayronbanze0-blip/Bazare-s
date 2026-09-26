@@ -3,6 +3,8 @@
 const router = require('express').Router();
 const { body } = require('express-validator');
 const ctrl = require('../controllers/productController');
+const experienceCtrl = require('../controllers/experienceController');
+const browse = require('../controllers/browseController');
 const commentCtrl = require('../controllers/commentController');
 const sellerCtrl = require('../controllers/sellerController');
 const { authenticate, isSeller, optionalAuth } = require('../middleware/auth');
@@ -64,6 +66,9 @@ router.delete('/:id/comments/:commentId', authenticate, commentCtrl.remove);
 // ─── Public — lookup genérico (deve ser o último) ────────────────
 // Analytics do produto: só o vendedor dono ou um admin (totais, sem dados de compradores)
 router.get('/:id/analytics', authenticate, sellerCtrl.productAnalyticsOwnerOrAdmin);
+router.get('/:id/reviews', optionalAuth, browse.productReviews);
+router.get('/:id/seller-products', optionalAuth, browse.sellerProducts);
+router.get('/:id/view', optionalAuth, experienceCtrl.productView); // experiência: produto + bazar + reviews + relacionados + reels, 1 pedido
 router.get('/:id', optionalAuth, ctrl.getOne);
 router.get('/:id/related', optionalAuth, ctrl.related);
 router.post('/:id/viewed', publicTrackLimiter, ctrl.trackView);   // fire-and-forget, sem auth

@@ -10,10 +10,14 @@ const commentValidation = [
 ];
 
 router.get('/', optionalAuth, ctrl.list);
+// Estático de um segmento só — antes de '/:targetType/:targetId', mesma
+// razão do '/blocked' em userRoutes.js (senão ':targetType' apanhava "saved").
+router.get('/saved', authenticate, ctrl.mySaved);
 router.get('/:targetType/:targetId/engagement', optionalAuth, ctrl.engagement);
 router.post('/:targetType/:targetId/react', authenticate, ctrl.react);
 router.get('/:targetType/:targetId/reactors', optionalAuth, ctrl.reactors);
 router.post('/:targetType/:targetId/share', authenticate, ctrl.share);
+router.post('/:targetType/:targetId/save', authenticate, ctrl.toggleSave);
 router.get('/:targetType/:targetId/comments', optionalAuth, ctrl.listComments);
 router.post('/:targetType/:targetId/comments', authenticate, commentValidation, ctrl.createComment);
 router.get('/comments/:commentId/replies', optionalAuth, ctrl.listReplies);
