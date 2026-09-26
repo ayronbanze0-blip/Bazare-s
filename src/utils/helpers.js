@@ -119,6 +119,34 @@ const paginateMeta = (total, page, limit) => {
 };
 
 /**
+ * Paginação por cursor — alternativa OPCIONAL ao page/limit acima, para
+ * listas que crescem e são consumidas por scroll infinito (o utilizador
+ * não deve sentir o app "seco" a meio de uma lista longa: cursor não
+ * salta nem repete itens quando entram registos novos entre pedidos,
+ * ao contrário de page/limit).
+ *
+ * Uso: `orderBy: [{ createdAt: 'desc' }, { id: 'desc' }]` (obrigatório
+ * manter esta ordem — o cursor localiza-se pelo `id`, mas a posição na
+ * lista é decidida pela ordenação completa) + espalhar `cursorArgs(...)`
+ * na query, depois `cursorResult(rows, limit)` para separar a página do
+ * `nextCursor`.
+ */
+const cursorArgs = (cursor, limit = DEFAULT_LIMIT) => {
+  const n = normalizePaging(1, limit);
+  return {
+    take: n.limit + 1, // 1 a mais só para saber se há próxima página
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {})
+  };
+};
+
+const cursorResult = (rows, limit = DEFAULT_LIMIT) => {
+  const n = normalizePaging(1, limit);
+  const hasNext = rows.length > n.limit;
+  const items = hasNext ? rows.slice(0, n.limit) : rows;
+  return { items, hasNext, nextCursor: hasNext ? items[items.length - 1].id : null };
+};
+
+/**
  * Pick only specified keys from object (safe serialization)
  */
 const pick = (obj, keys) =>
@@ -207,6 +235,6 @@ const haversineKm = (lat1, lng1, lat2, lng2) => {
 
 module.exports = {
   toSlug, uniqueSlug, sanitize, genToken, genCode, hashCode, codeMatches,
-  expiresAt, fmtMT, paginate, paginateMeta, normalizePaging, DEFAULT_LIMIT, MAX_LIMIT, pick, omit, calcFee,
+  expiresAt, fmtMT, paginate, paginateMeta, cursorArgs, cursorResult, normalizePaging, DEFAULT_LIMIT, MAX_LIMIT, pick, omit, calcFee,
   startOfWeek, startOfMonth, getBadgeTier, parseLatLng, haversineKm
 };
