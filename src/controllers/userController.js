@@ -6,6 +6,8 @@ const { sanitize } = require('../utils/helpers');
 const { uploadAvatar, uploadBazarBanner } = require('../services/uploadService');
 const walletService = require('../services/walletService');
 const logger = require('../utils/logger');
+const { makeStage } = require('../utils/resilience');
+const stage = makeStage('Users');
 const audit = require('../services/auditService');
 const prisma = require('../config/database');
 const { deleteUserData } = require('../services/accountDeletionService');
@@ -25,18 +27,18 @@ const myStats = async (req, res) => {
       unreadMessages,
       unreadNotifications
     ] = await Promise.all([
-      prisma.order.count({ where: { buyerId: userId } }),
-      prisma.order.count({ where: { buyerId: userId, status: 'PENDENTE' } }),
-      prisma.favorite.count({ where: { userId } }),
-      prisma.cartItem.count({ where: { userId } }),
-      prisma.message.count({
+      stage('total-encomendas', () => prisma.order.count({ where: { buyerId: userId } }), 0),
+      stage('encomendas-pendentes', () => prisma.order.count({ where: { buyerId: userId, status: 'PENDENTE' } }), 0),
+      stage('favoritos', () => prisma.favorite.count({ where: { userId } }), 0),
+      stage('carrinho', () => prisma.cartItem.count({ where: { userId } }), 0),
+      stage('mensagens-por-ler', () => prisma.message.count({
         where: {
           read: false,
           senderId: { not: userId },
           chat: { OR: [{ userAId: userId }, { userBId: userId }] }
         }
-      }),
-      prisma.notification.count({ where: { userId, read: false } })
+      }), 0),
+      stage('notificações', () => prisma.notification.count({ where: { userId, read: false } }), 0)
     ]);
 
     let sellerStats = null;

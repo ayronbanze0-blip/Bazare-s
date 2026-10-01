@@ -43,7 +43,7 @@ const prodInclude = {
 
 const isUuid = (v) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
 const hiddenSellerFilter = async (req) => {
-  const hidden = await blockSvc.getHiddenUserIds(req.user?.id);
+  const hidden = await blockSvc.getHiddenUserIdsSafe(req.user?.id);
   return hidden.size ? { sellerId: { notIn: [...hidden] } } : {};
 };
 const wrap = (name, fn) => async (req, res) => {

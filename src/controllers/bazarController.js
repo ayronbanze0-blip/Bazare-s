@@ -10,6 +10,8 @@ const notifSvc = require('../services/notificationService');
 const blockSvc = require('../services/blockService');
 const affinitySvc = require('../services/affinityService');
 const logger = require('../utils/logger');
+const { makeStage } = require('../utils/resilience');
+const stage = makeStage('Bazars');
 
 const prisma = require('../config/database');
 const { attachFavorites } = require('./productController');
@@ -83,8 +85,8 @@ const getOne = async (req, res) => {
     // ficam no tempo da mais lenta das duas, não da soma das duas.
     const [followRecord, blockRecord] = req.user
       ? await Promise.all([
-          prisma.follow.findUnique({ where: { userId_bazarId: { userId: req.user.id, bazarId: bazar.id } } }),
-          prisma.block.findUnique({ where: { blockerId_blockedId: { blockerId: req.user.id, blockedId: bazar.sellerId } } })
+          stage('isFollowing', () => prisma.follow.findUnique({ where: { userId_bazarId: { userId: req.user.id, bazarId: bazar.id } } }), null),
+          stage('isBlocked', () => prisma.block.findUnique({ where: { blockerId_blockedId: { blockerId: req.user.id, blockedId: bazar.sellerId } } }), null)
         ])
       : [null, null];
     bazar.isFollowing = !!followRecord;

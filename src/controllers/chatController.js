@@ -141,7 +141,7 @@ const getOrCreateChat = async (req, res) => {
 
 const myChats = async (req, res) => {
   try {
-    const hiddenIds = await blockSvc.getHiddenUserIds(req.user.id);
+    const hiddenIds = await blockSvc.getHiddenUserIdsSafe(req.user.id);
 
     const chats = await prisma.chat.findMany({
       where: { OR: [{ userAId: req.user.id }, { userBId: req.user.id }] },

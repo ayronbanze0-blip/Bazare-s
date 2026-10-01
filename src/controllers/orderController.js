@@ -2,9 +2,10 @@
 
 const { validationResult } = require('express-validator');
 
-const { ok, created, badRequest, forbidden, notFound, serverError, validationError } = require('../utils/response');
+const { ok, created, domainError, badRequest, forbidden, notFound, serverError, validationError } = require('../utils/response');
 const { paginate, paginateMeta, calcFee, parseLatLng, sanitize } = require('../utils/helpers');
 const notifSvc = require('../services/notificationService');
+const eventBus = require('../services/eventBus');
 const emailSvc = require('../services/emailService');
 const premiumService = require('../services/premiumService');
 const logger = require('../utils/logger');
@@ -90,7 +91,7 @@ const placeOrder = async (req, res) => {
     for (const item of items) {
       const product = products.find(p => p.id === item.productId);
       if (!product) return badRequest(res, `Produto ${item.productId} não encontrado.`);
-      if (product.stock < item.qty) return badRequest(res, `Stock insuficiente para: ${product.name}`);
+      if (product.stock < item.qty) return domainError(res, 400, 'PRODUCT_OUT_OF_STOCK', `Stock insuficiente para: ${product.name}`, { productId: product.id });
     }
 
     // Group items by seller (one order per seller)
@@ -211,7 +212,7 @@ const placeOrder = async (req, res) => {
     logger.info(`[Orders] ${createdOrders.length} order(s) placed by ${req.user.id}`);
     return created(res, { orders: createdOrders }, 'Encomenda realizada com sucesso.');
   } catch (err) {
-    if (err instanceof StockError) return badRequest(res, err.message);
+    if (err instanceof StockError) return domainError(res, 400, 'PRODUCT_OUT_OF_STOCK', err.message);
     logger.error(`[Orders.placeOrder] ${err.message}`);
     return serverError(res);
   }
@@ -461,6 +462,10 @@ const updateStatus = async (req, res) => {
         oldValue: { status: order.status }, newValue: { status, ...(cleanReason && { reason: cleanReason }) }
       });
     }
+
+    eventBus.emit(eventBus.EVENTS.ORDER_STATUS_CHANGED, {
+      orderId: order.id, buyerId: order.buyerId, sellerId: order.sellerId, status, from: order.status
+    });
 
     logger.info(`[Orders] Status updated: ${order.id} → ${status} by ${req.user.id}`);
     return ok(res, { order: updated }, `Encomenda ${status.toLowerCase()}.`);

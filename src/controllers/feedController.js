@@ -15,18 +15,11 @@ const communitySvc = require('../services/communityService');
 const logger = require('../utils/logger');
 const prisma = require('../config/database');
 
+const { makeStage } = require('../utils/resilience');
 const assertType = (targetType) => VALID_TYPES.includes(targetType);
 
-// Resiliência do GET /feed: cada fonte/etapa OPCIONAL corre isolada. Se uma falhar (ex.: tabela/coluna
-// em falta na BD, serviço lento), regista a etapa exacta no log e o feed continua com o resto, em vez
-// de devolver 500 e deixar a Home sem nada.
-const stage = async (name, fn, fallback) => {
-  try { return await fn(); }
-  catch (err) {
-    logger.error(`[Feed.list] etapa "${name}" falhou (a continuar sem ela): ${err.code ? err.code + ' · ' : ''}${err.message}`);
-    return typeof fallback === 'function' ? fallback() : fallback;
-  }
-};
+// Resiliência do GET /feed: cada fonte/etapa OPCIONAL corre isolada (ver utils/resilience.js).
+const stage = makeStage('Feed.list');
 
 // Mapa targetType → modelo Prisma, para confirmar que o alvo de facto
 // existe antes de gravar uma reação/partilha. Sem isto, qualquer

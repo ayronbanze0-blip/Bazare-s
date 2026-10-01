@@ -367,7 +367,7 @@ const listPosts = async (req, res) => {
     ]);
 
     if (req.user?.id) {
-      const hiddenIds = await blockSvc.getHiddenUserIds(req.user.id);
+      const hiddenIds = await blockSvc.getHiddenUserIdsSafe(req.user.id);
       if (hiddenIds.size) posts = posts.filter((p) => !hiddenIds.has(p.authorId));
     }
 

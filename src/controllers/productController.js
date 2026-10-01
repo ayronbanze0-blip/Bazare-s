@@ -12,6 +12,8 @@ const notificationSvc = require('../services/notificationService');
 const { attachProductEngagement, attachFollowState } = require('../services/feedEngagementService');
 const affinitySvc = require('../services/affinityService');
 const logger = require('../utils/logger');
+const { makeStage } = require('../utils/resilience');
+const stage = makeStage('Products');
 
 const prisma = require('../config/database');
 
@@ -25,10 +27,10 @@ async function attachFavorites(products, userId) {
   if (!userId || !products.length) {
     return products.map(p => ({ ...p, isFavorite: false }));
   }
-  const favs = await prisma.favorite.findMany({
+  const favs = await stage('favoritos', () => prisma.favorite.findMany({
     where: { userId, productId: { in: products.map(p => p.id) } },
     select: { productId: true }
-  });
+  }), []);
   const favSet = new Set(favs.map(f => f.productId));
   return products.map(p => ({ ...p, isFavorite: favSet.has(p.id) }));
 }
@@ -182,9 +184,9 @@ const getOne = async (req, res) => {
     // Check if in buyer's favorites
     let isFavorite = false;
     if (req.user) {
-      const fav = await prisma.favorite.findUnique({
+      const fav = await stage('favorito', () => prisma.favorite.findUnique({
         where: { userId_productId: { userId: req.user.id, productId: product.id } }
-      });
+      }), null);
       isFavorite = !!fav;
     }
 

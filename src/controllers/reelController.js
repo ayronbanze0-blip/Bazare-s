@@ -7,6 +7,8 @@ const uploadSvc = require('../services/uploadService');
 const { attachReelEngagement, attachFollowState } = require('../services/feedEngagementService');
 const affinitySvc = require('../services/affinityService');
 const logger = require('../utils/logger');
+const { makeStage } = require('../utils/resilience');
+const stage = makeStage('Reels');
 const prisma = require('../config/database');
 
 const resolveBazar = (idOrSlug) =>
@@ -69,7 +71,7 @@ const listGlobal = async (req, res) => {
 
     let reelsOrdered = reels;
     if (req.user?.id) {
-      reelsOrdered = await affinitySvc.applyAffinityOrder(reels, req.user.id, (r) => r.bazarId);
+      reelsOrdered = await stage('afinidade-ordem', () => affinitySvc.applyAffinityOrder(reels, req.user.id, (r) => r.bazarId), () => reels);
     }
     return ok(res, { reels: await attachFollowState(await attachReelEngagement(reelsOrdered, req.user?.id), req.user?.id), meta: paginateMeta(total, page, limit) });
   } catch (err) {

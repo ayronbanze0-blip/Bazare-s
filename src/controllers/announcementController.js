@@ -7,6 +7,8 @@ const mentionSvc = require('../services/mentionService');
 const { attachDirectEngagement } = require('../services/feedEngagementService');
 const { shapePoll, attachPollToAnnouncements } = require('../services/pollService');
 const logger = require('../utils/logger');
+const { makeStage } = require('../utils/resilience');
+const stage = makeStage('Announcements');
 const prisma = require('../config/database');
 
 const resolveBazar = (idOrSlug) =>
@@ -43,7 +45,7 @@ const list = async (req, res) => {
     // (todos usam este mesmo endpoint), mesmo que a reação/comentário
     // estivesse guardado na base de dados.
     let withEngagement = await attachDirectEngagement(announcements, req.user?.id, 'ANNOUNCEMENT');
-    withEngagement = await attachPollToAnnouncements(withEngagement, req.user?.id);
+    { const before = withEngagement; withEngagement = await stage('sondagens', () => attachPollToAnnouncements(before, req.user?.id), () => before); }
 
     return ok(res, { announcements: withEngagement, meta: paginateMeta(total, page, limit) });
   } catch (err) {
@@ -152,7 +154,8 @@ const create = async (req, res) => {
       where: { id: announcement.id },
       include: { images: { orderBy: { order: 'asc' } }, mentions: { select: { mentionedUserId: true, mentionedUser: { select: { username: true } } } }, product: { select: { id: true, name: true, slug: true, price: true } }, poll: true }
     });
-    if (full.poll) full.poll = await shapePoll(full.poll, req.user.id);
+    // O anúncio JÁ foi criado: se a sondagem falhar ao formatar, não devolver 500 (o utilizador voltaria a publicar → duplicado).
+    if (full.poll) full.poll = await stage('sondagem', () => shapePoll(full.poll, req.user.id), null);
 
     mentionSvc.syncMentions({
       text,
