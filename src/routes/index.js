@@ -10,6 +10,12 @@ const experienceCtrl = require('../controllers/experienceController');
 router.get('/home', optionalAuth, experienceCtrl.home);
 router.get('/explore', optionalAuth, experienceCtrl.explore);
 
+const appCtrl = require('../controllers/appController');
+const { authenticate: _authn } = require('../middleware/auth');
+router.get('/app/config', appCtrl.config);
+router.get('/app/bootstrap', appCtrl.bootstrap);
+router.get('/me/permissions', _authn, appCtrl.permissions);
+
 router.use('/auth', require('./authRoutes'));
 router.use('/products', require('./productRoutes'));
 router.use('/bazars', require('./bazarRoutes'));
