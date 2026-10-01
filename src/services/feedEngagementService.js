@@ -1,6 +1,9 @@
 'use strict';
 
 const prisma = require('../config/database');
+const { makeStage } = require('../utils/resilience');
+
+const stage = makeStage('Engagement');
 
 const VALID_TYPES = ['PRODUCT', 'ANNOUNCEMENT', 'REEL', 'GROUP_POST'];
 
@@ -21,25 +24,27 @@ const attachEngagement = async (items, userId) => {
   const activeTypes = VALID_TYPES.filter((t) => byType[t].length);
   if (activeTypes.length === 0) return items;
 
+  // Cada consulta é independente: se uma falhar (ex.: tabela Save ou coluna communityPostId em falta
+  // na BD), só esse número fica a zero — as outras contagens continuam certas.
   const [reactions, shares, comments, myReactions, myShares, mySaves] = await Promise.all([
-    prisma.feedReaction.groupBy({
+    stage('reacções', () => prisma.feedReaction.groupBy({
       by: ['targetType', 'targetId', 'value'],
       where: { OR: activeTypes.map((t) => ({ targetType: t, targetId: { in: byType[t] } })) },
       _count: true
-    }),
-    prisma.feedShare.groupBy({
+    }), []),
+    stage('partilhas', () => prisma.feedShare.groupBy({
       by: ['targetType', 'targetId'],
       where: { OR: activeTypes.map((t) => ({ targetType: t, targetId: { in: byType[t] } })) },
       _count: true
-    }),
-    prisma.comment.groupBy({
+    }), []),
+    stage('comentários', () => prisma.comment.groupBy({
       by: ['productId', 'announcementId', 'reelId', 'communityPostId'],
       where: { OR: [{ productId: { in: byType.PRODUCT } }, { announcementId: { in: byType.ANNOUNCEMENT } }, { reelId: { in: byType.REEL } }, { communityPostId: { in: byType.GROUP_POST } }] },
       _count: true
-    }),
-    userId ? prisma.feedReaction.findMany({ where: { userId, OR: activeTypes.map((t) => ({ targetType: t, targetId: { in: byType[t] } })) } }) : [],
-    userId ? prisma.feedShare.findMany({ where: { userId, OR: activeTypes.map((t) => ({ targetType: t, targetId: { in: byType[t] } })) } }) : [],
-    userId ? prisma.save.findMany({ where: { userId, OR: activeTypes.map((t) => ({ targetType: t, targetId: { in: byType[t] } })) } }) : []
+    }), []),
+    userId ? stage('a-minha-reacção', () => prisma.feedReaction.findMany({ where: { userId, OR: activeTypes.map((t) => ({ targetType: t, targetId: { in: byType[t] } })) } }), []) : [],
+    userId ? stage('as-minhas-partilhas', () => prisma.feedShare.findMany({ where: { userId, OR: activeTypes.map((t) => ({ targetType: t, targetId: { in: byType[t] } })) } }), []) : [],
+    userId ? stage('os-meus-guardados', () => prisma.save.findMany({ where: { userId, OR: activeTypes.map((t) => ({ targetType: t, targetId: { in: byType[t] } })) } }), []) : []
   ]);
 
   const key = (t, id) => `${t}:${id}`;
@@ -111,7 +116,7 @@ const attachFollowState = async (items, userId) => {
   if (!userId || !items.length) return items;
   const bazarIds = [...new Set(items.map((it) => it.bazar?.id).filter(Boolean))];
   if (!bazarIds.length) return items;
-  const follows = await prisma.follow.findMany({ where: { userId, bazarId: { in: bazarIds } }, select: { bazarId: true } });
+  const follows = await stage('seguir', () => prisma.follow.findMany({ where: { userId, bazarId: { in: bazarIds } }, select: { bazarId: true } }), []);
   const followedSet = new Set(follows.map((f) => f.bazarId));
   return items.map((it) => it.bazar ? { ...it, bazar: { ...it.bazar, isFollowing: followedSet.has(it.bazar.id) } } : it);
 };

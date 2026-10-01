@@ -19,6 +19,17 @@ async function getHiddenUserIds(userId) {
   return ids;
 }
 
+// Versão para LEITURAS (listas/feeds): se a consulta falhar, regista e segue sem filtrar, em vez de
+// deitar abaixo o ecrã. Contrapartida: nesse intervalo podem aparecer itens de utilizadores bloqueados.
+// Não usar em escritas (menções, mensagens) — aí usa-se a versão estrita acima.
+async function getHiddenUserIdsSafe(userId) {
+  try { return await getHiddenUserIds(userId); }
+  catch (err) {
+    require('../utils/logger').error(`[Block] etapa "bloqueios" falhou (a continuar sem filtrar): ${err.code ? err.code + ' · ' : ''}${err.message}`);
+    return new Set();
+  }
+}
+
 // ─── Verifica se existe bloqueio entre dois utilizadores, em qualquer
 // sentido — usado no chat para impedir enviar/receber mensagens. ──────
 async function isBlockedEither(userIdA, userIdB) {
@@ -43,4 +54,4 @@ async function blockedAmong(userId, otherIds = []) {
   return otherIds.filter((id) => hidden.has(id));
 }
 
-module.exports = { getHiddenUserIds, isBlockedEither, blockedAmong };
+module.exports = { getHiddenUserIds, getHiddenUserIdsSafe, isBlockedEither, blockedAmong };

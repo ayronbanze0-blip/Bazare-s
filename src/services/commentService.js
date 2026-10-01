@@ -19,7 +19,7 @@ const listThreaded = async (where, userId, { take, skip } = {}) => {
   // aplicavam nada: bloquear alguém não garantia deixar de ver os
   // comentários dessa pessoa, nem impedia que ela continuasse a ver os
   // teus.
-  const hiddenIds = userId ? await blockService.getHiddenUserIds(userId) : new Set();
+  const hiddenIds = userId ? await blockService.getHiddenUserIdsSafe(userId) : new Set();
   const blockFilter = hiddenIds.size ? { userId: { notIn: [...hiddenIds] } } : {};
 
   const [topLevel, total] = await Promise.all([
@@ -83,7 +83,7 @@ const listThreaded = async (where, userId, { take, skip } = {}) => {
 
 const listReplies = async (parentId, userId, { take, skip } = {}) => {
   // Mesma regra de bloqueio aplicada em listThreaded.
-  const hiddenIds = userId ? await blockService.getHiddenUserIds(userId) : new Set();
+  const hiddenIds = userId ? await blockService.getHiddenUserIdsSafe(userId) : new Set();
   const blockFilter = hiddenIds.size ? { userId: { notIn: [...hiddenIds] } } : {};
 
   const [replies, total] = await Promise.all([
