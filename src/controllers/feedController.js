@@ -17,6 +17,17 @@ const prisma = require('../config/database');
 
 const assertType = (targetType) => VALID_TYPES.includes(targetType);
 
+// Resiliência do GET /feed: cada fonte/etapa OPCIONAL corre isolada. Se uma falhar (ex.: tabela/coluna
+// em falta na BD, serviço lento), regista a etapa exacta no log e o feed continua com o resto, em vez
+// de devolver 500 e deixar a Home sem nada.
+const stage = async (name, fn, fallback) => {
+  try { return await fn(); }
+  catch (err) {
+    logger.error(`[Feed.list] etapa "${name}" falhou (a continuar sem ela): ${err.code ? err.code + ' · ' : ''}${err.message}`);
+    return typeof fallback === 'function' ? fallback() : fallback;
+  }
+};
+
 // Mapa targetType → modelo Prisma, para confirmar que o alvo de facto
 // existe antes de gravar uma reação/partilha. Sem isto, qualquer
 // utilizador autenticado podia criar reações apontando para um
@@ -128,18 +139,18 @@ const list = async (req, res) => {
     // já era antes desta fase.
     let forYouBazarIds = [];
     if (req.user?.id) {
-      const topAffinity = await prisma.userAffinity.findMany({
+      const topAffinity = await stage('afinidade-top', () => prisma.userAffinity.findMany({
         where: { userId: req.user.id },
         orderBy: { score: 'desc' },
         take: 5,
         select: { bazarId: true }
-      });
+      }), []);
       forYouBazarIds = topAffinity.map(a => a.bazarId);
     }
     const forYouWhere = { active: true, moderationStatus: 'APPROVED', ...visibleOwner, bazarId: { in: forYouBazarIds } };
     if (cursorDate) forYouWhere.createdAt = { lt: cursorDate };
 
-    const [featuredProducts, announcements, reels, forYouProducts] = await Promise.all([
+    const sources = await Promise.allSettled([
       prisma.product.findMany({
         where: productWhere,
         orderBy: { featuredUntil: 'desc' },
@@ -185,6 +196,13 @@ const list = async (req, res) => {
         }
       }) : Promise.resolve([])
     ]);
+    const srcNames = ['produtos-destaque', 'posts', 'reels', 'para-si'];
+    sources.forEach((r, k) => {
+      if (r.status === 'rejected') logger.error(`[Feed.list] fonte "${srcNames[k]}" falhou (a continuar sem ela): ${r.reason && r.reason.code ? r.reason.code + ' · ' : ''}${r.reason && r.reason.message}`);
+    });
+    // Se TODAS as fontes falharam não há feed possível — aí sim é erro do servidor.
+    if (sources.every((r) => r.status === 'rejected')) throw sources[0].reason;
+    const [featuredProducts, announcements, reels, forYouProducts] = sources.map((r) => (r.status === 'fulfilled' ? r.value : []));
 
     // Um produto em destaque também pode calhar de ser de uma loja com
     // afinidade alta — não o mostra a dobrar.
@@ -228,7 +246,7 @@ const list = async (req, res) => {
     // Esconde conteúdo de quem bloqueaste (ou de quem te bloqueou) —
     // um bloqueio esconde nos dois sentidos, ver blockService.
     if (req.user?.id) {
-      const hiddenIds = await blockSvc.getHiddenUserIds(req.user.id);
+      const hiddenIds = await stage('bloqueios', () => blockSvc.getHiddenUserIds(req.user.id), () => new Set());
       if (hiddenIds.size) {
         items = items.filter(it => {
           const sellerId = it.product?.seller?.id || it.announcement?.seller?.id || it.reel?.sellerId;
@@ -252,23 +270,29 @@ const list = async (req, res) => {
     // reage/comenta/segue mais uma loja passa a vê-la mais cedo no
     // feed, sem mexer em quais itens entram em cada página.
     if (req.user?.id) {
-      items = await affinitySvc.applyAffinityOrder(
+      const before = items;
+      items = await stage('afinidade-ordem', () => affinitySvc.applyAffinityOrder(
         items, req.user.id, (it) => it.product?.bazarId || it.announcement?.bazarId || it.reel?.bazarId
-      );
+      ), () => before);
     }
 
     // Variedade: nenhum tipo de conteúdo domina em sequência (máx. 2 seguidos do mesmo tipo,
     // quando houver outros tipos disponíveis nesta página). Só reordena; não remove nada.
     items = interleaveByType(items, { maxRun: 2 });
 
-    items = await attachEngagement(items, req.user?.id);
+    {
+      const before = items;
+      items = await stage('engagement', () => attachEngagement(items, req.user?.id),
+        () => before.map((it) => ({ ...it, likeCount: 0, dislikeCount: 0, shareCount: 0, commentCount: 0, myReaction: 0 })));
+    }
 
     // Sondagens vêm da query principal só com a linha do Poll em si
     // (sem opções/contagens) — completa isso aqui, só para os itens
     // que realmente têm uma (a maioria dos Posts não tem).
     items = await Promise.all(items.map(async (it) => {
       if (it.announcement?.poll) {
-        return { ...it, announcement: { ...it.announcement, poll: await shapePoll(it.announcement.poll, req.user?.id) } };
+        const poll = await stage('sondagem', () => shapePoll(it.announcement.poll, req.user?.id), null);
+        return { ...it, announcement: { ...it.announcement, poll } };
       }
       return it;
     }));
@@ -282,7 +306,7 @@ const list = async (req, res) => {
     if (req.user?.id) {
       const bazarIds = [...new Set(items.map(it => (it.product?.bazar || it.announcement?.bazar || it.reel?.bazar)?.id).filter(Boolean))];
       if (bazarIds.length) {
-        const follows = await prisma.follow.findMany({ where: { userId: req.user.id, bazarId: { in: bazarIds } }, select: { bazarId: true } });
+        const follows = await stage('seguir', () => prisma.follow.findMany({ where: { userId: req.user.id, bazarId: { in: bazarIds } }, select: { bazarId: true } }), []);
         const followedSet = new Set(follows.map(f => f.bazarId));
         items = items.map(it => {
           const key = it.targetType === 'PRODUCT' ? 'product' : it.targetType === 'ANNOUNCEMENT' ? 'announcement' : 'reel';
@@ -295,7 +319,7 @@ const list = async (req, res) => {
 
     return ok(res, { items, meta: { hasMore, nextCursor } });
   } catch (err) {
-    logger.error(`[Feed.list] ${err.message}`);
+    logger.error(`[Feed.list] ${err.code ? err.code + ' · ' : ''}${err.message}`);
     return serverError(res);
   }
 };
