@@ -20,6 +20,9 @@ router.delete('/users/:id', ctrl.deleteUser);
 router.post('/users/:id/message', ctrl.messageUser);
 router.post('/broadcast', ctrl.broadcast);
 
+// Backend → frontend em tempo real (socket 'app:command'): invalidate/toast/navigate/refresh/maintenance/logout
+router.post('/app/command', require('../controllers/appController').sendCommand);
+
 // Produtos
 router.get('/products', ctrl.listProducts);
 router.get('/products/health', ctrl.productsHealth);
