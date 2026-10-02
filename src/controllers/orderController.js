@@ -306,9 +306,27 @@ const getOne = async (req, res) => {
 };
 
 // ─── SELLER: Update order status ──────────────────────────────────
+// Aceita variações comuns do mesmo estado (maiúsculas/minúsculas, espaços, "CANCELADO"/"CANCELLED"…) em
+// vez de falhar com "Estado inválido" por uma questão de escrita.
+const STATUS_ALIASES = {
+  CANCELADO: 'CANCELADA', CANCELED: 'CANCELADA', CANCELLED: 'CANCELADA', CANCEL: 'CANCELADA', CANCELAR: 'CANCELADA',
+  ENTREGADO: 'ENTREGUE', DELIVERED: 'ENTREGUE', ACEITO: 'ACEITE', ACCEPTED: 'ACEITE',
+  EM_PREPARAÇÃO: 'EM_PREPARACAO', PREPARING: 'EM_PREPARACAO', SHIPPED: 'EM_ENTREGA'
+};
+const normalizeStatus = (v) => {
+  if (typeof v !== 'string') return null;
+  const k = v.trim().toUpperCase().replace(/\s+/g, '_');
+  return STATUS_ALIASES[k] || k;
+};
+
 const updateStatus = async (req, res) => {
-  const { status, cancelReason } = req.body;
-  if (!status || !STATUS_FLOW.includes(status)) return badRequest(res, 'Estado inválido.');
+  const { cancelReason } = req.body || {};
+  const status = normalizeStatus(req.body && req.body.status);
+  if (!status || !STATUS_FLOW.includes(status)) {
+    // Regista o que chegou de facto — antes só se via "Estado inválido" sem saber porquê.
+    logger.warn(`[Orders.updateStatus] estado inválido recebido (order ${req.params.id}, user ${req.user && req.user.id}): ${JSON.stringify(req.body || {}).slice(0, 200)}`);
+    return badRequest(res, 'Estado inválido.');
+  }
 
   try {
     const order = await prisma.order.findUnique({ where: { id: req.params.id } });
@@ -319,6 +337,10 @@ const updateStatus = async (req, res) => {
     const isBuyer = order.buyerId === req.user.id;
 
     if (!isSeller && !isAdmin && !isBuyer) return forbidden(res);
+
+    // Já está no estado pedido (duplo clique em "Cancelar", ou repetição automática do pedido depois
+    // de uma ligação lenta): o resultado desejado já existe — responde com sucesso em vez de erro.
+    if (order.status === status) return ok(res, { order });
 
     // A partir daqui, TODOS os atores (incluindo admin) são validados pela
     // mesma máquina de estados — corrige o "admin bypass" que permitia

@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const { ok, created, notFound, badRequest, forbidden, serverError, validationError } = require('../utils/response');
 const { sanitize, paginate, paginateMeta } = require('../utils/helpers');
 const { validationResult } = require('express-validator');
@@ -95,219 +96,167 @@ const engagement = async (req, res) => {
 // 1). Com cursor, cada pedido só pergunta "o que é mais antigo do que
 // o último item que já vi" — inserções novas no topo não deslocam
 // nada que já foi mostrado.
-const encodeFeedCursor = (isoDate) => Buffer.from(JSON.stringify({ s: isoDate })).toString('base64');
+// ─── Feed "descoberta" (estilo Facebook) ─────────────────────────────
+// Cada pedido de página 1 gera uma SEMENTE nova: a ordem é uma mistura de novidade, afinidade, quem
+// segues e um toque de aleatoriedade (semente + utilizador) — por isso o feed de cada pessoa é
+// diferente do de outra e muda de cada vez que abres. O que já viste (o frontend manda `seen`, os
+// últimos 8 caracteres de cada id) fica para o fim da fila — "só novidades" primeiro; quando já viste
+// tudo o feed recicla em vez de ficar vazio. As tuas publicações novas (< 30 min) vão sempre para o topo.
+//
+// Paginação: o cursor leva { sd: semente, off: posição, t0: instante do pedido 1 }. A ordem é
+// determinística para uma mesma semente + t0 (só conta conteúdo criado até t0), por isso as páginas
+// seguintes continuam a mesma lista sem repetir nem saltar itens.
+//
+// Eficiência: a "piscina" é lida só com colunas leves (id, data, loja, vendedor); os registos completos
+// (imagens, loja com logótipo, sondagens…) só são lidos para os ~10 itens da página escolhida.
+const POOL = { products: 150, posts: 100, reels: 100 };
+const SEEN_PENALTY = 3;
+const OWN_BOOST_MS = 30 * 60 * 1000;
+const FRESH_HALF_H = 72;
+
+const hash01 = (str) => crypto.createHash('md5').update(str).digest().readUInt32BE(0) / 4294967296;
+const shortId = (id) => String(id).slice(-8);
+const encodeFeedCursor = (o) => Buffer.from(JSON.stringify(o)).toString('base64');
 const decodeFeedCursor = (raw) => {
   try {
-    const obj = JSON.parse(Buffer.from(String(raw), 'base64').toString('utf8'));
-    const d = new Date(obj?.s);
-    return isNaN(d.getTime()) ? null : d;
-  } catch { return null; }
+    const o = JSON.parse(Buffer.from(String(raw), 'base64').toString('utf8'));
+    if (o && typeof o.sd === 'string' && Number.isInteger(o.off) && o.off >= 0 && !isNaN(new Date(o.t0).getTime())) return o;
+  } catch { /* cursor antigo/inválido → trata como página 1 */ }
+  return null;
+};
+const parseSeen = (raw) => {
+  const out = new Set();
+  String(raw || '').split(',').slice(0, 600).forEach((x) => { const t = x.trim(); if (/^[A-Za-z0-9_-]{8}$/.test(t)) out.add(t); });
+  return out;
 };
 
 const list = async (req, res) => {
   try {
-    const { cursor: rawCursor, limit = 15 } = req.query;
+    const { cursor: rawCursor, limit = 15, scope = 'foryou' } = req.query;
     const take = Math.min(Math.max(parseInt(limit, 10) || 15, 1), 50);
-    const cursorDate = rawCursor ? decodeFeedCursor(rawCursor) : null;
-    // Sobrebusca: o filtro de bloqueio acontece depois de buscar, por
-    // isso pedimos uma margem a mais de cada fonte para não devolver
-    // menos itens do que o pedido só por causa de contas bloqueadas.
-    const FETCH = take + 20;
+    const cur = rawCursor ? decodeFeedCursor(rawCursor) : null;
+    const seed = cur ? cur.sd : crypto.randomBytes(4).toString('hex');
+    const offset = cur ? cur.off : 0;
+    const t0 = cur ? new Date(cur.t0) : new Date();
+    const userId = req.user?.id || null;
+    const seen = parseSeen(req.query.seen);
 
-    // Filtros de qualidade do feed: nunca mostrar conteúdo de contas SUSPENSAS (seller.active) nem de
-    // bazares inactivos, nem produtos bloqueados pela moderação. (Bloqueios entre utilizadores são
-    // aplicados mais abaixo; conteúdo apagado já não existe na BD.)
+    // Nunca mostrar conteúdo de contas SUSPENSAS, de bazares inactivos nem produtos bloqueados pela
+    // moderação. (Bloqueios entre utilizadores são aplicados mais abaixo.)
     const visibleOwner = { seller: { active: true }, bazar: { active: true } };
-    const productWhere = { active: true, moderationStatus: 'APPROVED', ...visibleOwner, featuredUntil: { gt: new Date() } };
-    if (cursorDate) productWhere.featuredUntil.lt = cursorDate;
-    const announcementWhere = { ...visibleOwner };
-    if (cursorDate) announcementWhere.createdAt = { lt: cursorDate };
-    const reelWhere = { ...visibleOwner };
-    if (cursorDate) reelWhere.createdAt = { lt: cursorDate };
 
-    // "Para si": produtos comuns (não têm de estar em destaque) das
-    // lojas com que já mostraste mais interesse — só entra no feed
-    // enquanto já houver algum histórico de afinidade; sem isso fica
-    // vazio e o feed continua só com destaques + posts + reels, como
-    // já era antes desta fase.
-    let forYouBazarIds = [];
-    if (req.user?.id) {
-      const topAffinity = await stage('afinidade-top', () => prisma.userAffinity.findMany({
-        where: { userId: req.user.id },
-        orderBy: { score: 'desc' },
-        take: 5,
-        select: { bazarId: true }
-      }), []);
-      forYouBazarIds = topAffinity.map(a => a.bazarId);
-    }
-    const forYouWhere = { active: true, moderationStatus: 'APPROVED', ...visibleOwner, bazarId: { in: forYouBazarIds } };
-    if (cursorDate) forYouWhere.createdAt = { lt: cursorDate };
+    // Lojas que segues (boost no ranking; filtro no separador "Seguindo").
+    const followedIds = userId
+      ? (await stage('seguidos', () => prisma.follow.findMany({ where: { userId }, select: { bazarId: true }, take: 500 }), [])).map((f) => f.bazarId)
+      : [];
+    const followedSet = new Set(followedIds);
+    const onlyFollowing = scope === 'following';
+    if (onlyFollowing && !followedIds.length) return ok(res, { items: [], meta: { hasMore: false, nextCursor: null } });
+    const base = { ...visibleOwner, createdAt: { lte: t0 }, ...(onlyFollowing && { bazarId: { in: followedIds } }) };
 
+    // Afinidade (0..1) por loja.
+    const affRows = userId
+      ? await stage('afinidade-top', () => prisma.userAffinity.findMany({ where: { userId }, orderBy: { score: 'desc' }, take: 40, select: { bazarId: true, score: true } }), [])
+      : [];
+    const maxAff = Math.max(1, ...affRows.map((r) => r.score));
+    const affMap = new Map(affRows.map((r) => [r.bazarId, r.score / maxAff]));
+
+    const light = { id: true, createdAt: true, bazarId: true, seller: { select: { id: true, isPremium: true } } };
     const sources = await Promise.allSettled([
-      prisma.product.findMany({
-        where: productWhere,
-        orderBy: { featuredUntil: 'desc' },
-        take: FETCH,
-        include: {
-          images: { orderBy: { order: 'asc' }, take: 1 },
-          bazar: { select: { id: true, name: true, slug: true } },
-          seller: { select: { id: true, name: true, avatarUrl: true, isPremium: true } }
-        }
-      }),
-      prisma.announcement.findMany({
-        where: announcementWhere,
-        orderBy: { createdAt: 'desc' },
-        take: FETCH,
-        include: {
-          images: { orderBy: { order: 'asc' } },
-          bazar: { select: { id: true, name: true, slug: true } },
-          seller: { select: { id: true, name: true, avatarUrl: true, isPremium: true } },
-          mentions: { select: { mentionedUserId: true, mentionedUser: { select: { username: true } } } },
-          product: { select: { id: true, name: true, slug: true, price: true } },
-          poll: true
-        }
-      }),
-      prisma.reel.findMany({
-        where: reelWhere,
-        orderBy: { createdAt: 'desc' },
-        take: FETCH,
-        include: {
-          images: { orderBy: { order: 'asc' } },
-          bazar: { select: { id: true, name: true, slug: true } },
-          seller: { select: { id: true, name: true, avatarUrl: true, isPremium: true } },
-          product: { select: { id: true, name: true, slug: true, price: true } }
-        }
-      }),
-      forYouBazarIds.length ? prisma.product.findMany({
-        where: forYouWhere,
-        orderBy: { createdAt: 'desc' },
-        take: FETCH,
-        include: {
-          images: { orderBy: { order: 'asc' }, take: 1 },
-          bazar: { select: { id: true, name: true, slug: true } },
-          seller: { select: { id: true, name: true, avatarUrl: true, isPremium: true } }
-        }
-      }) : Promise.resolve([])
+      prisma.product.findMany({ where: { active: true, moderationStatus: 'APPROVED', ...base }, orderBy: { createdAt: 'desc' }, take: POOL.products, select: { ...light, featuredUntil: true } }),
+      prisma.announcement.findMany({ where: base, orderBy: { createdAt: 'desc' }, take: POOL.posts, select: light }),
+      prisma.reel.findMany({ where: base, orderBy: { createdAt: 'desc' }, take: POOL.reels, select: light })
     ]);
-    const srcNames = ['produtos-destaque', 'posts', 'reels', 'para-si'];
+    const srcNames = ['produtos', 'posts', 'reels'];
     sources.forEach((r, k) => {
       if (r.status === 'rejected') logger.error(`[Feed.list] fonte "${srcNames[k]}" falhou (a continuar sem ela): ${r.reason && r.reason.code ? r.reason.code + ' · ' : ''}${r.reason && r.reason.message}`);
     });
     // Se TODAS as fontes falharam não há feed possível — aí sim é erro do servidor.
     if (sources.every((r) => r.status === 'rejected')) throw sources[0].reason;
-    const [featuredProducts, announcements, reels, forYouProducts] = sources.map((r) => (r.status === 'fulfilled' ? r.value : []));
+    const [pRows, aRows, rRows] = sources.map((r) => (r.status === 'fulfilled' ? r.value : []));
 
-    // Um produto em destaque também pode calhar de ser de uma loja com
-    // afinidade alta — não o mostra a dobrar.
-    const featuredIds = new Set(featuredProducts.map(p => p.id));
-    const forYouProductsDeduped = forYouProducts.filter(p => !featuredIds.has(p.id));
+    const now = Date.now();
+    let pool = [
+      ...pRows.map((r) => ({ type: 'PRODUCT', row: r, featured: !!r.featuredUntil && new Date(r.featuredUntil).getTime() > now })),
+      ...aRows.map((r) => ({ type: 'ANNOUNCEMENT', row: r })),
+      ...rRows.map((r) => ({ type: 'REEL', row: r }))
+    ];
 
-    // Se qualquer uma das fontes devolveu o máximo pedido, pode
-    // haver mais dessa fonte para além do que já buscámos — usado só
-    // para decidir "hasMore", não muda o que é mostrado agora.
-    const sourceMayHaveMore = featuredProducts.length === FETCH || announcements.length === FETCH || reels.length === FETCH || forYouProducts.length === FETCH;
-    // A data mais antiga vista nesta busca (mesmo que filtrada depois
-    // por bloqueio) — serve de cursor de recurso se o filtro de
-    // bloqueio esvaziar a página toda, para o scroll não ficar preso
-    // sem conseguir avançar para além de um trecho todo bloqueado.
-    const oldestSeen = [
-      ...featuredProducts.map(p => p.featuredUntil),
-      ...announcements.map(a => a.createdAt),
-      ...reels.map(r => r.createdAt),
-      ...forYouProductsDeduped.map(p => p.createdAt)
-    ].reduce((min, d) => (!min || d < min ? d : min), null);
-
-    let items = [
-      ...featuredProducts.map((p) => ({
-        targetType: 'PRODUCT', targetId: p.id, createdAt: p.featuredUntil,
-        product: p
-      })),
-      ...announcements.map((a) => ({
-        targetType: 'ANNOUNCEMENT', targetId: a.id, createdAt: a.createdAt,
-        announcement: a
-      })),
-      ...reels.map((r) => ({
-        targetType: 'REEL', targetId: r.id, createdAt: r.createdAt,
-        reel: r
-      })),
-      ...forYouProductsDeduped.map((p) => ({
-        targetType: 'PRODUCT', targetId: p.id, createdAt: p.createdAt,
-        product: p, forYou: true
-      }))
-    ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-
-    // Esconde conteúdo de quem bloqueaste (ou de quem te bloqueou) —
-    // um bloqueio esconde nos dois sentidos, ver blockService.
-    if (req.user?.id) {
-      const hiddenIds = await stage('bloqueios', () => blockSvc.getHiddenUserIds(req.user.id), () => new Set());
-      if (hiddenIds.size) {
-        items = items.filter(it => {
-          const sellerId = it.product?.seller?.id || it.announcement?.seller?.id || it.reel?.sellerId;
-          return !hiddenIds.has(sellerId);
-        });
-      }
+    // Esconde conteúdo de quem bloqueaste (ou de quem te bloqueou) — nos dois sentidos, ver blockService.
+    if (userId) {
+      const hiddenIds = await stage('bloqueios', () => blockSvc.getHiddenUserIds(userId), () => new Set());
+      if (hiddenIds.size) pool = pool.filter((c) => !hiddenIds.has(c.row.seller?.id));
     }
 
-    const hasMore = items.length > take || sourceMayHaveMore;
-    items = items.slice(0, take);
-    // Cursor para o próximo pedido: normalmente a data do último item
-    // mostrado; se o bloqueio filtrou tudo desta leva mas ainda há mais
-    // para trás, usa a data mais antiga vista (mesmo filtrada) para o
-    // próximo pedido continuar a avançar em vez de repetir a mesma leva.
-    const lastDate = items.length ? items[items.length - 1].createdAt : (hasMore ? oldestSeen : null);
-    const nextCursor = lastDate ? encodeFeedCursor(lastDate) : null;
+    const ranked = pool.map((c) => {
+      const { row } = c;
+      const created = new Date(row.createdAt).getTime();
+      const ageH = Math.max(0, (now - created) / 3.6e6);
+      let sc = 0.9 * hash01(`${seed}:${userId || 'anon'}:${row.id}`)   // aleatoriedade (muda por sessão e por utilizador)
+        + Math.exp(-ageH / FRESH_HALF_H)                               // novidade
+        + 0.8 * (affMap.get(row.bazarId) || 0);                        // afinidade
+      if (followedSet.has(row.bazarId)) sc += 0.35;
+      if (c.featured) sc += 0.3;
+      if (row.seller?.isPremium) sc += 0.1;
+      if (userId && row.seller?.id === userId && now - created < OWN_BOOST_MS) sc += 100; // a tua publicação nova: topo
+      if (seen.has(shortId(row.id))) sc -= SEEN_PENALTY;                 // já viste: fim da fila
+      return { ...c, sc, created };
+    }).sort((a, b) => (b.sc - a.sc) || (b.created - a.created));
 
-    // Feed inteligente: reordena SÓ dentro desta página já decidida
-    // (mesmos itens, cursor calculado acima já não muda) segundo a
-    // afinidade do utilizador com o bazar de cada item — quem
-    // reage/comenta/segue mais uma loja passa a vê-la mais cedo no
-    // feed, sem mexer em quais itens entram em cada página.
-    if (req.user?.id) {
-      const before = items;
-      items = await stage('afinidade-ordem', () => affinitySvc.applyAffinityOrder(
-        items, req.user.id, (it) => it.product?.bazarId || it.announcement?.bazarId || it.reel?.bazarId
-      ), () => before);
-    }
+    // Variedade: máx. 2 seguidos do mesmo tipo (só reordena, nunca remove).
+    const ordered = interleaveByType(ranked, { maxRun: 2, typeOf: (c) => c.type });
+    const pageSlice = ordered.slice(offset, offset + take);
+    const hasMore = offset + take < ordered.length;
+    const nextCursor = hasMore ? encodeFeedCursor({ sd: seed, off: offset + take, t0: t0.toISOString() }) : null;
 
-    // Variedade: nenhum tipo de conteúdo domina em sequência (máx. 2 seguidos do mesmo tipo,
-    // quando houver outros tipos disponíveis nesta página). Só reordena; não remove nada.
-    items = interleaveByType(items, { maxRun: 2 });
+    // Fase 2: registos completos só para a página escolhida.
+    const idsOf = (t) => pageSlice.filter((c) => c.type === t).map((c) => c.row.id);
+    const bazarSel = { select: { id: true, name: true, slug: true, logoUrl: true } };
+    const sellerSel = { select: { id: true, name: true, avatarUrl: true, isPremium: true } };
+    const pIds = idsOf('PRODUCT'), aIds = idsOf('ANNOUNCEMENT'), rIds = idsOf('REEL');
+    const full = await Promise.allSettled([
+      pIds.length ? prisma.product.findMany({ where: { id: { in: pIds } }, include: { images: { orderBy: { order: 'asc' }, take: 1 }, bazar: bazarSel, seller: sellerSel } }) : [],
+      aIds.length ? prisma.announcement.findMany({ where: { id: { in: aIds } }, include: { images: { orderBy: { order: 'asc' } }, bazar: bazarSel, seller: sellerSel, mentions: { select: { mentionedUserId: true, mentionedUser: { select: { username: true } } } }, product: { select: { id: true, name: true, slug: true, price: true } }, poll: true } }) : [],
+      rIds.length ? prisma.reel.findMany({ where: { id: { in: rIds } }, include: { images: { orderBy: { order: 'asc' } }, bazar: bazarSel, seller: sellerSel, product: { select: { id: true, name: true, slug: true, price: true } } } }) : []
+    ]);
+    full.forEach((r, k) => {
+      if (r.status === 'rejected') logger.error(`[Feed.list] detalhe "${srcNames[k]}" falhou (a continuar sem ele): ${r.reason && r.reason.code ? r.reason.code + ' · ' : ''}${r.reason && r.reason.message}`);
+    });
+    if (pageSlice.length && full.every((r) => r.status === 'rejected')) throw full[0].reason;
+    const [pFull, aFull, rFull] = full.map((r) => (r.status === 'fulfilled' ? r.value : []));
+    const pm = new Map(pFull.map((x) => [x.id, x])), am = new Map(aFull.map((x) => [x.id, x])), rm = new Map(rFull.map((x) => [x.id, x]));
+
+    let items = pageSlice.map((c) => {
+      const id = c.row.id;
+      if (c.type === 'PRODUCT') return pm.has(id) ? { targetType: 'PRODUCT', targetId: id, createdAt: pm.get(id).createdAt, product: pm.get(id) } : null;
+      if (c.type === 'ANNOUNCEMENT') return am.has(id) ? { targetType: 'ANNOUNCEMENT', targetId: id, createdAt: am.get(id).createdAt, announcement: am.get(id) } : null;
+      return rm.has(id) ? { targetType: 'REEL', targetId: id, createdAt: rm.get(id).createdAt, reel: rm.get(id) } : null;
+    }).filter(Boolean);
 
     {
       const before = items;
-      items = await stage('engagement', () => attachEngagement(items, req.user?.id),
+      items = await stage('engagement', () => attachEngagement(items, userId),
         () => before.map((it) => ({ ...it, likeCount: 0, dislikeCount: 0, shareCount: 0, commentCount: 0, myReaction: 0 })));
     }
 
-    // Sondagens vêm da query principal só com a linha do Poll em si
-    // (sem opções/contagens) — completa isso aqui, só para os itens
-    // que realmente têm uma (a maioria dos Posts não tem).
+    // Sondagens vêm da query principal só com a linha do Poll em si (sem opções/contagens) — completa
+    // isso aqui, só para os itens que realmente têm uma (a maioria dos Posts não tem).
     items = await Promise.all(items.map(async (it) => {
       if (it.announcement?.poll) {
-        const poll = await stage('sondagem', () => shapePoll(it.announcement.poll, req.user?.id), null);
+        const poll = await stage('sondagem', () => shapePoll(it.announcement.poll, userId), null);
         return { ...it, announcement: { ...it.announcement, poll } };
       }
       return it;
     }));
 
-    // Estado real do botão "Seguir" no cartão do feed — sem isto o
-    // frontend nunca sabia se já seguias a loja (feedFollowBtnHtml
-    // recebia sempre `following=false` fixo, mesmo já a seguires).
-    // attachFollowState (feedEngagementService) espera `it.bazar`
-    // directo, mas aqui o bazar vem dentro de it.product/it.announcement/it.reel
-    // — por isso aplica-se manualmente em vez de reutilizar essa função.
-    if (req.user?.id) {
-      const bazarIds = [...new Set(items.map(it => (it.product?.bazar || it.announcement?.bazar || it.reel?.bazar)?.id).filter(Boolean))];
-      if (bazarIds.length) {
-        const follows = await stage('seguir', () => prisma.follow.findMany({ where: { userId: req.user.id, bazarId: { in: bazarIds } }, select: { bazarId: true } }), []);
-        const followedSet = new Set(follows.map(f => f.bazarId));
-        items = items.map(it => {
-          const key = it.targetType === 'PRODUCT' ? 'product' : it.targetType === 'ANNOUNCEMENT' ? 'announcement' : 'reel';
-          const content = it[key];
-          if (!content?.bazar) return it;
-          return { ...it, [key]: { ...content, bazar: { ...content.bazar, isFollowing: followedSet.has(content.bazar.id) } } };
-        });
-      }
+    // Estado real do botão "Seguir" no cartão (já temos as lojas seguidas em memória).
+    if (userId) {
+      items = items.map((it) => {
+        const key = it.targetType === 'PRODUCT' ? 'product' : it.targetType === 'ANNOUNCEMENT' ? 'announcement' : 'reel';
+        const content = it[key];
+        if (!content?.bazar) return it;
+        return { ...it, [key]: { ...content, bazar: { ...content.bazar, isFollowing: followedSet.has(content.bazar.id) } } };
+      });
     }
 
     return ok(res, { items, meta: { hasMore, nextCursor } });
