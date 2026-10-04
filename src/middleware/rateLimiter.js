@@ -124,6 +124,28 @@ const adminActionLimiter = rateLimit({
   handler: makeHandler('Demasiadas acções administrativas. Aguarde um momento.')
 });
 
+// ─── Wallet: operações que movem dinheiro (por utilizador) ──────────
+// Depósito, levantamento, transferência e pagamento de pedidos. Baixo de propósito:
+// ninguém faz mais de ~10 movimentos de dinheiro por minuto à mão.
+const walletMoneyLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: parseInt(process.env.WALLET_MONEY_RATE_LIMIT_MAX) || 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: keyByUserOrIp,
+  handler: makeHandler('Demasiadas operações seguidas na wallet. Aguarde um momento.')
+});
+
+// ─── Wallet: procura de destinatários (anti-enumeração de contas) ───
+const walletLookupLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: parseInt(process.env.WALLET_LOOKUP_RATE_LIMIT_MAX) || 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: keyByUserOrIp,
+  handler: makeHandler('Demasiadas pesquisas de destinatário. Tente mais tarde.')
+});
+
 // ─── Interacções sem autenticação que alteram contadores ────────────
 // (visualizações de produto, cliques de WhatsApp) — impede inflar métricas em ciclo.
 const publicTrackLimiter = rateLimit({
@@ -136,5 +158,6 @@ const publicTrackLimiter = rateLimit({
 
 module.exports = {
   apiLimiter, authLimiter, uploadLimiter, emailLimiter, orderLimiter, aiLimiter,
-  codeAttemptLimiter, emailTargetLimiter, webhookLimiter, adminActionLimiter, publicTrackLimiter
+  codeAttemptLimiter, emailTargetLimiter, webhookLimiter, adminActionLimiter, publicTrackLimiter,
+  walletMoneyLimiter, walletLookupLimiter
 };
