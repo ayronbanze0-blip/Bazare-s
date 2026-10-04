@@ -12,6 +12,7 @@ const premiumService = require('../services/premiumService');
 const webhookEvents = require('../services/webhookEventService');
 const ledgerService = require('../services/ledgerService');
 const latePayment = require('../services/latePayment');
+const walletFlow = require('../services/walletFlowService');
 
 const prisma = require('../config/database');
 
@@ -35,8 +36,8 @@ class CommissionClaimError extends Error {
 // ─── ME: My wallet balance + recent statement ─────────────────────
 const myWallet = async (req, res) => {
   try {
-    const { page = 1, limit = 30 } = req.query;
-    const statement = await walletService.getStatement(prisma, req.user.id, { page, limit });
+    const { page = 1, limit = 30, type, status, direction, from, to, q } = req.query;
+    const statement = await walletFlow.getStatementFiltered(req.user.id, { page, limit, type, status, direction, from, to, q });
     return ok(res, statement);
   } catch (err) {
     logger.error(`[Wallet.myWallet] ${err.message}`);
@@ -432,6 +433,14 @@ const zumboPayWebhook = async (req, res) => {
     // por isso só procuramos em PremiumSubscription quando não há
     // CommissionPayment correspondente.
     if (!payment) {
+      // Depósitos na wallet (sourceId "deposit-<id>"): a mesma referência nunca pertence também a
+      // comissão/premium, por isso tratamos aqui e terminamos.
+      const deposit = await prisma.depositRequest.findFirst({ where: { reference, msisdn: { not: null } } });
+      if (deposit) {
+        await walletFlow.handleDepositWebhook(deposit, type, event);
+        return res.status(200).json({ received: true });
+      }
+
       const subscription = await prisma.premiumSubscription.findFirst({ where: { gatewayReference: reference } });
 
       if (subscription && type === 'payment.succeeded' && subscription.status === 'PROCESSANDO') {
