@@ -129,6 +129,8 @@ model User {
   withdrawalRequests  WithdrawalRequest[]
   commissionPayments  CommissionPayment[]   @relation("SellerCommissionPayments")
   reviewedDeposits    DepositRequest[]      @relation("DepositReviewedBy")
+  moneyRequestsSent     MoneyRequest[]      @relation("MoneyRequestRequester")
+  moneyRequestsReceived MoneyRequest[]      @relation("MoneyRequestPayer")
   reviewedWithdrawals WithdrawalRequest[]   @relation("WithdrawalReviewedBy")
 
   // Premium
@@ -1221,6 +1223,11 @@ model Wallet {
   userId    String   @unique
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   balance   Float    @default(0)
+  // PIN da wallet (4-6 dígitos, bcrypt) — exigido para levantar, transferir e pagar pedidos de dinheiro.
+  pinHash           String?
+  pinSetAt          DateTime?
+  pinFailedAttempts Int       @default(0)
+  pinLockedUntil    DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1255,6 +1262,7 @@ enum WalletTxType {
   DEBITO_COMISSAO
   CREDITO_COMISSAO
   AJUSTE_ADMIN
+  ESTORNO            // devolução de um levantamento rejeitado/cancelado (crédito)
 }
 
 enum WalletTxStatus {
@@ -1286,8 +1294,10 @@ model DepositRequest {
   reviewedBy   User?         @relation("DepositReviewedBy", fields: [reviewedById], references: [id])
   reviewedAt  DateTime?
   rejectReason String?
+  idempotencyKey String?
   createdAt   DateTime       @default(now())
 
+  @@unique([userId, idempotencyKey])
   @@index([userId])
   @@index([status])
   @@index([reference])
@@ -1318,17 +1328,48 @@ model WithdrawalRequest {
   reviewedAt   DateTime?
   rejectReason String?
   notes        String?
+  idempotencyKey String?
   createdAt    DateTime          @default(now())
 
+  @@unique([userId, idempotencyKey])
   @@index([userId])
   @@index([status])
   @@index([reviewedById])
+}
+
+// ─────────────────────────────────────────────
+// MONEY REQUESTS — "pedir dinheiro" entre utilizadores
+// ─────────────────────────────────────────────
+model MoneyRequest {
+  id          String             @id @default(uuid())
+  requesterId String
+  requester   User               @relation("MoneyRequestRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  payerId     String
+  payer       User               @relation("MoneyRequestPayer", fields: [payerId], references: [id], onDelete: Cascade)
+  amount      Float
+  note        String?
+  status      MoneyRequestStatus @default(PENDENTE)
+  respondedAt DateTime?
+  expiresAt   DateTime
+  createdAt   DateTime           @default(now())
+
+  @@index([requesterId, status])
+  @@index([payerId, status])
+}
+
+enum MoneyRequestStatus {
+  PENDENTE
+  PAGO
+  RECUSADO
+  CANCELADO
+  EXPIRADO
 }
 
 enum WithdrawalStatus {
   PENDENTE
   PAGO
   REJEITADO
+  CANCELADO
 }
 
 // ─────────────────────────────────────────────
