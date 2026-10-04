@@ -7,12 +7,12 @@
  * (`WalletTransaction`). `reconcile` verifica isso; `expectedBalance` é lógica pura (testável).
  *
  * Direcção de cada tipo (o `amount` é sempre positivo no ledger):
- *   crédito:  CREDITO_DEPOSITO, TRANSFERENCIA_RECEBIDA, CREDITO_COMISSAO
+ *   crédito:  CREDITO_DEPOSITO, TRANSFERENCIA_RECEBIDA, CREDITO_COMISSAO, ESTORNO
  *   débito:   DEBITO_LEVANTAMENTO, TRANSFERENCIA_ENVIADA, DEBITO_COMISSAO
  *   ajuste:   AJUSTE_ADMIN — direcção em referenceType: ADJUSTMENT_CREDIT | ADJUSTMENT_DEBIT
  */
 
-const CREDIT_TYPES = new Set(['CREDITO_DEPOSITO', 'TRANSFERENCIA_RECEBIDA', 'CREDITO_COMISSAO']);
+const CREDIT_TYPES = new Set(['CREDITO_DEPOSITO', 'TRANSFERENCIA_RECEBIDA', 'CREDITO_COMISSAO', 'ESTORNO']);
 const DEBIT_TYPES = new Set(['DEBITO_LEVANTAMENTO', 'TRANSFERENCIA_ENVIADA', 'DEBITO_COMISSAO']);
 const TOLERANCE = 0.01; // 1 cêntimo (o saldo é Float)
 
