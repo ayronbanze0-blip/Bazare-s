@@ -57,11 +57,15 @@ const genCode = () => crypto.randomInt(100000, 1000000).toString();
  * a partir de um dump da BD, porque quem só tem a BD não tem o secret
  * usado na chave HMAC. Nunca guardar o código em texto puro.
  */
-const hashCode = (code) =>
-  crypto
-    .createHmac('sha256', process.env.JWT_ACCESS_SECRET || 'bazares-fallback-hmac-secret')
+const hashCode = (code) => {
+  // Sem secret de reserva no código-fonte: com um valor fixo e público, quem tivesse um dump
+  // da BD calcularia o HMAC dos 1.000.000 códigos possíveis. O secret é obrigatório no arranque.
+  if (!process.env.JWT_ACCESS_SECRET) throw new Error('JWT_ACCESS_SECRET não definido.');
+  return crypto
+    .createHmac('sha256', process.env.JWT_ACCESS_SECRET)
     .update(String(code))
     .digest('hex');
+};
 
 /**
  * Compara um código recebido do utilizador com o hash guardado, em tempo
