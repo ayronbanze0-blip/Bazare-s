@@ -27,7 +27,7 @@ const signAccess = (user) =>
   jwt.sign(
     { id: user.id, email: user.email, role: user.role, name: user.name },
     process.env.JWT_ACCESS_SECRET,
-    { expiresIn: process.env.JWT_ACCESS_EXPIRES || '15m' }
+    { expiresIn: process.env.JWT_ACCESS_EXPIRES || '15m', algorithm: 'HS256' }
   );
 
 const signRefresh = () => genToken(48);
@@ -334,7 +334,7 @@ const googleLogin = async (req, res) => {
     if (!payload?.sub) return unauthorized(res, 'Token do Google inválido.');
     // Só se confia no email do Google se o próprio Google o marcou como verificado —
     // caso contrário alguém podia associar-se à conta de outra pessoa pelo email.
-    if (payload.email && payload.email_verified === false) {
+    if (payload.email && payload.email_verified !== true && payload.email_verified !== 'true') {
       return unauthorized(res, 'O email da conta Google não está verificado.');
     }
 
@@ -360,15 +360,27 @@ const googleLogin = async (req, res) => {
 // Recebe o accessToken devolvido pelo Facebook SDK (FB.login) e valida-o
 // junto da Graph API, com appsecret_proof para reforçar a segurança.
 const facebookLogin = async (req, res) => {
-  if (!process.env.FACEBOOK_APP_SECRET) return serverError(res, 'Login com Facebook ainda não configurado no servidor.');
+  // FACEBOOK_APP_ID é obrigatório: sem ele não há como confirmar que o token foi emitido para a
+  // NOSSA app — um token válido de OUTRA app (de um site malicioso onde a vítima fez login com
+  // Facebook) seria aceite aqui e daria acesso à conta da vítima.
+  if (!process.env.FACEBOOK_APP_SECRET || !process.env.FACEBOOK_APP_ID) return serverError(res, 'Login com Facebook ainda não configurado no servidor.');
 
   const { accessToken: fbToken } = req.body;
   if (!fbToken) return badRequest(res, 'Token do Facebook em falta.');
 
   try {
+    const dbgRes = await fetch(
+      `https://graph.facebook.com/debug_token?input_token=${encodeURIComponent(fbToken)}&access_token=${encodeURIComponent(`${process.env.FACEBOOK_APP_ID}|${process.env.FACEBOOK_APP_SECRET}`)}`,
+      { signal: AbortSignal.timeout(8000) }
+    );
+    const dbg = (await dbgRes.json())?.data;
+    if (!dbg?.is_valid || String(dbg.app_id) !== String(process.env.FACEBOOK_APP_ID)) {
+      return unauthorized(res, 'Token do Facebook inválido.');
+    }
+
     const proof = crypto.createHmac('sha256', process.env.FACEBOOK_APP_SECRET).update(fbToken).digest('hex');
     const url = `https://graph.facebook.com/me?fields=id,name,email,picture.type(large)&access_token=${encodeURIComponent(fbToken)}&appsecret_proof=${proof}`;
-    const fbRes = await fetch(url);
+    const fbRes = await fetch(url, { signal: AbortSignal.timeout(8000) });
     const fbData = await fbRes.json();
     if (!fbData?.id) return unauthorized(res, 'Token do Facebook inválido.');
 
@@ -399,7 +411,7 @@ const facebookLogin = async (req, res) => {
 let appleJwks = null;
 const getApplePublicKey = async (kid) => {
   if (!appleJwks) {
-    const res = await fetch('https://appleid.apple.com/auth/keys');
+    const res = await fetch('https://appleid.apple.com/auth/keys', { signal: AbortSignal.timeout(8000) });
     appleJwks = (await res.json()).keys;
   }
   const key = appleJwks.find((k) => k.kid === kid);
@@ -424,13 +436,15 @@ const appleLogin = async (req, res) => {
       issuer: 'https://appleid.apple.com'
     });
     if (!payload?.sub) return unauthorized(res, 'Token da Apple inválido.');
+    // Só se associa por email se a Apple o marcou como verificado (evita tomar contas por email).
+    const appleEmailOk = payload.email && (payload.email_verified === true || payload.email_verified === 'true');
 
     // A Apple só envia o nome uma vez, no primeiro login (o frontend
     // reenvia-o em `name`); nos logins seguintes só vem o `sub` e o email.
     const user = await findOrCreateSocialUser({
       provider: 'apple',
       providerId: payload.sub,
-      email: payload.email,
+      email: appleEmailOk ? payload.email : undefined,
       name: appleName
     });
     if (!user.active) return unauthorized(res, 'Conta suspensa. Contacte o suporte em bazares09@gmail.com');

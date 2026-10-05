@@ -119,8 +119,10 @@ const subscribe = async (req, res) => {
 // ─── ME: Resgatar código Premium gerado pelo admin ──────────────────
 const redeemCode = async (req, res) => {
   try {
+    if (req.body.code !== undefined && typeof req.body.code !== 'string') return badRequest(res, 'Código inválido.');
     const raw = (req.body.code || '').trim().toUpperCase();
     if (!raw) return badRequest(res, 'Indique o código Premium.');
+    if (raw.length > 64) return badRequest(res, 'Código inválido.');
 
     const record = await prisma.premiumCode.findUnique({ where: { code: raw } });
     if (!record) return notFound(res, 'Código inválido. Verifique se copiou correctamente.');
@@ -269,7 +271,7 @@ const analytics = async (req, res) => {
 const enhancePhoto = async (req, res) => {
   try {
     const { imageUrl, imageId } = req.body;
-    if (!imageUrl) return badRequest(res, 'Indique o URL da imagem a melhorar.');
+    if (!imageUrl || typeof imageUrl !== 'string' || imageUrl.length > 500) return badRequest(res, 'Indique o URL da imagem a melhorar.');
 
     let user = await prisma.user.findUnique({ where: { id: req.user.id } });
     user = await premiumService.downgradeIfExpired(prisma, user);

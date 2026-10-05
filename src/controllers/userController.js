@@ -281,6 +281,19 @@ const deleteAccount = async (req, res) => {
     if (!user) return notFound(res, 'Utilizador não encontrado.');
     if (user.role === 'ADMIN') return badRequest(res, 'Contas de administrador não podem ser eliminadas por aqui.');
 
+    // Acção irreversível: um access token roubado (válido ~15 min) não deve bastar para apagar a
+    // conta. Contas com palavra-passe têm de a confirmar; contas só de login social não têm
+    // palavra-passe, por isso mantêm o comportamento anterior.
+    if (user.passwordHash) {
+      const confirmPw = req.body && req.body.password;
+      if (typeof confirmPw !== 'string' || !confirmPw) {
+        return res.status(400).json({ success: false, code: 'PASSWORD_REQUIRED', message: 'Confirme a sua palavra-passe para eliminar a conta.' });
+      }
+      if (!(await bcrypt.compare(confirmPw, user.passwordHash))) {
+        return badRequest(res, 'Palavra-passe incorrecta.');
+      }
+    }
+
     // Lógica de limpeza partilhada com o admin (adminController.deleteUser)
     // — ver accountDeletionService para o porquê.
     await prisma.$transaction((tx) => deleteUserData(tx, userId));

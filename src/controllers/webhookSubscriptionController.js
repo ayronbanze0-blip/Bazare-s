@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const { ok, created, badRequest, notFound, validationError, serverError } = require('../utils/response');
 const prisma = require('../config/database');
 const logger = require('../utils/logger');
+const { isPublicHttpsUrl } = require('../utils/safeUrl');
 
 const VALID_EVENTS = ['ORDER_STATUS_CHANGED', 'COMMISSION_PAID', 'PREMIUM_ACTIVATED'];
 
@@ -28,8 +29,8 @@ const create = async (req, res) => {
   try {
     const { url, events } = req.body || {};
 
-    if (!url || !/^https:\/\/.+/.test(url)) {
-      return validationError(res, { url: 'URL inválido — tem de começar por https://' });
+    if (!isPublicHttpsUrl(url)) {
+      return validationError(res, { url: 'URL inválido — tem de ser https://, de um domínio público (sem IP, localhost, credenciais ou porta).' });
     }
     if (!Array.isArray(events) || events.length === 0 || events.some((e) => !VALID_EVENTS.includes(e))) {
       return validationError(res, { events: `Eventos válidos: ${VALID_EVENTS.join(', ')}` });

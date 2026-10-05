@@ -1,5 +1,7 @@
 'use strict';
 
+const { isPublicHttpsUrl } = require('../utils/safeUrl');
+
 const { validationResult } = require('express-validator');
 
 const { ok, created, badRequest, forbidden, notFound, serverError, validationError } = require('../utils/response');
@@ -275,7 +277,8 @@ const create = async (req, res) => {
     if (req.body.imageUrls) {
       const urls = Array.isArray(req.body.imageUrls) ? req.body.imageUrls : [req.body.imageUrls];
       // Só strings https/http com tamanho razoável (antes: qualquer valor → TypeError com objectos).
-      const validUrls = urls.filter(u => typeof u === 'string' && /^https?:\/\//i.test(u) && u.length <= 500).slice(0, 20);
+      // Só https para domínios públicos (antes aceitava http:// — conteúdo misto e URLs para IPs internos).
+      const validUrls = urls.filter(u => isPublicHttpsUrl(u)).slice(0, 20);
       if (validUrls.length > 0) {
         await prisma.productImage.createMany({
           data: validUrls.map((url, i) => ({ productId: product.id, url, order: i }))

@@ -220,6 +220,8 @@ const sendMessage = async (req, res) => {
     const { text, clientMessageId } = req.body;
     const hasImage = !!(req.file);
 
+    if (text !== undefined && text !== null && typeof text !== 'string') return badRequest(res, 'Mensagem inválida.');
+    if (typeof text === 'string' && text.length > 4000) return badRequest(res, 'Mensagem demasiado longa (máx. 4000 caracteres).');
     if ((!text || !text.trim()) && !hasImage) return badRequest(res, 'Mensagem vazia.');
 
     const chat = await prisma.chat.findUnique({ where: { id: chatId } });
