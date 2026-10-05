@@ -23,6 +23,7 @@ const notifSvc = require('./notificationService');
 const blockService = require('./blockService');
 const ledger = require('./ledgerService');
 const rules = require('./walletRules');
+const { classifyGatewayError } = require('./gatewayErrors');
 
 const STK_INFLIGHT_EXPIRY_MS = (parseInt(process.env.STK_INFLIGHT_EXPIRY_MIN) || 6) * 60 * 1000;
 const MAX_PENDING_MANUAL_DEPOSITS = 5;
@@ -368,12 +369,12 @@ const createStkDeposit = async (user, { amount, msisdn, idempotencyKey }) => {
       where: { id: deposit.id },
       data: { reference: charge.reference || null, status: declined ? 'FALHADA' : 'PROCESSANDO', rejectReason: charge.failReason || null }
     });
-    if (declined) throw new WalletFlowError(charge.failReason || 'Pagamento recusado pelo operador.');
+    if (declined) throw new WalletFlowError(charge.failReason || 'Pagamento recusado pelo operador.', 400, charge.failCode || 'GATEWAY_DECLINED', { retryable: charge.retryable !== false, fallback: 'MANUAL_DEPOSIT' });
     return { deposit: publicDeposit(deposit), duplicate: false };
   } catch (err) {
     if (err instanceof WalletFlowError) throw err;
     await prisma.depositRequest.updateMany({ where: { id: deposit.id, status: 'PROCESSANDO' }, data: { status: 'FALHADA', rejectReason: err.message } });
-    throw new WalletFlowError(err.message || 'Não foi possível iniciar o carregamento. Tenta de novo.');
+    throw new WalletFlowError(err.message || 'Não foi possível iniciar o carregamento. Tenta de novo.', 400, err.gatewayCode || 'BAD_REQUEST');
   }
 };
 
@@ -450,14 +451,19 @@ const handleDepositWebhook = async (deposit, type, event) => {
     return r.credited;
   }
   if (type === 'payment.failed' && deposit.status === 'PROCESSANDO') {
+    const cls = classifyGatewayError(event?.data?.message || 'Pagamento falhou.');
     const r = await prisma.depositRequest.updateMany({
       where: { id: deposit.id, status: 'PROCESSANDO' },
-      data: { status: 'FALHADA', rejectReason: event?.data?.message || 'Pagamento falhou.' }
+      data: { status: 'FALHADA', rejectReason: cls.message }
     });
     if (r.count) {
+      logger.warn(`[wallet] depósito ${deposit.id} falhou (${cls.code}): ${cls.raw}`);
       notifSvc.push(deposit.userId, {
         type: 'ERROR', title: 'Carregamento falhou',
-        message: `O carregamento de ${fmt(deposit.amount)} MT não foi concluído. Tenta de novo.`, link: '/wallet'
+        message: cls.code === 'RESTRICTED_ACCOUNT'
+          ? `O carregamento de ${fmt(deposit.amount)} MT foi recusado: a conta móvel deste número tem uma restrição da operadora. Usa outro número ou o depósito com comprovativo.`
+          : `O carregamento de ${fmt(deposit.amount)} MT não foi concluído. ${cls.message}`,
+        link: '/wallet'
       });
     }
   }

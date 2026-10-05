@@ -25,6 +25,7 @@
 const crypto = require('crypto');
 const logger = require('../utils/logger');
 const { redact } = require('../utils/redact');
+const { classifyGatewayError } = require('./gatewayErrors');
 
 const BASE_URL = process.env.ZUMBOPAY_BASE_URL || 'https://zumbopay.com/api/public/v1';
 const API_KEY = process.env.ZUMBOPAY_API_KEY;
@@ -186,11 +187,16 @@ const initiateCharge = async ({ amount, msisdn, customerName, sourceId }) => {
     };
   }
   if (httpStatus === 402) {
+    // Mensagem crua da operadora (inglês) → português + código estável. A crua só vai para o log.
+    const cls = classifyGatewayError(data?.error?.message || 'Pagamento recusado.');
+    logger.warn(`[ZumboPay] charge recusada (${cls.code}): ${cls.raw}`);
     return {
       status: 'declined',
       reference: null,
       channel: method.toLowerCase(),
-      failReason: data?.error?.message || 'Pagamento recusado.',
+      failReason: cls.message,
+      failCode: cls.code,
+      retryable: cls.retryable,
       raw: data
     };
   }
@@ -200,7 +206,10 @@ const initiateCharge = async ({ amount, msisdn, customerName, sourceId }) => {
   logger.error(`[ZumboPay] charge failed: HTTP ${httpStatus} — ${message}`);
   logger.error(`[ZumboPay] resposta completa: ${JSON.stringify(redact(data))}`);
   logger.error(`[ZumboPay] payload enviado: ${JSON.stringify({ ...body, msisdn: '***' })}`);
-  throw new Error(message);
+  const cls = classifyGatewayError(message);
+  const err = new Error(cls.known ? cls.message : message);
+  err.gatewayCode = cls.code;
+  throw err;
 };
 
 /**
