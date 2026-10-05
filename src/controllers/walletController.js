@@ -8,6 +8,7 @@ const audit = require('../services/auditService');
 const Sentry = require('../config/sentry');
 const walletService = require('../services/walletService');
 const zumboPay = require('../services/zumboPayService');
+const { friendlyGatewayMessage } = require('../services/gatewayErrors');
 const premiumService = require('../services/premiumService');
 const webhookEvents = require('../services/webhookEventService');
 const ledgerService = require('../services/ledgerService');
@@ -442,6 +443,11 @@ const zumboPayWebhook = async (req, res) => {
       }
 
       const subscription = await prisma.premiumSubscription.findFirst({ where: { gatewayReference: reference } });
+      if (!subscription) {
+        // Webhook válido (assinatura OK) mas sem pagamento correspondente: ou chegou antes de a referência
+        // ser gravada, ou pertence a outra base de dados (ex.: webhook ainda apontado ao backend antigo).
+        logger.warn(`[ZumboPay Webhook] ${type} com referência desconhecida (${reference}) — nenhum depósito/comissão/Premium corresponde.`);
+      }
 
       if (subscription && type === 'payment.succeeded' && subscription.status === 'PROCESSANDO') {
         // O "claim" (status PAGA) e a activação Premium têm de acontecer na
@@ -484,7 +490,7 @@ const zumboPayWebhook = async (req, res) => {
       if (subscription && type === 'payment.failed' && subscription.status === 'PROCESSANDO') {
         await prisma.premiumSubscription.update({
           where: { id: subscription.id },
-          data: { status: 'FALHADA', failReason: event?.data?.message || 'Pagamento falhou.' }
+          data: { status: 'FALHADA', failReason: friendlyGatewayMessage(event?.data?.message || 'Pagamento falhou.') }
         });
         notifSvc.push(subscription.userId, {
           type: 'ERROR', title: 'Pagamento Premium falhou',
@@ -584,7 +590,7 @@ const zumboPayWebhook = async (req, res) => {
     if (payment && type === 'payment.failed' && payment.status === 'PROCESSANDO') {
       await prisma.commissionPayment.update({
         where: { id: payment.id },
-        data: { status: 'FALHADA', failReason: event?.data?.message || 'Pagamento falhou.' }
+        data: { status: 'FALHADA', failReason: friendlyGatewayMessage(event?.data?.message || 'Pagamento falhou.') }
       });
       notifSvc.push(payment.sellerId, {
         type: 'ERROR', title: 'Pagamento falhou',
