@@ -10,7 +10,7 @@
  *      ZUMBOPAY_WEBHOOK_SECRET (sem ele NENHUM webhook de pagamento é aceite),
  *      JWT secrets com >= 32 caracteres e diferentes entre si.
  *  - Só AVISO (funcionalidade degradada, mas o marketplace continua a funcionar):
- *      Cloudinary, SMTP, ZumboPay (chaves da API), Firebase.
+ *      Cloudinary, email (Resend), ZumboPay (chaves da API), Firebase.
  *
  * Sem dependências externas — testável com `node` puro (tests/unit/env.test.js).
  */
@@ -19,7 +19,7 @@ const ALWAYS_REQUIRED = ['DATABASE_URL', 'JWT_ACCESS_SECRET', 'JWT_REFRESH_SECRE
 const PRODUCTION_REQUIRED = ['FRONTEND_URL', 'ZUMBOPAY_WEBHOOK_SECRET'];
 const RECOMMENDED = {
   cloudinary: ['CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET'],
-  email: ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASS'],
+  email: ['RESEND_API_KEY'],
   zumbopay: ['ZUMBOPAY_API_KEY', 'ZUMBOPAY_MERCHANT_ID']
 };
 
