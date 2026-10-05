@@ -1,28 +1,21 @@
-const nodemailer = require('nodemailer');
+'use strict';
+// Teste rápido do envio de email (Resend).
+// Uso:  RESEND_API_KEY=re_xxx node test-email.js o-teu-email@exemplo.com
+// Sem domínio verificado, o destinatário TEM de ser o email da conta Resend.
+require('dotenv').config();
+const { sendEmail } = require('./src/services/emailService');
 
-const test = async () => {
-  const transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 465,
-    secure: true,
-    auth: {
-      user: 'seu-email@gmail.com', // coloque o seu email
-      pass: 'senha-de-16-caracteres' // coloque a App Password
-    }
-  });
-
-  try {
-    console.log("A tentar enviar...");
-    await transporter.sendMail({
-      from: '"Teste" <seu-email@gmail.com>',
-      to: 'seu-email@gmail.com',
-      subject: 'Teste de Conexão',
-      text: 'Se recebeu isto, a conexão funciona!'
-    });
-    console.log("Sucesso!");
-  } catch (err) {
-    console.error("Erro:", err.message);
+(async () => {
+  const to = process.argv[2] || process.env.TEST_EMAIL_TO;
+  if (!to) {
+    console.error('Indique o destinatário: node test-email.js email@exemplo.com');
+    process.exit(1);
   }
-};
-
-test();
+  const r = await sendEmail({
+    to,
+    subject: 'Teste de envio — Bazares',
+    html: '<p>Se recebeu isto, o envio de email do Bazares está a funcionar.</p>'
+  });
+  console.log(r.ok ? `Enviado. ID: ${r.messageId}` : `Falhou: ${r.error}`);
+  process.exit(r.ok ? 0 : 1);
+})();
