@@ -29,7 +29,12 @@ RUN if [ -f package-lock.json ]; then \
 
 # 2) Código da aplicação
 COPY . .
-RUN chmod +x scripts/docker-entrypoint.sh && mkdir -p uploads/temp
+RUN chmod +x scripts/docker-entrypoint.sh && mkdir -p uploads/temp logs \
+ && chown -R node:node uploads logs
+
+# Não correr como root: se uma falha (ex.: upload/ffmpeg) permitir execução de código, o atacante
+# fica sem privilégios dentro do contentor. Só uploads/ e logs/ precisam de escrita.
+USER node
 
 ENV NODE_ENV=production
 EXPOSE 3001
