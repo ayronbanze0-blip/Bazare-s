@@ -156,7 +156,52 @@ const publicTrackLimiter = rateLimit({
   handler: (req, res) => res.status(204).end() // fire-and-forget: o frontend não precisa de erro
 });
 
+// ─── Acções sensíveis da conta (mudar password, apagar conta) ───────
+// Depois de `authenticate`, conta por utilizador. Sem isto, quem tivesse um access token roubado
+// (15 min de validade) podia tentar adivinhar a password actual em ciclo.
+const accountSecurityLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: parseInt(process.env.ACCOUNT_SECURITY_RATE_LIMIT_MAX) || 8,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: keyByUserOrIp,
+  handler: makeHandler('Demasiadas tentativas. Aguarde 15 minutos.')
+});
+
+// ─── Resgate de códigos Premium (por utilizador) ────────────────────
+// Impede adivinhar códigos em ciclo: só as tentativas FALHADAS contam.
+const redeemLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  keyGenerator: keyByUserOrIp,
+  handler: makeHandler('Demasiadas tentativas de código. Tente novamente dentro de 1 hora.')
+});
+
+// ─── Escritas sociais (denúncias, avaliações, bloqueios, gostos) ────
+const socialWriteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: keyByUserOrIp,
+  handler: makeHandler('Está a fazer isto demasiado depressa. Aguarde um momento.')
+});
+
+// ─── Envio de mensagens por REST (por utilizador) ───────────────────
+const chatSendLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: keyByUserOrIp,
+  handler: makeHandler('Está a enviar mensagens depressa demais. Aguarde um momento.')
+});
+
 module.exports = {
+  accountSecurityLimiter, redeemLimiter, socialWriteLimiter, chatSendLimiter,
   apiLimiter, authLimiter, uploadLimiter, emailLimiter, orderLimiter, aiLimiter,
   codeAttemptLimiter, emailTargetLimiter, webhookLimiter, adminActionLimiter, publicTrackLimiter,
   walletMoneyLimiter, walletLookupLimiter

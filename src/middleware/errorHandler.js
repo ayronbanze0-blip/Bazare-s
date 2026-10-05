@@ -107,9 +107,10 @@ const errorHandler = (err, req, res, next) => {
   });
 
   // Em produção NUNCA se devolve err.message (pode conter SQL, caminhos, nomes de colunas…).
-  const msg = process.env.NODE_ENV === 'production'
-    ? 'Erro interno do servidor.'
-    : err.message;
+  // (fail-safe: se NODE_ENV faltar ou vier errado, também NÃO expõe a mensagem)
+  const msg = ['development', 'test'].includes(process.env.NODE_ENV)
+    ? err.message
+    : 'Erro interno do servidor.';
   return send(500, 'INTERNAL_ERROR', msg);
 };
 

@@ -27,7 +27,7 @@ const authenticate = async (req, res, next) => {
     const token = authHeader.split(' ')[1];
     let decoded;
     try {
-      decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
+      decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET, { algorithms: ['HS256'] });
     } catch (err) {
       if (err.name === 'TokenExpiredError') return unauthorized(res, 'Sessão expirada. Faça login novamente.');
       return unauthorized(res, 'Token inválido.');
@@ -82,7 +82,7 @@ const optionalAuth = (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) { req.user = null; return next(); }
   try {
-    req.user = jwt.verify(authHeader.split(' ')[1], process.env.JWT_ACCESS_SECRET);
+    req.user = jwt.verify(authHeader.split(' ')[1], process.env.JWT_ACCESS_SECRET, { algorithms: ['HS256'] });
     tagSentryUser(req);
   } catch { req.user = null; }
   next();
