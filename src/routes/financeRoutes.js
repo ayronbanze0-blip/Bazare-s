@@ -1,12 +1,13 @@
 'use strict';
 
+const { walletMoneyLimiter } = require('../middleware/rateLimiter');
 const router = require('express').Router();
 const ctrl = require('../controllers/financeController');
 const { authenticate, isSeller, isAdmin } = require('../middleware/auth');
 
 router.get('/me', authenticate, isSeller, ctrl.myFinance);
 router.get('/payments', authenticate, isSeller, ctrl.listPayments);
-router.post('/me/submit-payment', authenticate, isSeller, ctrl.submitPayment);
+router.post('/me/submit-payment', authenticate, isSeller, walletMoneyLimiter, ctrl.submitPayment);
 router.post('/admin/:bazarId/confirm-payment', authenticate, isAdmin, ctrl.confirmPayment);
 router.patch('/admin/:bazarId/adjust-fee', authenticate, isAdmin, ctrl.adjustFee);
 router.patch('/admin/:bazarId/fee-rate', authenticate, isAdmin, ctrl.setFeeRate);

@@ -44,7 +44,7 @@ router.post('/requests/:id/decline', authenticate, walletMoneyLimiter, flow.requ
 router.post('/requests/:id/cancel', authenticate, walletMoneyLimiter, flow.requestCancel);
 
 // ─── SELLER: comissão de plataforma ────────────────────────────────
-router.post('/commission/pay', authenticate, isSeller, requireFeature('ENABLE_PAYMENTS'), ctrl.payCommission);
+router.post('/commission/pay', authenticate, isSeller, walletMoneyLimiter, requireFeature('ENABLE_PAYMENTS'), ctrl.payCommission);
 router.get('/commission/:id', authenticate, ctrl.commissionStatus);
 router.post('/commission/:id/cancel', authenticate, isSeller, ctrl.cancelCommissionPayment);
 

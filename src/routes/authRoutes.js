@@ -9,19 +9,19 @@ const { authLimiter, emailLimiter, codeAttemptLimiter, emailTargetLimiter } = re
 const registerValidation = [
   body('name').trim().isLength({ min: 2, max: 100 }).withMessage('Nome deve ter entre 2 e 100 caracteres.'),
   body('email').isEmail().withMessage('Email inválido.').normalizeEmail(),
-  body('password').isLength({ min: 8 }).withMessage('Palavra-passe deve ter no mínimo 8 caracteres.'),
+  body('password').isLength({ min: 8, max: 128 }).withMessage('Palavra-passe deve ter entre 8 e 128 caracteres.'),
   body('role').optional().isIn(['BUYER', 'SELLER', 'REVENDEDOR']).withMessage('Tipo de conta inválido.')
 ];
 
 const loginValidation = [
   body('email').isEmail().withMessage('Email inválido.').normalizeEmail(),
-  body('password').notEmpty().withMessage('Palavra-passe obrigatória.')
+  body('password').isString().isLength({ min: 1, max: 128 }).withMessage('Palavra-passe obrigatória.')
 ];
 
 const resetPasswordValidation = [
   body('email').isEmail().normalizeEmail(),
   body('code').isLength({ min: 6, max: 6 }).withMessage('Código deve ter 6 dígitos.'),
-  body('newPassword').isLength({ min: 8 }).withMessage('Nova palavra-passe deve ter no mínimo 8 caracteres.')
+  body('newPassword').isLength({ min: 8, max: 128 }).withMessage('Nova palavra-passe deve ter entre 8 e 128 caracteres.')
 ];
 
 router.post('/register', authLimiter, registerValidation, ctrl.register);

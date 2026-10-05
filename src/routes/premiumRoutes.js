@@ -4,11 +4,12 @@ const { requireFeature } = require('../middleware/featureGate');
 const router = require('express').Router();
 const ctrl = require('../controllers/premiumController');
 const { authenticate, isAdmin } = require('../middleware/auth');
+const { redeemLimiter, walletMoneyLimiter } = require('../middleware/rateLimiter');
 
 // ─── ME ──────────────────────────────────────────────────────────
 router.get('/me', authenticate, ctrl.myStatus);
-router.post('/subscribe', authenticate, requireFeature('ENABLE_PAYMENTS'), ctrl.subscribe);
-router.post('/redeem', authenticate, ctrl.redeemCode);
+router.post('/subscribe', authenticate, walletMoneyLimiter, requireFeature('ENABLE_PAYMENTS'), ctrl.subscribe);
+router.post('/redeem', authenticate, redeemLimiter, ctrl.redeemCode);
 router.get('/subscriptions/:id', authenticate, ctrl.subscriptionStatus);
 router.post('/subscriptions/:id/cancel', authenticate, ctrl.cancelSubscription);
 router.get('/analytics', authenticate, ctrl.analytics);

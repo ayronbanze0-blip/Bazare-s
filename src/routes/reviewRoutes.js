@@ -7,6 +7,7 @@
 
 const router = require('express').Router();
 const { authenticate } = require('../middleware/auth');
+const { socialWriteLimiter } = require('../middleware/rateLimiter');
 const { ok, badRequest, forbidden, notFound, serverError, validationError } = require('../utils/response');
 const logger = require('../utils/logger');
 
@@ -44,7 +45,7 @@ router.get('/', authenticate, async (req, res) => {
   }
 });
 
-router.post('/', authenticate, async (req, res) => {
+router.post('/', authenticate, socialWriteLimiter, async (req, res) => {
   try {
     const { orderId, productId, rating, comment, recommend } = req.body;
     if (!orderId) return badRequest(res, 'orderId obrigatório.');
