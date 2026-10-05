@@ -147,6 +147,7 @@ const register = async (req, res) => {
     });
 
     logger.info(`[Auth] New user registered: ${user.email} (${user.role})`);
+    emailSvc.sendWelcomeEmail(user.email, user.name, user.role).catch(() => {});
 
     return created(res, {
       user: { id: user.id, name: user.name, email: user.email, role: user.role, verified: true }
