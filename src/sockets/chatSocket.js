@@ -23,12 +23,48 @@ const getBazarBotUserId = async (prisma) => {
   return bazarBotUserIdCache;
 };
 
+const MAX_MESSAGE_LENGTH = 4000;
+const isId = (v) => typeof v === 'string' && v.length > 0 && v.length <= 64;
+
+// Limitador simples por socket+evento (janela fixa). Impede que UMA ligação autenticada
+// inunde a BD/sala com eventos (mensagens, typing, joins...).
+const makeLimiter = (max, windowMs) => {
+  let count = 0;
+  let start = Date.now();
+  return () => {
+    const now = Date.now();
+    if (now - start >= windowMs) { start = now; count = 0; }
+    return ++count <= max;
+  };
+};
+
+// Envolve um handler de evento: (1) o payload é SEMPRE um objecto — um cliente que emita
+// o evento sem argumentos (ou com lixo) fazia `({ chatId }) =>` rebentar de forma síncrona,
+// o que o Node trata como uncaughtException e o server.js responde com process.exit(1):
+// qualquer utilizador autenticado conseguia derrubar o servidor com uma linha;
+// (2) erros síncronos e rejeições assíncronas ficam contidos; (3) limite por ligação.
+const guard = (socket, event, handler, { max = 30, windowMs = 10000 } = {}) => {
+  const allow = makeLimiter(max, windowMs);
+  return (payload, ...rest) => {
+    try {
+      if (!allow()) return;
+      const data = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
+      const out = handler(data, ...rest);
+      if (out && typeof out.catch === 'function') {
+        out.catch((err) => logger.error(`[Socket ${event}] ${err.message}`));
+      }
+    } catch (err) {
+      logger.error(`[Socket ${event}] ${err.message}`);
+    }
+  };
+};
+
 const setupSocket = (io) => {
   io.use(async (socket, next) => {
     try {
       const token = socket.handshake.auth?.token || socket.handshake.query?.token;
       if (!token) return next(new Error('Token não fornecido'));
-      const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
+      const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET, { algorithms: ['HS256'] });
 
       // Mesma verificação que o middleware `authenticate` do REST faz:
       // o token pode continuar válido mesmo depois de a conta ter sido
@@ -54,12 +90,15 @@ const setupSocket = (io) => {
 
     socket.join(`user:${userId}`);
 
+    const on = (event, handler, opts) => socket.on(event, guard(socket, event, handler, opts));
+
     if (!onlineUsers.has(userId)) onlineUsers.set(userId, new Set());
     onlineUsers.get(userId).add(socket.id);
     io.emit('presence:online', { userId });
 
-    socket.on('chat:join', async ({ chatId }) => {
+    on('chat:join', async ({ chatId }) => {
       try {
+        if (!isId(chatId)) return;
         const chat = await prisma.chat.findUnique({ where: { id: chatId } });
         if (!chat || (chat.userAId !== userId && chat.userBId !== userId)) {
           return socket.emit('error', { message: 'Acesso negado a esta conversa.' });
@@ -71,13 +110,17 @@ const setupSocket = (io) => {
       }
     });
 
-    socket.on('chat:leave', ({ chatId }) => {
+    on('chat:leave', ({ chatId }) => {
       socket.leave(`chat:${chatId}`);
     });
 
-    socket.on('message:send', async ({ chatId, text, clientMessageId }) => {
+    on('message:send', async ({ chatId, text, clientMessageId }) => {
       try {
-        if (!text || !text.trim()) return;
+        if (!isId(chatId) || typeof text !== 'string' || !text.trim()) return;
+        if (text.length > MAX_MESSAGE_LENGTH) {
+          return socket.emit('error', { message: `Mensagem demasiado longa (máx. ${MAX_MESSAGE_LENGTH} caracteres).` });
+        }
+        if (clientMessageId !== undefined && clientMessageId !== null && (typeof clientMessageId !== 'string' || clientMessageId.length > 100)) return;
         const chat = await prisma.chat.findUnique({ where: { id: chatId } });
         if (!chat || (chat.userAId !== userId && chat.userBId !== userId)) {
           return socket.emit('error', { message: 'Acesso negado.' });
@@ -161,17 +204,27 @@ const setupSocket = (io) => {
         logger.error(`[Socket message:send] ${err.message}`);
         socket.emit('error', { message: 'Falha ao enviar mensagem.' });
       }
-    });
+    }, { max: 20, windowMs: 10000 });
 
-    socket.on('typing:start', ({ chatId }) => {
+    // Só quem já fez chat:join (e portanto foi validado como participante) pode emitir
+    // eventos para a sala — antes qualquer utilizador autenticado podia injectar "a escrever…"
+    // em conversas alheias só com o chatId.
+    on('typing:start', ({ chatId }) => {
+      if (!isId(chatId) || !socket.rooms.has(`chat:${chatId}`)) return;
       socket.to(`chat:${chatId}`).emit('typing:start', { userId, chatId });
     });
-    socket.on('typing:stop', ({ chatId }) => {
+    on('typing:stop', ({ chatId }) => {
+      if (!isId(chatId) || !socket.rooms.has(`chat:${chatId}`)) return;
       socket.to(`chat:${chatId}`).emit('typing:stop', { userId, chatId });
     });
 
-    socket.on('messages:read', async ({ chatId }) => {
+    on('messages:read', async ({ chatId }) => {
       try {
+        if (!isId(chatId)) return;
+        // Antes: marcava como lidas as mensagens de QUALQUER chat só com o chatId (sem
+        // confirmar que o utilizador participa) e avisava a sala.
+        const chat = await prisma.chat.findUnique({ where: { id: chatId }, select: { userAId: true, userBId: true } });
+        if (!chat || (chat.userAId !== userId && chat.userBId !== userId)) return;
         await prisma.message.updateMany({
           where: { chatId, senderId: { not: userId }, read: false },
           data: { read: true, readAt: new Date() }
@@ -182,7 +235,8 @@ const setupSocket = (io) => {
       }
     });
 
-    socket.on('presence:check', ({ userId: targetId }, callback) => {
+    on('presence:check', ({ userId: targetId }, callback) => {
+      if (!isId(targetId)) return;
       const isOnline = onlineUsers.has(targetId) && onlineUsers.get(targetId).size > 0;
       if (typeof callback === 'function') callback({ online: isOnline });
     });
