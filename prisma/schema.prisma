@@ -1037,6 +1037,9 @@ model Report {
   targetUser   User?        @relation("ReportsAgainstUser", fields: [targetUserId], references: [id])
   targetProductId String?
   targetProduct   Product?  @relation(fields: [targetProductId], references: [id])
+  // Alvo genérico (post, reel, história, comentário, grupo, loja…) — sem FK
+  // porque aponta para tabelas diferentes consoante o `type`.
+  targetId     String?
   type         ReportType
   reason       String
   description  String       @db.Text
@@ -1050,12 +1053,19 @@ model Report {
   @@index([reporterId])
   @@index([targetUserId])
   @@index([targetProductId])
+  @@index([type, targetId])
 }
 
 enum ReportType {
   PRODUCT
   USER
   BAZAR
+  ANNOUNCEMENT
+  REEL
+  STORY
+  COMMENT
+  GROUP_POST
+  COMMUNITY
 }
 
 enum ReportStatus {
