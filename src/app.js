@@ -35,7 +35,9 @@ app.use(helmet({
       connectSrc: ["'self'", ...frontendOrigins]
     }
   },
-  crossOriginResourcePolicy: { policy: 'cross-origin' }
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  hsts: { maxAge: 31536000, includeSubDomains: true },
+  referrerPolicy: { policy: 'no-referrer' }
 }));
 
 // ─── CORS ─────────────────────────────────────────────────────────
@@ -63,8 +65,9 @@ app.use(cors({
     // 3. Se a origem do navegador estiver na lista autorizada
     if (allowedOrigins.includes(origin)) return callback(null, true);
     
-    // 4. Em desenvolvimento, não bloqueia o deploy por segurança
-    if (process.env.NODE_ENV !== 'production') return callback(null, true);
+    // 4. Só em development/test EXPLÍCITOS. Antes, qualquer NODE_ENV diferente de 'production'
+    //    (incluindo esquecido/errado no painel) aceitava QUALQUER origem com credenciais.
+    if (['development', 'test'].includes(process.env.NODE_ENV)) return callback(null, true);
 
     logger.warn(`[CORS] Blocked request from unauthorized origin: ${origin}`);
     return callback(new Error('Não autorizado pela política de CORS.'));
@@ -91,7 +94,7 @@ app.use('/webhooks', require('./routes/webhookRoutes'));
 
 // ─── Body Parsing & Compression ──────────────────────────────────
 app.use(express.json({ limit: '2mb' }));
-app.use(express.urlencoded({ extended: true, limit: '2mb' }));
+app.use(express.urlencoded({ extended: true, limit: '2mb', parameterLimit: 200 }));
 app.use(cookieParser());
 app.use(compression());
 
@@ -134,7 +137,16 @@ app.get('/', (req, res) => {
 // Visita /sentry-test uma vez para confirmar que o backend está a
 // reportar erros. Não precisa de autenticação de propósito — é só
 // para verificação rápida, não expõe nenhum dado.
-app.get('/sentry-test', () => {
+// Só funciona se SENTRY_TEST_TOKEN estiver definido E o pedido o enviar (?token=...). Antes era
+// público: qualquer pessoa podia disparar erros em ciclo e esgotar a quota do Sentry.
+app.get('/sentry-test', (req, res) => {
+  const expected = process.env.SENTRY_TEST_TOKEN;
+  const given = String(req.query.token || '');
+  const a = Buffer.from(given);
+  const b = Buffer.from(expected || '');
+  if (!expected || a.length !== b.length || !require('crypto').timingSafeEqual(a, b)) {
+    return res.status(404).json({ success: false, message: 'Não encontrado.' });
+  }
   throw new Error('Bazares — teste manual do Sentry (backend)');
 });
 

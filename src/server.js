@@ -30,7 +30,10 @@ if (missingEnv.length > 0) {
   process.exit(1);
 }
 if (process.env.NODE_ENV === 'production' && !process.env.FRONTEND_URL) {
-  logger.warn('⚠ FRONTEND_URL não definida em produção — CORS e cookies de sessão podem falhar para o frontend real.');
+  // Fatal: FRONTEND_URL define as origens permitidas em CORS e Socket.IO. Sem ela o servidor
+  // arrancava aberto a qualquer origem (Socket.IO com "*").
+  logger.error('❌ FRONTEND_URL não definida em produção — recuso arrancar com CORS/Socket.IO abertos.');
+  process.exit(1);
 }
 if (process.env.NODE_ENV === 'production' && !process.env.ZUMBOPAY_WEBHOOK_SECRET) {
   // O webhook da ZumboPay agora falha-fechado sem este secret (ver
@@ -40,6 +43,10 @@ if (process.env.NODE_ENV === 'production' && !process.env.ZUMBOPAY_WEBHOOK_SECRE
   // nunca activar.
   logger.error('❌ ZUMBOPAY_WEBHOOK_SECRET não definido em produção — os webhooks de pagamento serão sempre rejeitados.');
   process.exit(1);
+}
+if (process.env.NODE_ENV === 'production' && (!process.env.ZUMBOPAY_API_KEY || !process.env.ZUMBOPAY_MERCHANT_ID)) {
+  // Não é fatal (o resto da plataforma funciona), mas sem estas chaves nenhum carregamento STK push é possível.
+  logger.warn('⚠ ZUMBOPAY_API_KEY / ZUMBOPAY_MERCHANT_ID não definidos — carregamentos M-Pesa/e-Mola vão falhar.');
 }
 if (
   process.env.NODE_ENV === 'production' &&
@@ -60,13 +67,14 @@ const getSocketOrigin = () => {
   if (socketAllowedOrigins.length > 0) {
     return socketAllowedOrigins;
   }
-  if (process.env.NODE_ENV === 'production') {
-    return "*"; 
-  }
-  return true;
+  // Sem FRONTEND_URL só se aceita fora de produção (em produção o arranque já foi recusado acima).
+  // Nunca "*" — em qualquer outro caso, apenas mesma origem.
+  if (['development', 'test'].includes(process.env.NODE_ENV)) return true;
+  return false;
 };
 
 const io = new Server(server, {
+  maxHttpBufferSize: 100 * 1024, // 100 KB por evento (mensagens de chat são texto; antes 1 MB)
   cors: {
     origin: getSocketOrigin(),
     credentials: socketAllowedOrigins.length > 0 ? true : false,
