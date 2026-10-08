@@ -16,6 +16,8 @@ router.get('/app/config', appCtrl.config);
 router.get('/app/bootstrap', appCtrl.bootstrap);
 router.get('/me/permissions', _authn, appCtrl.permissions);
 
+// Fase 5 (app completo): montado primeiro para que /products/deals, /orders/buy-again… não caiam em `/:id`
+router.use('/', require('./fase5Routes'));
 router.use('/auth', require('./authRoutes'));
 router.use('/products', require('./productRoutes'));
 router.use('/bazars', require('./bazarRoutes'));
