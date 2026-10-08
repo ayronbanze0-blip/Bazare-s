@@ -81,7 +81,8 @@ function auditFile(file, prefix) {
     const info = describeChain(args, inherited);
     routes.push({
       method: method.toUpperCase(),
-      path: `/api${prefix}${routePath === '/' ? '' : routePath}`,
+      // prefix '/' (router montado na raiz, ex.: fase5Routes) não pode gerar '/api//caminho'
+      path: `/api${prefix === '/' ? '' : prefix}${routePath === '/' ? '' : routePath}`,
       auth: info.auth,
       role: info.role,
       limiters: info.limiters,
