@@ -64,6 +64,2251 @@
     }
   },
   "paths": {
+    "/api/checkout/quote": {
+      "post": {
+        "tags": [
+          "checkout"
+        ],
+        "summary": "POST /api/checkout/quote",
+        "description": "Auth: yes. Role: any. Rate limit: orderLimiter.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (orderLimiter)"
+          }
+        }
+      }
+    },
+    "/api/checkout/payment-options": {
+      "post": {
+        "tags": [
+          "checkout"
+        ],
+        "summary": "POST /api/checkout/payment-options",
+        "description": "Auth: yes. Role: any.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/coupons/validate": {
+      "post": {
+        "tags": [
+          "coupons"
+        ],
+        "summary": "POST /api/coupons/validate",
+        "description": "Auth: yes. Role: any. Rate limit: orderLimiter.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (orderLimiter)"
+          }
+        }
+      }
+    },
+    "/api/seller/coupons": {
+      "get": {
+        "tags": [
+          "Seller"
+        ],
+        "summary": "GET /api/seller/coupons",
+        "description": "Auth: yes. Role: SELLER/ADMIN.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "SELLER/ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: SELLER/ADMIN"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Seller"
+        ],
+        "summary": "POST /api/seller/coupons",
+        "description": "Auth: yes. Role: SELLER/ADMIN. Rate limit: socialWriteLimiter.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "SELLER/ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: SELLER/ADMIN"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (socialWriteLimiter)"
+          }
+        }
+      }
+    },
+    "/api/seller/coupons/{id}": {
+      "patch": {
+        "tags": [
+          "Seller"
+        ],
+        "summary": "PATCH /api/seller/coupons/:id",
+        "description": "Auth: yes. Role: SELLER/ADMIN. Rate limit: socialWriteLimiter.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "SELLER/ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: SELLER/ADMIN"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (socialWriteLimiter)"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Seller"
+        ],
+        "summary": "DELETE /api/seller/coupons/:id",
+        "description": "Auth: yes. Role: SELLER/ADMIN.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "SELLER/ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: SELLER/ADMIN"
+          }
+        }
+      }
+    },
+    "/api/seller/coupons/{id}/redemptions": {
+      "get": {
+        "tags": [
+          "Seller"
+        ],
+        "summary": "GET /api/seller/coupons/:id/redemptions",
+        "description": "Auth: yes. Role: SELLER/ADMIN.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "SELLER/ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: SELLER/ADMIN"
+          }
+        }
+      }
+    },
+    "/api/admin/coupons": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "GET /api/admin/coupons",
+        "description": "Auth: yes. Role: ADMIN.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: ADMIN"
+          }
+        }
+      }
+    },
+    "/api/admin/coupons/{id}/disable": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "POST /api/admin/coupons/:id/disable",
+        "description": "Auth: yes. Role: ADMIN.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: ADMIN"
+          }
+        }
+      }
+    },
+    "/api/products/deals": {
+      "get": {
+        "tags": [
+          "Products"
+        ],
+        "summary": "GET /api/products/deals",
+        "description": "Auth: optional. Role: any.",
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          }
+        }
+      }
+    },
+    "/api/seller/promotions": {
+      "get": {
+        "tags": [
+          "Seller"
+        ],
+        "summary": "GET /api/seller/promotions",
+        "description": "Auth: yes. Role: SELLER/ADMIN.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "SELLER/ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: SELLER/ADMIN"
+          }
+        }
+      }
+    },
+    "/api/seller/promotions/{productId}": {
+      "put": {
+        "tags": [
+          "Seller"
+        ],
+        "summary": "PUT /api/seller/promotions/:productId",
+        "description": "Auth: yes. Role: SELLER/ADMIN. Rate limit: socialWriteLimiter.",
+        "parameters": [
+          {
+            "name": "productId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "SELLER/ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: SELLER/ADMIN"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (socialWriteLimiter)"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Seller"
+        ],
+        "summary": "DELETE /api/seller/promotions/:productId",
+        "description": "Auth: yes. Role: SELLER/ADMIN.",
+        "parameters": [
+          {
+            "name": "productId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "SELLER/ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: SELLER/ADMIN"
+          }
+        }
+      }
+    },
+    "/api/installments": {
+      "get": {
+        "tags": [
+          "installments"
+        ],
+        "summary": "GET /api/installments",
+        "description": "Auth: yes. Role: any.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/installments/upcoming": {
+      "get": {
+        "tags": [
+          "installments"
+        ],
+        "summary": "GET /api/installments/upcoming",
+        "description": "Auth: yes. Role: any.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/installments/{id}": {
+      "get": {
+        "tags": [
+          "installments"
+        ],
+        "summary": "GET /api/installments/:id",
+        "description": "Auth: yes. Role: any.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/installments/{planId}/pay": {
+      "post": {
+        "tags": [
+          "installments"
+        ],
+        "summary": "POST /api/installments/:planId/pay",
+        "description": "Auth: yes. Role: any. Rate limit: walletMoneyLimiter.",
+        "parameters": [
+          {
+            "name": "planId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (walletMoneyLimiter)"
+          }
+        }
+      }
+    },
+    "/api/installments/{planId}/autopay": {
+      "put": {
+        "tags": [
+          "installments"
+        ],
+        "summary": "PUT /api/installments/:planId/autopay",
+        "description": "Auth: yes. Role: any.",
+        "parameters": [
+          {
+            "name": "planId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/installments/{planId}/refund/retry": {
+      "post": {
+        "tags": [
+          "installments"
+        ],
+        "summary": "POST /api/installments/:planId/refund/retry",
+        "description": "Auth: yes. Role: any. Rate limit: walletMoneyLimiter.",
+        "parameters": [
+          {
+            "name": "planId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (walletMoneyLimiter)"
+          }
+        }
+      }
+    },
+    "/api/seller/installments/settings": {
+      "get": {
+        "tags": [
+          "Seller"
+        ],
+        "summary": "GET /api/seller/installments/settings",
+        "description": "Auth: yes. Role: SELLER/ADMIN.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "SELLER/ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: SELLER/ADMIN"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Seller"
+        ],
+        "summary": "PUT /api/seller/installments/settings",
+        "description": "Auth: yes. Role: SELLER/ADMIN. Rate limit: socialWriteLimiter.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "SELLER/ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: SELLER/ADMIN"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (socialWriteLimiter)"
+          }
+        }
+      }
+    },
+    "/api/seller/installments/plans": {
+      "get": {
+        "tags": [
+          "Seller"
+        ],
+        "summary": "GET /api/seller/installments/plans",
+        "description": "Auth: yes. Role: SELLER/ADMIN.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "SELLER/ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: SELLER/ADMIN"
+          }
+        }
+      }
+    },
+    "/api/seller/installments/summary": {
+      "get": {
+        "tags": [
+          "Seller"
+        ],
+        "summary": "GET /api/seller/installments/summary",
+        "description": "Auth: yes. Role: SELLER/ADMIN.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "SELLER/ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: SELLER/ADMIN"
+          }
+        }
+      }
+    },
+    "/api/admin/installments/overview": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "GET /api/admin/installments/overview",
+        "description": "Auth: yes. Role: ADMIN.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: ADMIN"
+          }
+        }
+      }
+    },
+    "/api/delivery-zones/bazar/{bazarId}": {
+      "get": {
+        "tags": [
+          "delivery-zones"
+        ],
+        "summary": "GET /api/delivery-zones/bazar/:bazarId",
+        "description": "Auth: no. Role: any.",
+        "parameters": [
+          {
+            "name": "bazarId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          }
+        }
+      }
+    },
+    "/api/seller/delivery-zones": {
+      "get": {
+        "tags": [
+          "Seller"
+        ],
+        "summary": "GET /api/seller/delivery-zones",
+        "description": "Auth: yes. Role: SELLER/ADMIN.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "SELLER/ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: SELLER/ADMIN"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Seller"
+        ],
+        "summary": "POST /api/seller/delivery-zones",
+        "description": "Auth: yes. Role: SELLER/ADMIN. Rate limit: socialWriteLimiter.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "SELLER/ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: SELLER/ADMIN"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (socialWriteLimiter)"
+          }
+        }
+      }
+    },
+    "/api/seller/delivery-zones/{id}": {
+      "patch": {
+        "tags": [
+          "Seller"
+        ],
+        "summary": "PATCH /api/seller/delivery-zones/:id",
+        "description": "Auth: yes. Role: SELLER/ADMIN. Rate limit: socialWriteLimiter.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "SELLER/ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: SELLER/ADMIN"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (socialWriteLimiter)"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Seller"
+        ],
+        "summary": "DELETE /api/seller/delivery-zones/:id",
+        "description": "Auth: yes. Role: SELLER/ADMIN.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "SELLER/ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: SELLER/ADMIN"
+          }
+        }
+      }
+    },
+    "/api/addresses": {
+      "get": {
+        "tags": [
+          "addresses"
+        ],
+        "summary": "GET /api/addresses",
+        "description": "Auth: yes. Role: any.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "addresses"
+        ],
+        "summary": "POST /api/addresses",
+        "description": "Auth: yes. Role: any. Rate limit: socialWriteLimiter.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (socialWriteLimiter)"
+          }
+        }
+      }
+    },
+    "/api/addresses/{id}": {
+      "patch": {
+        "tags": [
+          "addresses"
+        ],
+        "summary": "PATCH /api/addresses/:id",
+        "description": "Auth: yes. Role: any. Rate limit: socialWriteLimiter.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (socialWriteLimiter)"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "addresses"
+        ],
+        "summary": "DELETE /api/addresses/:id",
+        "description": "Auth: yes. Role: any.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/addresses/{id}/default": {
+      "post": {
+        "tags": [
+          "addresses"
+        ],
+        "summary": "POST /api/addresses/:id/default",
+        "description": "Auth: yes. Role: any.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/orders/buy-again": {
+      "get": {
+        "tags": [
+          "Orders"
+        ],
+        "summary": "GET /api/orders/buy-again",
+        "description": "Auth: yes. Role: any.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/orders/{id}/timeline": {
+      "get": {
+        "tags": [
+          "Orders"
+        ],
+        "summary": "GET /api/orders/:id/timeline",
+        "description": "Auth: yes. Role: any.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/orders/{id}/receipt": {
+      "get": {
+        "tags": [
+          "Orders"
+        ],
+        "summary": "GET /api/orders/:id/receipt",
+        "description": "Auth: yes. Role: any.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/disputes/reasons": {
+      "get": {
+        "tags": [
+          "disputes"
+        ],
+        "summary": "GET /api/disputes/reasons",
+        "description": "Auth: no. Role: any.",
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          }
+        }
+      }
+    },
+    "/api/orders/{orderId}/dispute": {
+      "post": {
+        "tags": [
+          "Orders"
+        ],
+        "summary": "POST /api/orders/:orderId/dispute",
+        "description": "Auth: yes. Role: any. Rate limit: socialWriteLimiter.",
+        "parameters": [
+          {
+            "name": "orderId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (socialWriteLimiter)"
+          }
+        }
+      }
+    },
+    "/api/disputes/mine": {
+      "get": {
+        "tags": [
+          "disputes"
+        ],
+        "summary": "GET /api/disputes/mine",
+        "description": "Auth: yes. Role: any.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/disputes/received": {
+      "get": {
+        "tags": [
+          "disputes"
+        ],
+        "summary": "GET /api/disputes/received",
+        "description": "Auth: yes. Role: SELLER/ADMIN.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "SELLER/ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: SELLER/ADMIN"
+          }
+        }
+      }
+    },
+    "/api/disputes/{id}": {
+      "get": {
+        "tags": [
+          "disputes"
+        ],
+        "summary": "GET /api/disputes/:id",
+        "description": "Auth: yes. Role: any.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/disputes/{id}/respond": {
+      "post": {
+        "tags": [
+          "disputes"
+        ],
+        "summary": "POST /api/disputes/:id/respond",
+        "description": "Auth: yes. Role: SELLER/ADMIN. Rate limit: socialWriteLimiter.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "SELLER/ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: SELLER/ADMIN"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (socialWriteLimiter)"
+          }
+        }
+      }
+    },
+    "/api/disputes/{id}/cancel": {
+      "post": {
+        "tags": [
+          "disputes"
+        ],
+        "summary": "POST /api/disputes/:id/cancel",
+        "description": "Auth: yes. Role: any.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/admin/disputes": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "GET /api/admin/disputes",
+        "description": "Auth: yes. Role: ADMIN.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: ADMIN"
+          }
+        }
+      }
+    },
+    "/api/admin/disputes/{id}/resolve": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "POST /api/admin/disputes/:id/resolve",
+        "description": "Auth: yes. Role: ADMIN.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: ADMIN"
+          }
+        }
+      }
+    },
+    "/api/views": {
+      "post": {
+        "tags": [
+          "views"
+        ],
+        "summary": "POST /api/views",
+        "description": "Auth: optional. Role: any. Rate limit: publicTrackLimiter.",
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (publicTrackLimiter)"
+          }
+        }
+      }
+    },
+    "/api/views/batch": {
+      "post": {
+        "tags": [
+          "views"
+        ],
+        "summary": "POST /api/views/batch",
+        "description": "Auth: optional. Role: any. Rate limit: publicTrackLimiter.",
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (publicTrackLimiter)"
+          }
+        }
+      }
+    },
+    "/api/views/{type}/{id}/stats": {
+      "get": {
+        "tags": [
+          "views"
+        ],
+        "summary": "GET /api/views/:type/:id/stats",
+        "description": "Auth: yes. Role: any.",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/seller/views/summary": {
+      "get": {
+        "tags": [
+          "Seller"
+        ],
+        "summary": "GET /api/seller/views/summary",
+        "description": "Auth: yes. Role: SELLER/ADMIN.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "SELLER/ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: SELLER/ADMIN"
+          }
+        }
+      }
+    },
+    "/api/users/me/recently-viewed": {
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "GET /api/users/me/recently-viewed",
+        "description": "Auth: yes. Role: any.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "DELETE /api/users/me/recently-viewed",
+        "description": "Auth: yes. Role: any.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/users/me/recently-viewed/{productId}": {
+      "delete": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "DELETE /api/users/me/recently-viewed/:productId",
+        "description": "Auth: yes. Role: any.",
+        "parameters": [
+          {
+            "name": "productId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/banners": {
+      "get": {
+        "tags": [
+          "banners"
+        ],
+        "summary": "GET /api/banners",
+        "description": "Auth: optional. Role: any.",
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          }
+        }
+      }
+    },
+    "/api/banners/{id}/impression": {
+      "post": {
+        "tags": [
+          "banners"
+        ],
+        "summary": "POST /api/banners/:id/impression",
+        "description": "Auth: optional. Role: any. Rate limit: publicTrackLimiter.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (publicTrackLimiter)"
+          }
+        }
+      }
+    },
+    "/api/banners/{id}/click": {
+      "post": {
+        "tags": [
+          "banners"
+        ],
+        "summary": "POST /api/banners/:id/click",
+        "description": "Auth: optional. Role: any. Rate limit: publicTrackLimiter.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (publicTrackLimiter)"
+          }
+        }
+      }
+    },
+    "/api/admin/banners": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "GET /api/admin/banners",
+        "description": "Auth: yes. Role: ADMIN.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: ADMIN"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "POST /api/admin/banners",
+        "description": "Auth: yes. Role: ADMIN.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: ADMIN"
+          }
+        }
+      }
+    },
+    "/api/admin/banners/{id}": {
+      "patch": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "PATCH /api/admin/banners/:id",
+        "description": "Auth: yes. Role: ADMIN.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: ADMIN"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "DELETE /api/admin/banners/:id",
+        "description": "Auth: yes. Role: ADMIN.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: ADMIN"
+          }
+        }
+      }
+    },
+    "/api/reviews/{id}/reply": {
+      "post": {
+        "tags": [
+          "Reviews"
+        ],
+        "summary": "POST /api/reviews/:id/reply",
+        "description": "Auth: yes. Role: SELLER/ADMIN. Rate limit: socialWriteLimiter.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "SELLER/ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: SELLER/ADMIN"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (socialWriteLimiter)"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Reviews"
+        ],
+        "summary": "DELETE /api/reviews/:id/reply",
+        "description": "Auth: yes. Role: SELLER/ADMIN.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "SELLER/ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: SELLER/ADMIN"
+          }
+        }
+      }
+    },
+    "/api/support/tickets": {
+      "post": {
+        "tags": [
+          "support"
+        ],
+        "summary": "POST /api/support/tickets",
+        "description": "Auth: yes. Role: any. Rate limit: socialWriteLimiter.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (socialWriteLimiter)"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "support"
+        ],
+        "summary": "GET /api/support/tickets",
+        "description": "Auth: yes. Role: any.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/support/tickets/{id}": {
+      "get": {
+        "tags": [
+          "support"
+        ],
+        "summary": "GET /api/support/tickets/:id",
+        "description": "Auth: yes. Role: any.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/support/tickets/{id}/messages": {
+      "post": {
+        "tags": [
+          "support"
+        ],
+        "summary": "POST /api/support/tickets/:id/messages",
+        "description": "Auth: yes. Role: any. Rate limit: socialWriteLimiter.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (socialWriteLimiter)"
+          }
+        }
+      }
+    },
+    "/api/support/tickets/{id}/close": {
+      "post": {
+        "tags": [
+          "support"
+        ],
+        "summary": "POST /api/support/tickets/:id/close",
+        "description": "Auth: yes. Role: any.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/admin/support/tickets": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "GET /api/admin/support/tickets",
+        "description": "Auth: yes. Role: ADMIN.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: ADMIN"
+          }
+        }
+      }
+    },
+    "/api/admin/support/tickets/{id}": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "GET /api/admin/support/tickets/:id",
+        "description": "Auth: yes. Role: ADMIN.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: ADMIN"
+          }
+        }
+      }
+    },
+    "/api/admin/support/tickets/{id}/reply": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "POST /api/admin/support/tickets/:id/reply",
+        "description": "Auth: yes. Role: ADMIN.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: ADMIN"
+          }
+        }
+      }
+    },
+    "/api/admin/support/tickets/{id}/status": {
+      "patch": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "PATCH /api/admin/support/tickets/:id/status",
+        "description": "Auth: yes. Role: ADMIN.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: ADMIN"
+          }
+        }
+      }
+    },
+    "/api/auth/sessions": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "GET /api/auth/sessions",
+        "description": "Auth: yes. Role: any.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/auth/sessions/{id}": {
+      "delete": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "DELETE /api/auth/sessions/:id",
+        "description": "Auth: yes. Role: any. Rate limit: accountSecurityLimiter.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (accountSecurityLimiter)"
+          }
+        }
+      }
+    },
+    "/api/users/me/export": {
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "GET /api/users/me/export",
+        "description": "Auth: yes. Role: any. Rate limit: accountSecurityLimiter.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (accountSecurityLimiter)"
+          }
+        }
+      }
+    },
+    "/api/app/version": {
+      "get": {
+        "tags": [
+          "app"
+        ],
+        "summary": "GET /api/app/version",
+        "description": "Auth: no. Role: any.",
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          }
+        }
+      }
+    },
     "/api/auth/register": {
       "post": {
         "tags": [
@@ -1035,6 +3280,99 @@
         }
       }
     },
+    "/api/products/{id}/reviews": {
+      "get": {
+        "tags": [
+          "Products"
+        ],
+        "summary": "GET /api/products/:id/reviews",
+        "description": "Auth: optional. Role: any.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          }
+        }
+      }
+    },
+    "/api/products/{id}/seller-products": {
+      "get": {
+        "tags": [
+          "Products"
+        ],
+        "summary": "GET /api/products/:id/seller-products",
+        "description": "Auth: optional. Role: any.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          }
+        }
+      }
+    },
+    "/api/products/{id}/view": {
+      "get": {
+        "tags": [
+          "Products"
+        ],
+        "summary": "GET /api/products/:id/view",
+        "description": "Auth: optional. Role: any.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          }
+        }
+      }
+    },
     "/api/products/{id}/related": {
       "get": {
         "tags": [
@@ -1190,6 +3528,149 @@
         ],
         "summary": "GET /api/bazars/ranking",
         "description": "Auth: no. Role: any.",
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          }
+        }
+      }
+    },
+    "/api/bazars/{idOrSlug}/products": {
+      "get": {
+        "tags": [
+          "Bazars"
+        ],
+        "summary": "GET /api/bazars/:idOrSlug/products",
+        "description": "Auth: optional. Role: any.",
+        "parameters": [
+          {
+            "name": "idOrSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          }
+        }
+      }
+    },
+    "/api/bazars/{idOrSlug}/posts": {
+      "get": {
+        "tags": [
+          "Bazars"
+        ],
+        "summary": "GET /api/bazars/:idOrSlug/posts",
+        "description": "Auth: optional. Role: any.",
+        "parameters": [
+          {
+            "name": "idOrSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          }
+        }
+      }
+    },
+    "/api/bazars/{idOrSlug}/reviews": {
+      "get": {
+        "tags": [
+          "Bazars"
+        ],
+        "summary": "GET /api/bazars/:idOrSlug/reviews",
+        "description": "Auth: no. Role: any.",
+        "parameters": [
+          {
+            "name": "idOrSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          }
+        }
+      }
+    },
+    "/api/bazars/{idOrSlug}/followers": {
+      "get": {
+        "tags": [
+          "Bazars"
+        ],
+        "summary": "GET /api/bazars/:idOrSlug/followers",
+        "description": "Auth: no. Role: any.",
+        "parameters": [
+          {
+            "name": "idOrSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          }
+        }
+      }
+    },
+    "/api/bazars/{idOrSlug}/view": {
+      "get": {
+        "tags": [
+          "Bazars"
+        ],
+        "summary": "GET /api/bazars/:idOrSlug/view",
+        "description": "Auth: optional. Role: any.",
+        "parameters": [
+          {
+            "name": "idOrSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
         "x-role": "any",
         "responses": {
           "200": {
@@ -1966,7 +4447,7 @@
           "Finance"
         ],
         "summary": "POST /api/finance/me/submit-payment",
-        "description": "Auth: yes. Role: SELLER/ADMIN.",
+        "description": "Auth: yes. Role: SELLER/ADMIN. Rate limit: walletMoneyLimiter.",
         "security": [
           {
             "bearerAuth": []
@@ -1982,6 +4463,9 @@
           },
           "403": {
             "description": "Requer role: SELLER/ADMIN"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (walletMoneyLimiter)"
           }
         }
       }
@@ -2285,7 +4769,7 @@
           "Chat"
         ],
         "summary": "POST /api/chat/:chatId/messages",
-        "description": "Auth: yes. Role: any.",
+        "description": "Auth: yes. Role: any. Rate limit: chatSendLimiter.",
         "parameters": [
           {
             "name": "chatId",
@@ -2308,6 +4792,9 @@
           },
           "401": {
             "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (chatSendLimiter)"
           }
         }
       }
@@ -2318,7 +4805,7 @@
           "Chat"
         ],
         "summary": "POST /api/chat/:chatId/suggest-reply",
-        "description": "Auth: yes. Role: any.",
+        "description": "Auth: yes. Role: any. Rate limit: aiLimiter.",
         "parameters": [
           {
             "name": "chatId",
@@ -2341,6 +4828,9 @@
           },
           "401": {
             "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (aiLimiter)"
           }
         }
       }
@@ -3003,6 +5493,35 @@
         }
       }
     },
+    "/api/admin/app/command": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "POST /api/admin/app/command",
+        "description": "Auth: yes. Role: ADMIN. Rate limit: adminActionLimiter.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: ADMIN"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (adminActionLimiter)"
+          }
+        }
+      }
+    },
     "/api/admin/products": {
       "get": {
         "tags": [
@@ -3427,7 +5946,7 @@
           "Reports"
         ],
         "summary": "POST /api/reports",
-        "description": "Auth: yes. Role: any.",
+        "description": "Auth: yes. Role: any. Rate limit: socialWriteLimiter.",
         "security": [
           {
             "bearerAuth": []
@@ -3440,6 +5959,9 @@
           },
           "401": {
             "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (socialWriteLimiter)"
           }
         }
       }
@@ -3666,7 +6188,7 @@
           "Users"
         ],
         "summary": "DELETE /api/users/me",
-        "description": "Auth: yes. Role: any.",
+        "description": "Auth: yes. Role: any. Rate limit: accountSecurityLimiter.",
         "security": [
           {
             "bearerAuth": []
@@ -3679,6 +6201,9 @@
           },
           "401": {
             "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (accountSecurityLimiter)"
           }
         }
       }
@@ -3715,7 +6240,7 @@
           "Users"
         ],
         "summary": "PUT /api/users/me/password",
-        "description": "Auth: yes. Role: any.",
+        "description": "Auth: yes. Role: any. Rate limit: accountSecurityLimiter.",
         "security": [
           {
             "bearerAuth": []
@@ -3728,6 +6253,9 @@
           },
           "401": {
             "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (accountSecurityLimiter)"
           }
         }
       }
@@ -3761,7 +6289,7 @@
           "Users"
         ],
         "summary": "POST /api/users/me/request-verification",
-        "description": "Auth: yes. Role: any.",
+        "description": "Auth: yes. Role: any. Rate limit: socialWriteLimiter.",
         "security": [
           {
             "bearerAuth": []
@@ -3774,6 +6302,9 @@
           },
           "401": {
             "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (socialWriteLimiter)"
           }
         }
       }
@@ -3784,7 +6315,7 @@
           "Users"
         ],
         "summary": "POST /api/users/:id/thumb",
-        "description": "Auth: yes. Role: any.",
+        "description": "Auth: yes. Role: any. Rate limit: socialWriteLimiter.",
         "parameters": [
           {
             "name": "id",
@@ -3807,6 +6338,9 @@
           },
           "401": {
             "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (socialWriteLimiter)"
           }
         }
       }
@@ -3817,7 +6351,7 @@
           "Users"
         ],
         "summary": "POST /api/users/:id/block",
-        "description": "Auth: yes. Role: any.",
+        "description": "Auth: yes. Role: any. Rate limit: socialWriteLimiter.",
         "parameters": [
           {
             "name": "id",
@@ -3840,6 +6374,9 @@
           },
           "401": {
             "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (socialWriteLimiter)"
           }
         }
       },
@@ -3928,6 +6465,194 @@
         ],
         "summary": "GET /api/users/presence",
         "description": "Auth: yes. Role: any.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/users/{id}/view": {
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "GET /api/users/:id/view",
+        "description": "Auth: optional. Role: any.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          }
+        }
+      }
+    },
+    "/api/users/{id}/posts": {
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "GET /api/users/:id/posts",
+        "description": "Auth: optional. Role: any.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          }
+        }
+      }
+    },
+    "/api/users/{id}/reels": {
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "GET /api/users/:id/reels",
+        "description": "Auth: optional. Role: any.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          }
+        }
+      }
+    },
+    "/api/users/{id}/products": {
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "GET /api/users/:id/products",
+        "description": "Auth: optional. Role: any.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          }
+        }
+      }
+    },
+    "/api/users/{id}/followers": {
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "GET /api/users/:id/followers",
+        "description": "Auth: optional. Role: any.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          }
+        }
+      }
+    },
+    "/api/users/{id}/following": {
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "GET /api/users/:id/following",
+        "description": "Auth: yes. Role: any.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "security": [
           {
             "bearerAuth": []
@@ -4050,7 +6775,7 @@
           "Reviews"
         ],
         "summary": "POST /api/reviews",
-        "description": "Auth: yes. Role: any.",
+        "description": "Auth: yes. Role: any. Rate limit: socialWriteLimiter.",
         "security": [
           {
             "bearerAuth": []
@@ -4063,6 +6788,9 @@
           },
           "401": {
             "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (socialWriteLimiter)"
           }
         }
       }
@@ -4090,13 +6818,603 @@
         }
       }
     },
+    "/api/wallet/summary": {
+      "get": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "GET /api/wallet/summary",
+        "description": "Auth: yes. Role: any.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/wallet/statement/export": {
+      "get": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "GET /api/wallet/statement/export",
+        "description": "Auth: yes. Role: any.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/wallet/transactions/{id}": {
+      "get": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "GET /api/wallet/transactions/:id",
+        "description": "Auth: yes. Role: any.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/wallet/pin": {
+      "post": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "POST /api/wallet/pin",
+        "description": "Auth: yes. Role: any. Rate limit: walletMoneyLimiter.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (walletMoneyLimiter)"
+          }
+        }
+      }
+    },
+    "/api/wallet/pin/reset": {
+      "post": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "POST /api/wallet/pin/reset",
+        "description": "Auth: yes. Role: any. Rate limit: walletMoneyLimiter.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (walletMoneyLimiter)"
+          }
+        }
+      }
+    },
+    "/api/wallet/deposit/stk": {
+      "post": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "POST /api/wallet/deposit/stk",
+        "description": "Auth: yes. Role: any. Rate limit: walletMoneyLimiter.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (walletMoneyLimiter)"
+          }
+        }
+      }
+    },
+    "/api/wallet/deposit/manual": {
+      "post": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "POST /api/wallet/deposit/manual",
+        "description": "Auth: yes. Role: any. Rate limit: walletMoneyLimiter.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (walletMoneyLimiter)"
+          }
+        }
+      }
+    },
+    "/api/wallet/deposits": {
+      "get": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "GET /api/wallet/deposits",
+        "description": "Auth: yes. Role: any.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/wallet/deposit/{id}": {
+      "get": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "GET /api/wallet/deposit/:id",
+        "description": "Auth: yes. Role: any.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/wallet/deposit/{id}/cancel": {
+      "post": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "POST /api/wallet/deposit/:id/cancel",
+        "description": "Auth: yes. Role: any. Rate limit: walletMoneyLimiter.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (walletMoneyLimiter)"
+          }
+        }
+      }
+    },
+    "/api/wallet/withdraw": {
+      "post": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "POST /api/wallet/withdraw",
+        "description": "Auth: yes. Role: any. Rate limit: walletMoneyLimiter.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (walletMoneyLimiter)"
+          }
+        }
+      }
+    },
+    "/api/wallet/withdrawals": {
+      "get": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "GET /api/wallet/withdrawals",
+        "description": "Auth: yes. Role: any.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/wallet/withdraw/{id}/cancel": {
+      "post": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "POST /api/wallet/withdraw/:id/cancel",
+        "description": "Auth: yes. Role: any. Rate limit: walletMoneyLimiter.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (walletMoneyLimiter)"
+          }
+        }
+      }
+    },
+    "/api/wallet/recipients/search": {
+      "get": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "GET /api/wallet/recipients/search",
+        "description": "Auth: yes. Role: any. Rate limit: walletLookupLimiter.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (walletLookupLimiter)"
+          }
+        }
+      }
+    },
+    "/api/wallet/recipients/recent": {
+      "get": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "GET /api/wallet/recipients/recent",
+        "description": "Auth: yes. Role: any.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/wallet/transfer": {
+      "post": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "POST /api/wallet/transfer",
+        "description": "Auth: yes. Role: any. Rate limit: walletMoneyLimiter.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (walletMoneyLimiter)"
+          }
+        }
+      }
+    },
+    "/api/wallet/requests": {
+      "post": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "POST /api/wallet/requests",
+        "description": "Auth: yes. Role: any. Rate limit: walletMoneyLimiter.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (walletMoneyLimiter)"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "GET /api/wallet/requests",
+        "description": "Auth: yes. Role: any.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/wallet/requests/{id}/pay": {
+      "post": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "POST /api/wallet/requests/:id/pay",
+        "description": "Auth: yes. Role: any. Rate limit: walletMoneyLimiter.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (walletMoneyLimiter)"
+          }
+        }
+      }
+    },
+    "/api/wallet/requests/{id}/decline": {
+      "post": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "POST /api/wallet/requests/:id/decline",
+        "description": "Auth: yes. Role: any. Rate limit: walletMoneyLimiter.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (walletMoneyLimiter)"
+          }
+        }
+      }
+    },
+    "/api/wallet/requests/{id}/cancel": {
+      "post": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "POST /api/wallet/requests/:id/cancel",
+        "description": "Auth: yes. Role: any. Rate limit: walletMoneyLimiter.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (walletMoneyLimiter)"
+          }
+        }
+      }
+    },
     "/api/wallet/commission/pay": {
       "post": {
         "tags": [
           "Wallet"
         ],
         "summary": "POST /api/wallet/commission/pay",
-        "description": "Auth: yes. Role: SELLER/ADMIN.",
+        "description": "Auth: yes. Role: SELLER/ADMIN. Rate limit: walletMoneyLimiter.",
         "security": [
           {
             "bearerAuth": []
@@ -4112,6 +7430,9 @@
           },
           "403": {
             "description": "Requer role: SELLER/ADMIN"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (walletMoneyLimiter)"
           }
         }
       }
@@ -4301,6 +7622,278 @@
         }
       }
     },
+    "/api/wallet/admin/overview": {
+      "get": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "GET /api/wallet/admin/overview",
+        "description": "Auth: yes. Role: ADMIN. Rate limit: adminActionLimiter.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: ADMIN"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (adminActionLimiter)"
+          }
+        }
+      }
+    },
+    "/api/wallet/admin/deposits": {
+      "get": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "GET /api/wallet/admin/deposits",
+        "description": "Auth: yes. Role: ADMIN. Rate limit: adminActionLimiter.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: ADMIN"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (adminActionLimiter)"
+          }
+        }
+      }
+    },
+    "/api/wallet/admin/deposits/{id}/approve": {
+      "post": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "POST /api/wallet/admin/deposits/:id/approve",
+        "description": "Auth: yes. Role: ADMIN. Rate limit: adminActionLimiter.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: ADMIN"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (adminActionLimiter)"
+          }
+        }
+      }
+    },
+    "/api/wallet/admin/deposits/{id}/reject": {
+      "post": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "POST /api/wallet/admin/deposits/:id/reject",
+        "description": "Auth: yes. Role: ADMIN. Rate limit: adminActionLimiter.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: ADMIN"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (adminActionLimiter)"
+          }
+        }
+      }
+    },
+    "/api/wallet/admin/withdrawals": {
+      "get": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "GET /api/wallet/admin/withdrawals",
+        "description": "Auth: yes. Role: ADMIN. Rate limit: adminActionLimiter.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: ADMIN"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (adminActionLimiter)"
+          }
+        }
+      }
+    },
+    "/api/wallet/admin/withdrawals/{id}/pay": {
+      "post": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "POST /api/wallet/admin/withdrawals/:id/pay",
+        "description": "Auth: yes. Role: ADMIN. Rate limit: adminActionLimiter.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: ADMIN"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (adminActionLimiter)"
+          }
+        }
+      }
+    },
+    "/api/wallet/admin/withdrawals/{id}/reject": {
+      "post": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "POST /api/wallet/admin/withdrawals/:id/reject",
+        "description": "Auth: yes. Role: ADMIN. Rate limit: adminActionLimiter.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: ADMIN"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (adminActionLimiter)"
+          }
+        }
+      }
+    },
+    "/api/wallet/admin/pin/clear": {
+      "post": {
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "POST /api/wallet/admin/pin/clear",
+        "description": "Auth: yes. Role: ADMIN. Rate limit: adminActionLimiter.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "ADMIN",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "403": {
+            "description": "Requer role: ADMIN"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (adminActionLimiter)"
+          }
+        }
+      }
+    },
     "/api/premium/me": {
       "get": {
         "tags": [
@@ -4330,7 +7923,7 @@
           "Premium"
         ],
         "summary": "POST /api/premium/subscribe",
-        "description": "Auth: yes. Role: any.",
+        "description": "Auth: yes. Role: any. Rate limit: walletMoneyLimiter.",
         "security": [
           {
             "bearerAuth": []
@@ -4343,6 +7936,9 @@
           },
           "401": {
             "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (walletMoneyLimiter)"
           }
         }
       }
@@ -4353,7 +7949,7 @@
           "Premium"
         ],
         "summary": "POST /api/premium/redeem",
-        "description": "Auth: yes. Role: any.",
+        "description": "Auth: yes. Role: any. Rate limit: redeemLimiter.",
         "security": [
           {
             "bearerAuth": []
@@ -4366,6 +7962,9 @@
           },
           "401": {
             "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (redeemLimiter)"
           }
         }
       }
@@ -4787,6 +8386,29 @@
         }
       }
     },
+    "/api/feed/saved": {
+      "get": {
+        "tags": [
+          "Social"
+        ],
+        "summary": "GET /api/feed/saved",
+        "description": "Auth: yes. Role: any.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
     "/api/feed/{targetType}/{targetId}/engagement": {
       "get": {
         "tags": [
@@ -4912,6 +8534,47 @@
           "Social"
         ],
         "summary": "POST /api/feed/:targetType/:targetId/share",
+        "description": "Auth: yes. Role: any.",
+        "parameters": [
+          {
+            "name": "targetType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "targetId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/feed/{targetType}/{targetId}/save": {
+      "post": {
+        "tags": [
+          "Social"
+        ],
+        "summary": "POST /api/feed/:targetType/:targetId/save",
         "description": "Auth: yes. Role: any.",
         "parameters": [
           {
@@ -5153,6 +8816,128 @@
         }
       }
     },
+    "/api/posts": {
+      "get": {
+        "tags": [
+          "posts"
+        ],
+        "summary": "GET /api/posts",
+        "description": "Auth: optional. Role: any.",
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          }
+        }
+      }
+    },
+    "/api/posts/{id}": {
+      "get": {
+        "tags": [
+          "posts"
+        ],
+        "summary": "GET /api/posts/:id",
+        "description": "Auth: optional. Role: any.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          }
+        }
+      }
+    },
+    "/api/posts/{id}/comments": {
+      "get": {
+        "tags": [
+          "posts"
+        ],
+        "summary": "GET /api/posts/:id/comments",
+        "description": "Auth: optional. Role: any.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          }
+        }
+      }
+    },
+    "/api/content/{targetType}/{targetId}": {
+      "get": {
+        "tags": [
+          "content"
+        ],
+        "summary": "GET /api/content/:targetType/:targetId",
+        "description": "Auth: optional. Role: any.",
+        "parameters": [
+          {
+            "name": "targetType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "targetId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          }
+        }
+      }
+    },
     "/api/reels": {
       "get": {
         "tags": [
@@ -5160,6 +8945,68 @@
         ],
         "summary": "GET /api/reels",
         "description": "Auth: optional. Role: any.",
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          }
+        }
+      }
+    },
+    "/api/reels/{id}": {
+      "get": {
+        "tags": [
+          "Reels"
+        ],
+        "summary": "GET /api/reels/:id",
+        "description": "Auth: optional. Role: any.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          }
+        }
+      }
+    },
+    "/api/reels/{id}/comments": {
+      "get": {
+        "tags": [
+          "Reels"
+        ],
+        "summary": "GET /api/reels/:id/comments",
+        "description": "Auth: optional. Role: any.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "security": [
           {},
           {
