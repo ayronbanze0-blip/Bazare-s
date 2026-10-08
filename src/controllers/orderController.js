@@ -13,6 +13,12 @@ const { canTransition, isTerminal, actorMayTransition } = require('../utils/orde
 const audit = require('../services/auditService');
 const { normalizeOrderItems, validateOrderText } = require('../utils/orderItems');
 const { blockedAmong } = require('../services/blockService');
+const checkoutSvc = require('../services/checkoutService');
+const couponSvc = require('../services/couponService');
+const installmentSvc = require('../services/installmentService');
+const walletFlow = require('../services/walletFlowService');
+const { envEnabled } = require('../config/features');
+const { replyKnown } = require('../utils/appError');
 
 const prisma = require('../config/database');
 
@@ -49,7 +55,15 @@ class StockError extends Error {
   }
 }
 
+// ─── Pagamentos com a carteira ligados? (env + flag em tempo real; fail-open se a BD falhar) ──
+const paymentsEnabled = async () => {
+  if (!envEnabled('ENABLE_PAYMENTS')) return false;
+  try { return await require('../services/featureFlags').isEnabled('enable_payments', true); } catch { return true; }
+};
+
 // ─── BUYER: Place order ───────────────────────────────────────────
+// O cliente envia só intenções (itens, cupão, zona de entrega, forma de pagamento). Preços, descontos,
+// entrega, juros e total são calculados no servidor por checkoutService — o MESMO cálculo de POST /checkout/quote.
 const placeOrder = async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return validationError(res, errors.array());
@@ -67,115 +81,108 @@ const placeOrder = async (req, res) => {
   if (textError) return badRequest(res, textError);
 
   try {
-    // Validate all items and group by seller
-    const productIds = items.map(i => i.productId);
-    const products = await prisma.product.findMany({
-      where: { id: { in: productIds }, active: true },
-      include: { bazar: true, images: { take: 1, orderBy: { order: 'asc' } } }
+    const checkout = await checkoutSvc.buildCheckout({
+      buyerId: req.user.id,
+      items,
+      couponCode: req.body.couponCode,
+      deliveryZones: req.body.deliveryZones !== undefined ? req.body.deliveryZones : req.body.deliveryZoneId,
+      paymentMode: req.body.paymentMode,
+      installments: req.body.installments
     });
+    const mode = checkout.paymentMode;
 
-    if (products.length !== productIds.length)
-      return badRequest(res, 'Um ou mais produtos não estão disponíveis.');
-
-    // Regras de integridade do marketplace
-    if (products.some(p => p.sellerId === req.user.id)) {
-      return forbidden(res, 'Não podes comprar os teus próprios produtos.');
+    // Pagar com a carteira: funcionalidade ligada + PIN correcto + saldo para o que se paga AGORA.
+    if (mode !== 'ENTREGA') {
+      if (!(await paymentsEnabled())) return domainError(res, 503, 'FEATURE_DISABLED', 'Pagamentos com a carteira temporariamente indisponíveis.');
+      await walletFlow.verifyPin(req.user.id, typeof req.body.pin === 'string' ? req.body.pin : '');
+      const wallet = await prisma.wallet.findUnique({ where: { userId: req.user.id }, select: { balance: true } });
+      const balance = wallet ? wallet.balance : 0;
+      if (balance + 1e-9 < checkout.totals.payNow) {
+        return domainError(res, 400, 'INSUFFICIENT_FUNDS', `Saldo insuficiente. Precisas de ${checkout.totals.payNow.toLocaleString('pt-MZ')} MT e tens ${balance.toLocaleString('pt-MZ')} MT.`, { required: checkout.totals.payNow, balance });
+      }
     }
-    const blockedSellers = await blockedAmong(req.user.id, [...new Set(products.map(p => p.sellerId))]);
-    if (blockedSellers.length) {
-      // Mensagem genérica: não revela quem bloqueou quem.
-      return forbidden(res, 'Não é possível encomendar a este vendedor.');
-    }
-
-    // Check stock
-    for (const item of items) {
-      const product = products.find(p => p.id === item.productId);
-      if (!product) return badRequest(res, `Produto ${item.productId} não encontrado.`);
-      if (product.stock < item.qty) return domainError(res, 400, 'PRODUCT_OUT_OF_STOCK', `Stock insuficiente para: ${product.name}`, { productId: product.id });
-    }
-
-    // Group items by seller (one order per seller)
-    const sellerGroups = {};
-    for (const item of items) {
-      const product = products.find(p => p.id === item.productId);
-      const sid = product.sellerId;
-      if (!sellerGroups[sid]) sellerGroups[sid] = { sellerId: sid, bazar: product.bazar, items: [] };
-      sellerGroups[sid].items.push({ product, qty: item.qty });
-    }
+    const autoPay = req.body.autoPay === undefined ? true : req.body.autoPay === true || req.body.autoPay === 'true';
 
     const createdOrders = [];
-
-    // Uma única query para saber quais destes vendedores têm Premium
-    // activo — usado para aplicar a taxa reduzida (ver premiumService).
-    const sellerIds = Object.keys(sellerGroups);
-    const premiumSellers = await prisma.user.findMany({
-      where: { id: { in: sellerIds }, isPremium: true },
-      select: { id: true, premiumExpiresAt: true }
-    });
-    const premiumSellerIds = new Set(
-      premiumSellers
-        .filter(u => u.premiumExpiresAt && new Date(u.premiumExpiresAt) > new Date())
-        .map(u => u.id)
-    );
+    const sellerGroups = {}; // para os alertas de stock (como antes)
 
     await prisma.$transaction(async (tx) => {
-      for (const group of Object.values(sellerGroups)) {
-        const subtotal = group.items.reduce((s, i) => s + i.product.price * i.qty, 0);
-        const baseFeeRate = group.bazar.feeRate || 2;
-        const feeRate = premiumService.effectiveFeeRate(baseFeeRate, premiumSellerIds.has(group.sellerId));
-        const feeAmount = calcFee(subtotal, feeRate);
+      for (const g of checkout.groups) {
+        const paymentLabel = mode === 'CARTEIRA' ? 'Carteira Bazares'
+          : mode === 'PARCELAS' ? `Parcelado em ${g.installments.count}x (Carteira Bazares)`
+            : (payment ? sanitize(payment) : 'Pagamento na entrega');
 
         const order = await tx.order.create({
           data: {
             buyerId: req.user.id,
-            sellerId: group.sellerId,
-            bazarId: group.bazar.id,
+            sellerId: g.sellerId,
+            bazarId: g.bazar.id,
             buyerName: buyerName ? sanitize(buyerName) : req.user.name,
             buyerPhone: sanitize(buyerPhone),
             address: sanitize(address),
             latitude: geo?.latitude ?? null,
             longitude: geo?.longitude ?? null,
-            payment: payment ? sanitize(payment) : 'Pagamento na entrega',
+            payment: paymentLabel,
+            paymentMode: mode,
             size: size ? sanitize(size) : null,
             color: color ? sanitize(color) : null,
             notes: notes ? sanitize(notes) : null,
-            subtotal,
-            feeRate,
-            feeAmount,
-            total: subtotal,
+            subtotal: g.subtotal,
+            discountAmount: g.discount,
+            couponCode: g.coupon ? g.coupon.code : null,
+            shippingFee: g.shippingFee,
+            shippingZone: g.delivery ? g.delivery.name : null,
+            feeRate: g.feeRate,
+            feeAmount: g.feeAmount,
+            total: g.total,
             items: {
-              create: group.items.map(i => ({
-                productId: i.product.id,
-                name: i.product.name,
-                price: i.product.price,
-                qty: i.qty,
-                // Guarda a imagem principal no momento da compra para
-                // histórico imutável (mesmo que o produto seja apagado depois)
-                imageUrl: i.product.images?.[0]?.url || null
+              create: g.lines.map((l) => ({
+                productId: l.productId,
+                name: l.name,
+                // Preço PAGO (já com promoção). `originalPrice` guarda o de tabela para mostrar a poupança
+                // — histórico imutável, mesmo que o produto mude ou seja apagado depois.
+                price: l.unitPrice,
+                originalPrice: l.onSale ? l.listPrice : null,
+                qty: l.qty,
+                imageUrl: l.imageUrl
               }))
             }
           },
           include: { items: true }
         });
 
+        await tx.orderStatusHistory.create({ data: { orderId: order.id, status: 'PENDENTE', actorId: req.user.id, actorRole: 'buyer' } });
+
+        if (g._internal.coupon) {
+          await couponSvc.redeemTx(tx, { coupon: g._internal.coupon, userId: req.user.id, orderId: order.id, amount: g.discount });
+        }
+
         // Decrement stock atomically: só decrementa se o stock disponível
         // neste preciso momento (dentro da transacção) ainda for suficiente.
         // Isto evita overselling quando dois pedidos concorrentes disputam
-        // o mesmo produto — a pré-checagem acima pode estar desactualizada
+        // o mesmo produto — a pré-checagem em buildCheckout pode estar desactualizada
         // por essa altura, esta é que é a garantia real.
-        for (const i of group.items) {
+        for (const l of g.lines) {
           const result = await tx.product.updateMany({
-            where: { id: i.product.id, stock: { gte: i.qty } },
-            data: { stock: { decrement: i.qty } }
+            where: { id: l.productId, stock: { gte: l.qty } },
+            data: { stock: { decrement: l.qty } }
           });
-          if (result.count === 0) {
-            throw new StockError(`Stock insuficiente para: ${i.product.name}`);
-          }
+          if (result.count === 0) throw new StockError(`Stock insuficiente para: ${l.name}`);
+        }
+
+        if (mode !== 'ENTREGA') {
+          await installmentSvc.createPlanTx(tx, {
+            order, mode, autoPay,
+            count: g.installments ? g.installments.count : 0,
+            schedule: g._internal.plan ? g._internal.plan.schedule : null,
+            setting: g._internal.plan ? g._internal.plan.setting : null
+          });
         }
 
         createdOrders.push(order);
+        sellerGroups[g.sellerId] = g;
       }
-    });
+    }, { timeout: 25000, maxWait: 10000 });
 
     // Notificações & emails DEPOIS de responder — não devem atrasar a
     // confirmação da compra. Um SMTP lento (comum, 1-3s por email) não
@@ -191,28 +198,29 @@ const placeOrder = async (req, res) => {
     })).catch((e) => logger.warn(`[Orders.placeOrder] Falha ao notificar vendedor(es): ${e.message}`));
 
     // Alertas de stock baixo / esgotado para o vendedor (só quando o stock cruza o limiar).
-    for (const group of Object.values(sellerGroups)) {
-      for (const { product, qty } of group.items) {
-        const before = product.stock;
-        const after = before - qty;
+    for (const g of Object.values(sellerGroups)) {
+      for (const l of g.lines) {
+        const before = l.product.stock;
+        const after = before - l.qty;
         if (after <= 0 && before > 0) {
-          notifSvc.push(group.sellerId, {
+          notifSvc.push(g.sellerId, {
             type: 'WARNING', title: 'Produto esgotado',
-            message: `"${product.name}" ficou sem stock.`, link: `/products/${product.id}`
+            message: `"${l.name}" ficou sem stock.`, link: `/products/${l.productId}`
           });
         } else if (after > 0 && after <= LOW_STOCK_THRESHOLD && before > LOW_STOCK_THRESHOLD) {
-          notifSvc.push(group.sellerId, {
+          notifSvc.push(g.sellerId, {
             type: 'WARNING', title: 'Stock baixo',
-            message: `"${product.name}" tem apenas ${after} unidade(s) em stock.`, link: `/products/${product.id}`
+            message: `"${l.name}" tem apenas ${after} unidade(s) em stock.`, link: `/products/${l.productId}`
           });
         }
       }
     }
 
-    logger.info(`[Orders] ${createdOrders.length} order(s) placed by ${req.user.id}`);
-    return created(res, { orders: createdOrders }, 'Encomenda realizada com sucesso.');
+    logger.info(`[Orders] ${createdOrders.length} order(s) placed by ${req.user.id} (${mode})`);
+    return created(res, { orders: createdOrders, checkout: checkoutSvc.publicQuote(checkout) }, 'Encomenda realizada com sucesso.');
   } catch (err) {
     if (err instanceof StockError) return domainError(res, 400, 'PRODUCT_OUT_OF_STOCK', err.message);
+    if (replyKnown(res, err)) return;
     logger.error(`[Orders.placeOrder] ${err.message}`);
     return serverError(res);
   }
@@ -289,7 +297,10 @@ const getOne = async (req, res) => {
         buyer: { select: { id: true, name: true, phone: true, email: true } },
         seller: { select: { id: true, name: true, phone: true, email: true } },
         review: true,
-        transaction: true
+        transaction: true,
+        statusHistory: { orderBy: { createdAt: 'asc' }, select: { status: true, actorRole: true, note: true, createdAt: true } },
+        installmentPlan: { include: { installments: { orderBy: { number: 'asc' } } } },
+        dispute: { select: { id: true, status: true, reason: true, createdAt: true } }
       }
     });
 
@@ -381,12 +392,18 @@ const updateStatus = async (req, res) => {
     // síncrona e ambos aplicar os seus efeitos — cancelamento duplo
     // (stock restaurado 2x) ou entrega processada 2x.
     let updated;
+    let cancelledPlan = null;
     await prisma.$transaction(async (tx) => {
       const claim = await tx.order.updateMany({
         where: { id: order.id, status: order.status },
         data: updateData
       });
       if (claim.count === 0) throw new InvalidTransitionError();
+
+      // Cronologia (ecrã de acompanhamento da encomenda) — na MESMA transacção do claim
+      await tx.orderStatusHistory.create({
+        data: { orderId: order.id, status, actorId: req.user.id, actorRole: actor, note: status === 'CANCELADA' ? cleanReason : null }
+      });
 
       // On ENTREGUE: calculate fee, update bazar, create transaction, bump
       // product sales — tudo dentro da MESMA transacção que o claim, para
@@ -398,7 +415,9 @@ const updateStatus = async (req, res) => {
           tx.user.findUnique({ where: { id: order.sellerId }, select: { isPremium: true, premiumExpiresAt: true } })
         ]);
         const sellerPremiumActive = premiumService.isActive(seller);
-        const fee = calcFee(order.total, premiumService.effectiveFeeRate(bazar?.feeRate || 2, sellerPremiumActive));
+        // A comissão incide sobre os ARTIGOS (já com desconto), nunca sobre a taxa de entrega.
+        const feeBase = Math.max(0, order.total - (order.shippingFee || 0));
+        const fee = calcFee(feeBase, premiumService.effectiveFeeRate(bazar?.feeRate || 2, sellerPremiumActive));
         const orderItems = await tx.orderItem.findMany({ where: { orderId: order.id } });
         const itemsLabel = orderItems.map(i => `${i.name} ×${i.qty}`).join(', ') || order.id;
 
@@ -428,6 +447,10 @@ const updateStatus = async (req, res) => {
       // graças ao `claim.count === 0` acima) nunca possa restaurar o
       // mesmo stock duas vezes.
       if (status === 'CANCELADA') {
+        // Devolve a utilização do cupão e cancela as parcelas por pagar (o reembolso do que já foi pago
+        // é feito DEPOIS do commit — um vendedor sem saldo não pode impedir o cancelamento).
+        await couponSvc.revertForOrderTx(tx, order.id);
+        cancelledPlan = await installmentSvc.cancelPlanTx(tx, order.id);
         const items = await tx.orderItem.findMany({ where: { orderId: order.id } });
         for (const item of items) {
           await tx.product.update({
@@ -447,6 +470,11 @@ const updateStatus = async (req, res) => {
 
       updated = await tx.order.findUnique({ where: { id: order.id } });
     });
+
+    // Reembolso do que o comprador já pagou com a carteira (idempotente; fica pendente se o vendedor não tiver saldo)
+    if (cancelledPlan && cancelledPlan.planId && cancelledPlan.refundable > 0) {
+      await installmentSvc.refundPlan(cancelledPlan.planId, { reason: 'encomenda cancelada' }).catch((e) => logger.error(`[Orders.updateStatus] refund: ${e.message}`));
+    }
 
     // Check fee limit (fora da transacção — leitura informativa, não crítica)
     if (status === 'ENTREGUE') {

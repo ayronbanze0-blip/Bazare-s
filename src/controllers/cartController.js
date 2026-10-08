@@ -6,6 +6,7 @@ const logger = require('../utils/logger');
 const { shouldCount } = require('../utils/dedupWindow');
 
 const prisma = require('../config/database');
+const { attachPromotions } = require('../services/couponService');
 
 // ─── Get my cart ───────────────────────────────────────────────────
 const getCart = async (req, res) => {
@@ -20,10 +21,14 @@ const getCart = async (req, res) => {
       orderBy: { createdAt: 'desc' }
     });
 
-    const validItems = items.filter(i => i.product && i.product.active);
-    const total = validItems.reduce((s, i) => s + i.product.price * i.qty, 0);
+    const valid = items.filter(i => i.product && i.product.active);
+    // Preços com promoção em vigor (a fonte de verdade do que se paga continua a ser o checkout — isto é só a vista do carrinho)
+    const priced = await attachPromotions(valid.map(i => i.product), { viewerId: req.user.id });
+    const validItems = valid.map((i, idx) => ({ ...i, product: priced[idx], unitPrice: priced[idx].effectivePrice ?? priced[idx].price }));
+    const total = Math.round(validItems.reduce((s, i) => s + i.unitPrice * i.qty, 0) * 100) / 100;
+    const listTotal = Math.round(validItems.reduce((s, i) => s + (i.product.listPrice ?? i.product.price) * i.qty, 0) * 100) / 100;
 
-    return ok(res, { items: validItems, total });
+    return ok(res, { items: validItems, total, listTotal, savings: Math.round((listTotal - total) * 100) / 100 });
   } catch (err) {
     logger.error(`[Cart.getCart] ${err.message}`);
     return serverError(res);

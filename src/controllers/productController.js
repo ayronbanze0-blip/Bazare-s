@@ -10,6 +10,7 @@ const uploadSvc = require('../services/uploadService');
 const aiSvc = require('../services/aiService');
 const { uniqueProductSlug } = require('../utils/slugify');
 const premiumService = require('../services/premiumService');
+const { attachPromotions } = require('../services/couponService');
 const notificationSvc = require('../services/notificationService');
 const { attachProductEngagement, attachFollowState } = require('../services/feedEngagementService');
 const affinitySvc = require('../services/affinityService');
@@ -93,7 +94,7 @@ const list = async (req, res) => {
       const total = withDistance.length;
       const products = withDistance.slice(skip, skip + take);
       const withFav = await attachFavorites(products, req.user?.id);
-      return ok(res, { products: await attachProductEngagement(withFav, req.user?.id), meta: paginateMeta(total, page, limit) });
+      return ok(res, { products: await attachPromotions(await attachProductEngagement(withFav, req.user?.id), { viewerId: req.user?.id }), meta: paginateMeta(total, page, limit) });
     }
 
     // No sort 'new' (o mais usado — é o default da listagem e da página
@@ -126,7 +127,7 @@ const list = async (req, res) => {
     ]);
 
     const withEngagement = await attachProductEngagement(await attachFavorites(products, req.user?.id), req.user?.id);
-    return ok(res, { products: await attachFollowState(withEngagement, req.user?.id), meta: paginateMeta(total, page, limit) });
+    return ok(res, { products: await attachPromotions(await attachFollowState(withEngagement, req.user?.id), { viewerId: req.user?.id }), meta: paginateMeta(total, page, limit) });
   } catch (err) {
     logger.error(`[Products.list] ${err.message}`);
     return serverError(res);
@@ -192,7 +193,8 @@ const getOne = async (req, res) => {
       isFavorite = !!fav;
     }
 
-    return ok(res, { product: { ...product, isFavorite } });
+    const [withPromo] = await attachPromotions([{ ...product, isFavorite }], { viewerId: req.user?.id });
+    return ok(res, { product: withPromo });
   } catch (err) {
     logger.error(`[Products.getOne] ${err.message}`);
     return serverError(res);
@@ -670,7 +672,7 @@ const featured = async (req, res) => {
         bazar: { select: { id: true, name: true, slug: true } }
       }
     });
-    return ok(res, { products: await attachProductEngagement(await attachFavorites(products, req.user?.id), req.user?.id) });
+    return ok(res, { products: await attachPromotions(await attachProductEngagement(await attachFavorites(products, req.user?.id), req.user?.id), { viewerId: req.user?.id }) });
   } catch (err) {
     logger.error(`[Products.featured] ${err.message}`);
     return serverError(res);
@@ -701,7 +703,7 @@ const related = async (req, res) => {
         bazar: { select: { name: true, slug: true } }
       }
     });
-    return ok(res, { products: await attachProductEngagement(await attachFavorites(products, req.user?.id), req.user?.id) });
+    return ok(res, { products: await attachPromotions(await attachProductEngagement(await attachFavorites(products, req.user?.id), req.user?.id), { viewerId: req.user?.id }) });
   } catch (err) {
     logger.error(`[Products.related] ${err.message}`);
     return serverError(res);
