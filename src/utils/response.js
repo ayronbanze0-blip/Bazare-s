@@ -54,9 +54,14 @@ const tooMany = (res, message = 'Demasiadas tentativas. Tente mais tarde.') =>
 const serverError = (res, message = 'Erro interno do servidor') =>
   res.status(500).json(errorBody(res, 'INTERNAL_ERROR', message));
 
+// Erro de regra de negócio com código estável (ex.: PRODUCT_OUT_OF_STOCK) e `extra` opcional no topo.
+// Usado por orderController — estava importado mas nunca definido (TypeError ao falhar o stock).
+const domainError = (res, status = 400, code = 'BAD_REQUEST', message = 'Pedido inválido', extra = {}) =>
+  res.status(status).json(errorBody(res, code, message, extra));
+
 const validationError = (res, errors) =>
   res.status(422).json(errorBody(res, 'VALIDATION_ERROR', 'Erro de validação', {
     errors: errors.map(e => ({ field: e.path, message: e.msg }))
   }));
 
-module.exports = { errorBody, ok, created, accepted, noContent, badRequest, unauthorized, forbidden, notFound, conflict, tooMany, serverError, validationError };
+module.exports = { errorBody, ok, created, accepted, noContent, badRequest, unauthorized, forbidden, notFound, conflict, tooMany, serverError, validationError, domainError };
