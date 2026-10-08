@@ -17,6 +17,7 @@ const auditMw = require('./middleware/audit');
 const { scheduleStoryCleanup } = require('./jobs/cleanupExpiredStories');
 const { schedulePremiumDowngrade } = require('./jobs/downgradeExpiredPremium');
 const { scheduleVideoJobRecovery } = require('./jobs/recoverStuckVideoJobs');
+const { scheduleCommerceJobs } = require('./jobs/commerceJobs');
 
 const PORT = Number(process.env.PORT) || 3001;
 const prisma = require('./config/database');
@@ -91,6 +92,7 @@ auditMw.init(prisma);
 scheduleStoryCleanup(prisma);
 schedulePremiumDowngrade(prisma);
 scheduleVideoJobRecovery(prisma);
+scheduleCommerceJobs(); // parcelas (avisos/débito automático/multas), promoções terminadas, limpeza de visualizações
 
 // ─── Database connection check ────────────────────────────────────
 const startServer = async () => {
