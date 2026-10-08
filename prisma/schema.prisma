@@ -152,6 +152,19 @@ model User {
   communityMemberships  CommunityMember[]
   communityPosts        CommunityPost[]
 
+  // Fase 5 — descontos, morada, parcelas, disputas, suporte, histórico de visualizações
+  coupons               Coupon[]            @relation("SellerCoupons")
+  couponRedemptions     CouponRedemption[]  @relation("CouponRedemptions")
+  addresses             Address[]
+  installmentSetting    InstallmentSetting?
+  plansAsBuyer          InstallmentPlan[]   @relation("PlansAsBuyer")
+  plansAsSeller         InstallmentPlan[]   @relation("PlansAsSeller")
+  disputesAsBuyer       OrderDispute[]      @relation("DisputesAsBuyer")
+  disputesAsSeller      OrderDispute[]      @relation("DisputesAsSeller")
+  supportTickets        SupportTicket[]     @relation("TicketOwner")
+  supportMessages       SupportMessage[]    @relation("SupportAuthor")
+  viewHistory           ViewHistory[]
+
   @@unique([provider, providerId])
   @@index([email])
   @@index([username])
@@ -271,6 +284,7 @@ model Bazar {
   userAffinities UserAffinity[]
   stories     Story[]
   reels       Reel[]
+  deliveryZones DeliveryZone[]
 
   @@index([category])
   @@index([active])
@@ -335,6 +349,9 @@ model Product {
   // Contadores extra (analytics) numa tabela à parte — assim NENHUMA coluna nova é acrescentada a
   // Product e as leituras de produtos não dependem desta migração.
   stat           ProductStat?
+  // Promoção activa/agendada (preço promocional com validade) — tabela à parte pelo mesmo motivo de ProductStat
+  promotion      ProductPromotion?
+  viewedBy       ViewHistory[]
 
   @@index([bazarId])
   @@index([category])
@@ -860,6 +877,14 @@ model Order {
   feeAmount   Float       @default(0)
   total       Float
 
+  // Descontos, entrega e forma de pagamento (Fase 5). `subtotal` é o valor bruto dos artigos
+  // (já com preços promocionais); `total = subtotal - discountAmount + shippingFee`.
+  discountAmount Float    @default(0)
+  couponCode     String?
+  shippingFee    Float    @default(0)
+  shippingZone   String?
+  paymentMode    String   @default("ENTREGA") // ENTREGA | CARTEIRA | PARCELAS
+
   rated       Boolean     @default(false)
   deliveredAt DateTime?
   cancelledAt DateTime?
@@ -871,6 +896,10 @@ model Order {
   items       OrderItem[]
   review      Review?
   transaction Transaction?
+  couponRedemptions CouponRedemption[]
+  installmentPlan   InstallmentPlan?
+  statusHistory     OrderStatusHistory[]
+  dispute           OrderDispute?
 
   @@index([buyerId])
   @@index([sellerId])
@@ -886,6 +915,8 @@ model OrderItem {
   product   Product @relation(fields: [productId], references: [id])
   name      String
   price     Float
+  // Preço de tabela antes de promoção (null = sem promoção no momento da compra)
+  originalPrice Float?
   qty       Int
   imageUrl  String?
 
@@ -918,6 +949,9 @@ model Review {
   rating     Int
   recommend  Boolean?
   comment    String?  @db.Text
+  // Resposta pública do vendedor
+  sellerReply     String?   @db.Text
+  sellerRepliedAt DateTime?
   createdAt  DateTime @default(now())
 
   @@index([sellerId])
@@ -1273,6 +1307,10 @@ enum WalletTxType {
   CREDITO_COMISSAO
   AJUSTE_ADMIN
   ESTORNO            // devolução de um levantamento rejeitado/cancelado (crédito)
+  PAGAMENTO_COMPRA   // comprador paga uma encomenda com a carteira (débito) — não conta para o limite diário de transferências
+  RECEBIMENTO_VENDA  // vendedor recebe o pagamento de uma encomenda (crédito)
+  REEMBOLSO_COMPRA   // comprador recebe de volta (crédito): encomenda cancelada / disputa resolvida a seu favor
+  REEMBOLSO_VENDA    // vendedor devolve ao comprador (débito)
 }
 
 enum WalletTxStatus {
@@ -1747,4 +1785,368 @@ model WebhookDelivery {
 
   @@index([subscriptionId])
   @@index([status])
+}
+
+// ═════════════════════════════════════════════════════════════════
+// FASE 5 — APP COMPLETO
+// ═════════════════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────
+// DESCONTOS: cupões e promoções
+// ─────────────────────────────────────────────
+enum CouponType {
+  PERCENT
+  FIXED
+}
+
+// Cupão criado por um vendedor — só desconta artigos DESSE vendedor (quem financia o desconto é quem o cria).
+model Coupon {
+  id             String     @id @default(uuid())
+  sellerId       String
+  seller         User       @relation("SellerCoupons", fields: [sellerId], references: [id], onDelete: Cascade)
+  code           String     @unique          // sempre MAIÚSCULAS
+  description    String?
+  type           CouponType
+  value          Float                       // PERCENT: 1–90 (%) | FIXED: valor em MT
+  minOrderAmount Float      @default(0)      // mínimo (dos artigos elegíveis) para aplicar
+  maxDiscount    Float?                      // tecto do desconto (útil em PERCENT)
+  usageLimit     Int?                        // total de utilizações (null = ilimitado)
+  perUserLimit   Int        @default(1)      // utilizações por comprador
+  usedCount      Int        @default(0)
+  firstOrderOnly Boolean    @default(false)  // só para quem ainda não fez nenhuma compra na plataforma
+  productIds     String[]                    // vazio = todos os produtos do vendedor
+  startsAt       DateTime?
+  expiresAt      DateTime?
+  active         Boolean    @default(true)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  redemptions    CouponRedemption[]
+
+  @@index([sellerId, active])
+}
+
+enum CouponRedemptionStatus {
+  APPLIED
+  REVERTED
+}
+
+model CouponRedemption {
+  id         String                 @id @default(uuid())
+  couponId   String
+  coupon     Coupon                 @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User                   @relation("CouponRedemptions", fields: [userId], references: [id], onDelete: Cascade)
+  orderId    String
+  order      Order                  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  amount     Float
+  status     CouponRedemptionStatus @default(APPLIED)
+  createdAt  DateTime               @default(now())
+  revertedAt DateTime?
+
+  @@unique([couponId, orderId])
+  @@index([couponId, userId, status])
+  @@index([orderId])
+}
+
+// Promoção de produto (preço promocional com validade). Um por produto.
+model ProductPromotion {
+  productId     String   @id
+  product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sellerId      String
+  salePrice     Float
+  originalPrice Float                    // preço de tabela quando a promoção foi criada
+  label         String?
+  startsAt      DateTime @default(now())
+  endsAt        DateTime
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([active, endsAt])
+  @@index([sellerId])
+}
+
+// ─────────────────────────────────────────────
+// ENTREGA: zonas/taxas e livro de moradas
+// ─────────────────────────────────────────────
+model DeliveryZone {
+  id        String   @id @default(uuid())
+  bazarId   String
+  bazar     Bazar    @relation(fields: [bazarId], references: [id], onDelete: Cascade)
+  name      String                       // ex.: "Maputo cidade", "Levantar na loja"
+  fee       Float    @default(0)
+  freeAbove Float?                       // entrega grátis a partir deste valor (após descontos)
+  etaDays   Int?                         // prazo estimado em dias
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([bazarId, active])
+}
+
+model Address {
+  id            String   @id @default(uuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label         String                   // "Casa", "Trabalho"…
+  recipientName String
+  phone         String
+  line          String                   // morada completa em texto
+  city          String?
+  latitude      Float?
+  longitude     Float?
+  notes         String?
+  isDefault     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([userId, isDefault])
+}
+
+// Cronologia de estados de uma encomenda (alimenta o ecrã de acompanhamento)
+model OrderStatusHistory {
+  id        String      @id @default(uuid())
+  orderId   String
+  order     Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  status    OrderStatus
+  actorId   String?
+  actorRole String?                      // buyer | seller | admin | system
+  note      String?
+  createdAt DateTime    @default(now())
+
+  @@index([orderId, createdAt])
+}
+
+// ─────────────────────────────────────────────
+// PAGAMENTO COM A CARTEIRA E EM PARCELAS
+// ─────────────────────────────────────────────
+// Definições do vendedor para vender a prestações (desligado por omissão).
+model InstallmentSetting {
+  sellerId        String   @id
+  seller          User     @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  enabled         Boolean  @default(false)
+  maxInstallments Int      @default(3)       // nº máximo de parcelas (sem contar a entrada)
+  minOrderAmount  Float    @default(500)     // valor mínimo da encomenda para permitir parcelas
+  downPaymentPct  Float    @default(30)      // entrada mínima (%), paga no checkout
+  interestPct     Float    @default(0)       // juro simples (%) sobre o valor financiado
+  frequencyDays   Int      @default(30)      // intervalo entre parcelas
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+enum InstallmentPlanStatus {
+  ACTIVE
+  COMPLETED
+  DEFAULTED
+  CANCELLED
+}
+
+enum InstallmentStatus {
+  PENDENTE
+  PAGA
+  ATRASADA
+  CANCELADA
+}
+
+// 1 plano por encomenda paga com a carteira. mode=CARTEIRA → só a "entrada" (100%); mode=PARCELAS → entrada + N parcelas.
+model InstallmentPlan {
+  id                  String                @id @default(uuid())
+  orderId             String                @unique
+  order               Order                 @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  buyerId             String
+  buyer               User                  @relation("PlansAsBuyer", fields: [buyerId], references: [id])
+  sellerId            String
+  seller              User                  @relation("PlansAsSeller", fields: [sellerId], references: [id])
+  mode                String                // CARTEIRA | PARCELAS
+  count               Int                   // nº de parcelas (excluindo a entrada)
+  frequencyDays       Int                   @default(30)
+  interestPct         Float                 @default(0)
+  principal           Float                 // total da encomenda
+  totalAmount         Float                 // a pagar no total (inclui juros e multas)
+  paidAmount          Float                 @default(0)
+  refundedAmount      Float                 @default(0)
+  refundPendingAmount Float                 @default(0) // reembolso por fazer (vendedor sem saldo)
+  autoPay             Boolean               @default(true)
+  status              InstallmentPlanStatus @default(ACTIVE)
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+
+  installments        Installment[]
+
+  @@index([buyerId, status])
+  @@index([sellerId, status])
+}
+
+model Installment {
+  id                   String            @id @default(uuid())
+  planId               String
+  plan                 InstallmentPlan   @relation(fields: [planId], references: [id], onDelete: Cascade)
+  number               Int                                 // 0 = entrada, 1..N = parcelas
+  amount               Float
+  dueDate              DateTime
+  status               InstallmentStatus @default(PENDENTE)
+  lateFee              Float             @default(0)
+  paidAt               DateTime?
+  reminderSentAt       DateTime?
+  overdueNotifiedAt    DateTime?
+  lastAutoPayAttemptAt DateTime?
+  createdAt            DateTime          @default(now())
+
+  @@unique([planId, number])
+  @@index([status, dueDate])
+}
+
+// ─────────────────────────────────────────────
+// DISPUTAS / DEVOLUÇÕES (pós-entrega)
+// ─────────────────────────────────────────────
+enum DisputeStatus {
+  OPEN
+  SELLER_RESPONDED
+  RESOLVED_REFUND
+  RESOLVED_REJECTED
+  CANCELLED
+}
+
+model OrderDispute {
+  id             String        @id @default(uuid())
+  orderId        String        @unique
+  order          Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  buyerId        String
+  buyer          User          @relation("DisputesAsBuyer", fields: [buyerId], references: [id])
+  sellerId       String
+  seller         User          @relation("DisputesAsSeller", fields: [sellerId], references: [id])
+  reason         String        // NOT_RECEIVED | NOT_AS_DESCRIBED | DAMAGED | WRONG_ITEM | OTHER
+  description    String        @db.Text
+  evidenceUrls   String[]
+  status         DisputeStatus @default(OPEN)
+  sellerResponse String?       @db.Text
+  respondedAt    DateTime?
+  resolution     String?       @db.Text
+  refundAmount   Float         @default(0)
+  restock        Boolean       @default(false)
+  resolvedById   String?
+  resolvedAt     DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([status, createdAt])
+  @@index([buyerId])
+  @@index([sellerId])
+}
+
+// ─────────────────────────────────────────────
+// SUPORTE (tickets)
+// ─────────────────────────────────────────────
+enum TicketStatus {
+  OPEN
+  PENDING_USER
+  RESOLVED
+  CLOSED
+}
+
+model SupportTicket {
+  id            String          @id @default(uuid())
+  userId        String
+  user          User            @relation("TicketOwner", fields: [userId], references: [id], onDelete: Cascade)
+  subject       String
+  category      String          // ORDER | PAYMENT | ACCOUNT | PRODUCT | TECHNICAL | OTHER
+  orderId       String?
+  status        TicketStatus    @default(OPEN)
+  lastMessageAt DateTime        @default(now())
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  messages      SupportMessage[]
+
+  @@index([userId, status])
+  @@index([status, lastMessageAt])
+}
+
+model SupportMessage {
+  id          String        @id @default(uuid())
+  ticketId    String
+  ticket      SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  authorId    String
+  author      User          @relation("SupportAuthor", fields: [authorId], references: [id])
+  isStaff     Boolean       @default(false)
+  body        String        @db.Text
+  attachments String[]
+  createdAt   DateTime      @default(now())
+
+  @@index([ticketId, createdAt])
+}
+
+// ─────────────────────────────────────────────
+// BANNERS (gestão de conteúdo da app)
+// ─────────────────────────────────────────────
+model Banner {
+  id          String    @id @default(uuid())
+  title       String
+  subtitle    String?
+  imageUrl    String
+  linkType    String    @default("NONE")      // NONE | PRODUCT | BAZAR | CATEGORY | URL
+  linkValue   String?
+  placement   String    @default("HOME_TOP")  // HOME_TOP | HOME_MID | EXPLORE | CHECKOUT
+  audience    String    @default("ALL")       // ALL | BUYER | SELLER
+  position    Int       @default(0)
+  startsAt    DateTime?
+  endsAt      DateTime?
+  active      Boolean   @default(true)
+  impressions Int       @default(0)
+  clicks      Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([placement, active, position])
+}
+
+// ─────────────────────────────────────────────
+// VISUALIZAÇÕES (contagem agregada, sem guardar IPs)
+// ─────────────────────────────────────────────
+enum ViewTargetType {
+  PRODUCT
+  BAZAR
+  REEL
+  POST
+  PROFILE
+}
+
+// Total e visitantes únicos por alvo e por dia (dia civil de Maputo).
+model ViewDaily {
+  targetType ViewTargetType
+  targetId   String
+  day        DateTime       @db.Date
+  views      Int            @default(0)
+  uniques    Int            @default(0)
+
+  @@id([targetType, targetId, day])
+  @@index([targetId, day])
+  @@index([day])
+}
+
+// Marca "este visitante já foi contado hoje neste alvo" → permite contar únicos. A chave é um hash
+// (nunca o IP). Linhas com mais de ~40 dias são apagadas pelo job de manutenção.
+model ViewVisitor {
+  targetType ViewTargetType
+  targetId   String
+  day        DateTime       @db.Date
+  visitorKey String
+
+  @@id([targetType, targetId, day, visitorKey])
+  @@index([day])
+}
+
+// "Vistos recentemente" do comprador
+model ViewHistory {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId    String
+  product      Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  viewCount    Int      @default(1)
+  lastViewedAt DateTime @default(now())
+
+  @@unique([userId, productId])
+  @@index([userId, lastViewedAt])
 }
