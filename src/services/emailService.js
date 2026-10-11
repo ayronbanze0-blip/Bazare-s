@@ -373,7 +373,7 @@ const shortRef = (id) => String(id || '').slice(-8).toUpperCase();
 
 const sendWelcomeEmail = (to, name, role) => {
   const first = esc(String(name || '').trim().split(/\s+/)[0] || 'bem-vindo');
-  const isSeller = role === 'SELLER' || role === 'REVENDEDOR';
+  const isSeller = role !== 'ADMIN'; // conta única: todos podem vender
   const list = isSeller
     ? [
         ['Complete o perfil da sua loja', 'Foto, localização e contactos ajudam os clientes a confiar em si.'],

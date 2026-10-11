@@ -76,6 +76,33 @@ const credit = async (tx, { userId, amount, type, description, referenceType = n
   return { wallet: updated, transaction: walletTx };
 };
 
+// ─── RETENÇÃO ATÉ À ENTREGA ──────────────────────────────────────────
+// Conta única: qualquer pessoa pode vender, por isso o dinheiro de uma venda paga com
+// a carteira só fica DISPONÍVEL quando a encomenda é entregue (confirmada pelo comprador, ou
+// automaticamente pelo job de encomendas). Antes disso o valor já está no saldo (por isso
+// reembolsos e cancelamentos continuam a funcionar), mas não pode sair: levantar,
+// transferir ou gastar. Calculado em cada pedido — nada para sincronizar.
+const OPEN_ORDER_STATUSES = ['PENDENTE', 'ACEITE', 'EM_PREPARACAO', 'EM_ENTREGA'];
+const HELD_ENFORCED_TYPES = new Set(['DEBITO_LEVANTAMENTO', 'TRANSFERENCIA_ENVIADA', 'PAGAMENTO_COMPRA']);
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+/** Valor do saldo retido (vendas pagas pela carteira de encomendas ainda não entregues). */
+const heldAmount = async (db, userId, walletId, balance) => {
+  const installments = await db.installment.findMany({
+    where: { plan: { order: { sellerId: userId, status: { in: OPEN_ORDER_STATUSES } } } },
+    select: { id: true }
+  });
+  if (!installments.length) return 0;
+  const agg = await db.walletTransaction.aggregate({
+    _sum: { amount: true },
+    where: {
+      walletId, type: 'RECEBIMENTO_VENDA', status: 'CONCLUIDA', referenceType: 'INSTALLMENT',
+      referenceId: { in: installments.map((i) => i.id) }
+    }
+  });
+  return Math.min(round2(agg._sum.amount || 0), round2(balance));
+};
+
 /**
  * Debita uma wallet. Lança InsufficientFundsError se o saldo for
  * insuficiente. Deve ser chamado com `tx` dentro de uma transacção.
@@ -94,12 +121,18 @@ const debit = async (tx, { userId, amount, type, description, referenceType = nu
   // abaixo faz o Postgres verificar e decrementar num único passo atómico —
   // impossível dois pedidos concorrentes "passarem" ao mesmo tempo além do
   // saldo disponível.
+  const held = HELD_ENFORCED_TYPES.has(type) ? await heldAmount(tx, userId, wallet.id, wallet.balance) : 0;
   const result = await tx.wallet.updateMany({
-    where: { id: wallet.id, balance: { gte: amount } },
+    where: { id: wallet.id, balance: { gte: round2(amount + held) } },
     data: { balance: { decrement: amount } }
   });
 
   if (result.count === 0) {
+    if (held > 0 && wallet.balance >= amount) {
+      const free = Math.max(0, round2(wallet.balance - held));
+      throw new InsufficientFundsError(
+        `Saldo disponível: ${free.toLocaleString('pt-MZ')} MT. ${held.toLocaleString('pt-MZ')} MT das tuas vendas ficam retidos até à entrega das encomendas.`);
+    }
     throw new InsufficientFundsError(`Saldo insuficiente. Disponível: ${wallet.balance.toLocaleString('pt-MZ')} MT.`);
   }
 
@@ -206,6 +239,7 @@ module.exports = {
   getBalance,
   credit,
   debit,
+  heldAmount,
   transfer,
   getStatement,
   getPlatformAdmin

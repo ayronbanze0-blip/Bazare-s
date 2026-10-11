@@ -186,8 +186,12 @@ const getSummary = async (userId) => {
   }
 
   const lockedMin = rules.pinLockRemainingMin(wallet.pinLockedUntil, now);
+  // Vendas pagas pela carteira só ficam disponíveis quando a encomenda é entregue.
+  const held = await walletService.heldAmount(prisma, userId, wallet.id, wallet.balance);
   return {
     balance: wallet.balance,
+    held,
+    available: Math.max(0, rules.round2(wallet.balance - held)),
     hasPin: Boolean(wallet.pinHash),
     pinLockedMinutes: lockedMin,
     month: { in: rules.round2(monthIn), out: rules.round2(monthOut) },

@@ -256,6 +256,25 @@ const newFollower = (sellerId, followerName, bazarId, followerId) => {
   });
 };
 
+const friendRequest = (addresseeId, requesterName, requesterId) => {
+  // Dedup: pedir/cancelar/pedir de novo não gera uma notificação por cada vez.
+  if (requesterId && !shouldCount('notif-friend-req', requesterId, addresseeId, 10 * 60 * 1000)) return;
+  return push(addresseeId, {
+    type: 'SOCIAL',
+    title: 'Pedido de amizade',
+    message: `${requesterName} quer ser teu amigo.`,
+    link: 'amigos.html?tab=pedidos'
+  });
+};
+
+const friendAccepted = (requesterId, accepterName, accepterId) =>
+  push(requesterId, {
+    type: 'SOCIAL',
+    title: 'Pedido aceite',
+    message: `${accepterName} aceitou o teu pedido de amizade.`,
+    link: 'amigos.html'
+  });
+
 const commentOnContent = (ownerId, commenterName, snippet, link) =>
   push(ownerId, {
     type: 'SOCIAL',
@@ -291,6 +310,6 @@ const mentioned = (userId, authorName, link) =>
 module.exports = {
   init, push, warmPrefs, invalidatePrefs, shouldEmail, orderReceived, orderStatusChanged,
   newMessage, feeAlert, accountSuspended, accountVerified, broadcastToRole,
-  newProductFromFollowed, backInStock, newFollower, commentOnContent, commentReply, commentLiked,
+  newProductFromFollowed, backInStock, newFollower, friendRequest, friendAccepted, commentOnContent, commentReply, commentLiked,
   mentioned
 };
