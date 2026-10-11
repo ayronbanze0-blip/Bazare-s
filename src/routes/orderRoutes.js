@@ -3,7 +3,7 @@
 const router = require('express').Router();
 const { body } = require('express-validator');
 const ctrl = require('../controllers/orderController');
-const { authenticate, isBuyer } = require('../middleware/auth');
+const { authenticate } = require('../middleware/auth');
 const { orderLimiter } = require('../middleware/rateLimiter');
 const { resolveAddressId } = require('../controllers/commerceController');
 
