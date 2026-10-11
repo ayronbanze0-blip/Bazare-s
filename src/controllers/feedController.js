@@ -10,6 +10,7 @@ const { shapePoll } = require('../services/pollService');
 const commentService = require('../services/commentService');
 const notifSvc = require('../services/notificationService');
 const mentionSvc = require('../services/mentionService');
+const friendSvc = require('../services/friendService');
 const blockSvc = require('../services/blockService');
 const { interleaveByType } = require('../utils/feedMix');
 const communitySvc = require('../services/communityService');
@@ -152,7 +153,18 @@ const list = async (req, res) => {
     const followedSet = new Set(followedIds);
     const onlyFollowing = scope === 'following';
     if (onlyFollowing && !followedIds.length) return ok(res, { items: [], meta: { hasMore: false, nextCursor: null } });
-    const base = { ...visibleOwner, createdAt: { lte: t0 }, ...(onlyFollowing && { bazarId: { in: followedIds } }) };
+
+    // Amigos (amizade mútua): separador "Amigos" = publicações dos amigos e as tuas; no "Para ti" só reforça o ranking.
+    const friendIds = userId ? await stage('amigos', () => friendSvc.friendIdsOf(userId), []) : [];
+    const friendSet = new Set(friendIds);
+    const onlyFriends = scope === 'friends';
+    if (onlyFriends && !friendIds.length) return ok(res, { items: [], meta: { hasMore: false, nextCursor: null } });
+
+    const base = {
+      ...visibleOwner, createdAt: { lte: t0 },
+      ...(onlyFollowing && { bazarId: { in: followedIds } }),
+      ...(onlyFriends && { sellerId: { in: [...friendIds, userId] } })
+    };
 
     // Afinidade (0..1) por loja.
     const affRows = userId
@@ -196,6 +208,7 @@ const list = async (req, res) => {
         + Math.exp(-ageH / FRESH_HALF_H)                               // novidade
         + 0.8 * (affMap.get(row.bazarId) || 0);                        // afinidade
       if (followedSet.has(row.bazarId)) sc += 0.35;
+      if (friendSet.has(row.seller?.id)) sc += 0.3;
       if (c.featured) sc += 0.3;
       if (row.seller?.isPremium) sc += 0.1;
       if (userId && row.seller?.id === userId && now - created < OWN_BOOST_MS) sc += 100; // a tua publicação nova: topo

@@ -10,7 +10,6 @@ const uploadSvc = require('../services/uploadService');
 const aiSvc = require('../services/aiService');
 const { uniqueProductSlug } = require('../utils/slugify');
 const premiumService = require('../services/premiumService');
-const sellerTrust = require('../services/sellerTrustService');
 const { attachPromotions } = require('../services/couponService');
 const notificationSvc = require('../services/notificationService');
 const { attachProductEngagement, attachFollowState } = require('../services/feedEngagementService');
@@ -211,15 +210,6 @@ const create = async (req, res) => {
     const bazar = await prisma.bazar.findUnique({ where: { sellerId: req.user.id } });
     if (!bazar) return badRequest(res, 'Crie o seu Bazar antes de adicionar produtos.');
     if (!bazar.active) return forbidden(res, 'O seu Bazar está inactivo.');
-
-    // Lojas novas têm um limite de anúncios activos até ganharem confiança
-    // (selo de verificado, Premium ou vendas concluídas) — ver sellerTrustService.
-    const quota = await sellerTrust.productQuota(req.user.id);
-    if (!quota.trusted && quota.active >= quota.limit) {
-      return forbidden(res,
-        `Lojas novas podem ter até ${quota.limit} anúncios activos. Peça a verificação da sua conta ` +
-        `ou conclua ${Math.max(1, sellerTrust.MIN_DELIVERED - quota.delivered)} venda(s) para publicar mais.`);
-    }
 
     const { name, description, price, category, stock, condition, size, color, location, deliveryMethod } = req.body;
 

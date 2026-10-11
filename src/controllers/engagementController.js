@@ -106,7 +106,8 @@ const bannerList = handle('Banners.list', async (req, res) => {
   const now = new Date();
   const placement = req.query.placement ? V.oneOf(req.query.placement, 'placement', PLACEMENTS) : undefined;
   const role = req.user ? req.user.role : null;
-  const audiences = ['ALL', ...(role === 'SELLER' ? ['SELLER', 'BUYER'] : []), ...(role && role !== 'SELLER' ? ['BUYER'] : []), ...(!role ? ['BUYER'] : [])];
+  // Conta única: com sessão vê banners de SELLER e BUYER; visitante só os de BUYER.
+  const audiences = role ? ['ALL', 'SELLER', 'BUYER'] : ['ALL', 'BUYER'];
   const banners = await prisma.banner.findMany({
     where: {
       active: true, ...(placement && { placement }), audience: { in: audiences },

@@ -44,7 +44,7 @@ const config = async (req, res) => {
 const permissions = async (req, res) => {
   const role = req.user && req.user.role;
   const isAdmin = role === 'ADMIN';
-  const isSeller = role === 'SELLER' || isAdmin;
+  const isSeller = !!role; // conta única: qualquer sessão pode vender
   const isReseller = role === 'REVENDEDOR';
   return ok(res, {
     role,

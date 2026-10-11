@@ -156,7 +156,7 @@ const verifySeller = async (req, res) => {
   try {
     const user = await prisma.user.findUnique({ where: { id: req.params.id } });
     if (!user) return notFound(res);
-    if (user.role !== 'SELLER') return badRequest(res, 'Apenas vendedores podem ser verificados.');
+    if (user.role === 'ADMIN') return badRequest(res, 'Contas de administrador não precisam de verificação.');
 
     const updated = await prisma.user.update({
       where: { id: user.id },

@@ -17,7 +17,7 @@ const { deleteUserData } = require('../services/accountDeletionService');
 const myStats = async (req, res) => {
   try {
     const userId = req.user.id;
-    const isSeller = ['SELLER', 'ADMIN', 'REVENDEDOR'].includes(req.user.role);
+    const isSeller = true; // conta única: qualquer conta pode ter loja
 
     const [
       totalOrders,
@@ -227,7 +227,8 @@ const sendThumb = async (req, res) => {
       select: { id: true, role: true, bazar: { select: { id: true } } }
     });
     if (!seller) return notFound(res, 'Utilizador não encontrado.');
-    if (seller.role !== 'SELLER' || !seller.bazar) {
+    // Conta única: vota-se em qualquer pessoa que tenha loja, seja qual for o papel.
+    if (!seller.bazar) {
       return badRequest(res, 'Só é possível votar em vendedores com loja activa.');
     }
 
@@ -327,7 +328,9 @@ const onboarding = async (req, res) => {
     // Só promove BUYER -> SELLER. Nunca reduz ou altera REVENDEDOR/ADMIN
     // (ex: se por algum motivo esta rota for chamada duas vezes, ou por
     // uma conta que já não é BUYER).
-    if (intent === 'SELL' && req.user.role === 'BUYER') {
+    // Conta única: contas antigas ainda como BUYER passam a SELLER aqui,
+    // qualquer que seja a intenção declarada (comprar e vender nunca se excluem).
+    if (req.user.role === 'BUYER') {
       data.role = 'SELLER';
     }
 

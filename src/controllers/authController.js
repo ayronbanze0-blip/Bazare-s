@@ -132,7 +132,9 @@ const register = async (req, res) => {
           email: email.toLowerCase().trim(),
           passwordHash,
           username,
-          role: role.toUpperCase(),
+          // Conta única: toda a gente nasce com conta completa (compra e vende).
+          // Só REVENDEDOR (com convite válido) é diferente.
+          role: role === 'REVENDEDOR' ? 'REVENDEDOR' : 'SELLER',
           inviteId,
           revendedorId,
           verified: true,
@@ -314,7 +316,7 @@ const findOrCreateSocialUser = async ({ provider, providerId, email, name, avata
       provider,
       providerId,
       avatarUrl: avatarUrl || null,
-      role: 'BUYER',
+      role: 'SELLER', // conta única: compra e vende desde o primeiro dia
       verified: true,
       emailVerifiedAt: new Date()
     }

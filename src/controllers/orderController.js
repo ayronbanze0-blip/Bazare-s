@@ -22,8 +22,6 @@ const { replyKnown } = require('../utils/appError');
 
 const prisma = require('../config/database');
 
-const FEE_LIMIT_PARSED = parseFloat(process.env.FEE_LIMIT_MT);
-const FEE_LIMIT = Number.isFinite(FEE_LIMIT_PARSED) ? FEE_LIMIT_PARSED : 150;
 // Alerta de stock baixo: dispara UMA vez, quando o stock CRUZA o limiar (ou chega a 0)
 // por causa de uma compra — por isso não repete a notificação a cada encomenda.
 const LOW_STOCK_THRESHOLD = Math.max(1, parseInt(process.env.LOW_STOCK_THRESHOLD, 10) || 3);
@@ -273,7 +271,9 @@ const sellerOrders = async (req, res) => {
         where, take, skip, orderBy: { createdAt: 'desc' },
         include: {
           items: true,
-          buyer: { select: { id: true, name: true, phone: true } }
+          buyer: { select: { id: true, name: true, phone: true } },
+          // Para a lista saber se foi paga pela carteira (o vendedor não confirma a entrega dessas).
+          installmentPlan: { select: { paidAmount: true } }
         }
       }),
       prisma.order.count({ where })
@@ -366,12 +366,26 @@ const updateStatus = async (req, res) => {
 
     // Quem pode fazer o quê (ver utils/orderStateMachine.js):
     //  - comprador: cancelar ANTES de sair para entrega, ou confirmar a entrega;
-    //  - vendedor: avançar/cancelar, nunca confirmar a entrega;
+    //  - vendedor: avançar/cancelar e confirmar a entrega (excepto se paga pela carteira — ver abaixo);
     //  - admin: qualquer transição válida (auditada).
     // Precedência mantida: se for comprador (e não admin) aplica-se a regra do comprador.
     const actor = isAdmin ? 'admin' : (isBuyer ? 'buyer' : 'seller');
     const permission = actorMayTransition(actor, order.status, status);
     if (!permission.ok) return forbidden(res, permission.reason);
+
+    // Dinheiro: numa encomenda paga pela carteira o valor fica retido ao vendedor até à entrega
+    // (walletService.heldAmount). Se o próprio vendedor pudesse marcar ENTREGUE, a retenção não
+    // protegia ninguém — por isso aqui só o comprador (ou a confirmação automática) confirma.
+    // Encomendas pagas fora da plataforma não movem saldo: o vendedor pode confirmar.
+    if (actor === 'seller' && status === 'ENTREGUE') {
+      const paidInApp = await prisma.installmentPlan.count({ where: { orderId: order.id, paidAmount: { gt: 0 } } });
+      if (paidInApp) {
+        const days = parseFloat(process.env.ORDER_AUTO_CONFIRM_DAYS);
+        const auto = Number.isFinite(days) ? days : 3;
+        return forbidden(res, 'Esta encomenda foi paga pela carteira: quem confirma a entrega é o comprador' +
+          (auto > 0 ? ` (ou fica confirmada automaticamente ${auto} dias depois de sair para entrega).` : '.'));
+      }
+    }
 
     // Motivo do cancelamento: texto livre → tipo, tamanho e sanitização.
     if (cancelReason !== undefined && cancelReason !== null && typeof cancelReason !== 'string') {
@@ -414,10 +428,9 @@ const updateStatus = async (req, res) => {
           tx.bazar.findUnique({ where: { id: order.bazarId } }),
           tx.user.findUnique({ where: { id: order.sellerId }, select: { isPremium: true, premiumExpiresAt: true } })
         ]);
-        const sellerPremiumActive = premiumService.isActive(seller);
-        // A comissão incide sobre os ARTIGOS (já com desconto), nunca sobre a taxa de entrega.
-        const feeBase = Math.max(0, order.total - (order.shippingFee || 0));
-        const fee = calcFee(feeBase, premiumService.effectiveFeeRate(bazar?.feeRate || 2, sellerPremiumActive));
+        // Sem contribuição de plataforma: já não se cobra comissão sobre as vendas, por isso nada
+        // se acumula em `pendingFees` (saldos antigos ficam como estão; o admin ainda os vê).
+        const fee = 0;
         const orderItems = await tx.orderItem.findMany({ where: { orderId: order.id } });
         const itemsLabel = orderItems.map(i => `${i.name} ×${i.qty}`).join(', ') || order.id;
 
@@ -474,16 +487,6 @@ const updateStatus = async (req, res) => {
     // Reembolso do que o comprador já pagou com a carteira (idempotente; fica pendente se o vendedor não tiver saldo)
     if (cancelledPlan && cancelledPlan.planId && cancelledPlan.refundable > 0) {
       await installmentSvc.refundPlan(cancelledPlan.planId, { reason: 'encomenda cancelada' }).catch((e) => logger.error(`[Orders.updateStatus] refund: ${e.message}`));
-    }
-
-    // Check fee limit (fora da transacção — leitura informativa, não crítica)
-    if (status === 'ENTREGUE') {
-      const updatedBazar = await prisma.bazar.findUnique({ where: { id: order.bazarId } });
-      if (updatedBazar && updatedBazar.pendingFees >= FEE_LIMIT) {
-        notifSvc.feeAlert(order.sellerId, updatedBazar.pendingFees);
-        const seller = await prisma.user.findUnique({ where: { id: order.sellerId } });
-        if (seller) emailSvc.sendFeeAlertEmail(seller.email, seller.name, updatedBazar.pendingFees).catch(() => {});
-      }
     }
 
     // Notificações
