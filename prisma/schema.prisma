@@ -22,7 +22,7 @@ model User {
   // — nunca deve ficar null para contas novas.
   username          String?   @unique
   passwordHash      String?
-  role              Role      @default(BUYER)
+  role              Role      @default(SELLER) // conta única: todos compram e vendem
   phone             String?
   location          String?
   bio               String?
@@ -83,6 +83,8 @@ model User {
 
   // Relations
   bazar             Bazar?
+  friendshipsSent     Friendship[] @relation("FriendshipRequester")
+  friendshipsReceived Friendship[] @relation("FriendshipAddressee")
   products          Product[]
   orders            Order[]   @relation("BuyerOrders")
   sellerOrders      Order[]   @relation("SellerOrders")
@@ -2149,4 +2151,27 @@ model ViewHistory {
 
   @@unique([userId, productId])
   @@index([userId, lastViewedAt])
+}
+
+// ─── AMIZADES (rede social) ───────────────────────────────────────────
+// Amizade mútua, como no Facebook: um pedido (PENDING) que o outro aceita (ACCEPTED).
+// Recusar ou desfazer apaga a linha — não se guarda "rejeitado". Seguir lojas (Follow) é à parte.
+enum FriendshipStatus {
+  PENDING
+  ACCEPTED
+}
+
+model Friendship {
+  id          String           @id @default(uuid())
+  requesterId String
+  requester   User             @relation("FriendshipRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  addresseeId String
+  addressee   User             @relation("FriendshipAddressee", fields: [addresseeId], references: [id], onDelete: Cascade)
+  status      FriendshipStatus @default(PENDING)
+  createdAt   DateTime         @default(now())
+  respondedAt DateTime?
+
+  @@unique([requesterId, addresseeId])
+  @@index([addresseeId, status])
+  @@index([requesterId, status])
 }
