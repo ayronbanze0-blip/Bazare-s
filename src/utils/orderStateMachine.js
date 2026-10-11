@@ -29,7 +29,9 @@ const isTerminal = (status) => !TRANSITIONS[status] || TRANSITIONS[status].lengt
 // O COMPRADOR pode cancelar enquanto a encomenda ainda NÃO saiu para entrega
 // (PENDENTE, ACEITE, EM_PREPARACAO). Depois de EM_ENTREGA já não: o artigo está
 // a caminho — o comprador só pode confirmar a entrega (ENTREGUE).
-// O VENDEDOR faz avançar/cancelar mas nunca confirma a entrega (só o comprador ou o admin).
+// O VENDEDOR faz avançar, cancelar e também marcar como ENTREGUE (quem entrega o artigo sabe que entregou;
+// sem isto a encomenda ficava presa em EM_ENTREGA se o comprador não confirmasse). Se ninguém confirmar,
+// o job `orderJobs` confirma sozinho ao fim de ORDER_AUTO_CONFIRM_DAYS.
 // O ADMIN pode qualquer transição válida da máquina de estados (fica auditado).
 const BUYER_CANCEL_FROM = ['PENDENTE', 'ACEITE', 'EM_PREPARACAO'];
 
@@ -48,10 +50,7 @@ function actorMayTransition(actor, from, to) {
     }
     return { ok: false, reason: 'Compradores só podem cancelar (antes da entrega) ou confirmar a entrega.' };
   }
-  if (actor === 'seller') {
-    if (to === 'ENTREGUE') return { ok: false, reason: 'Apenas o comprador pode confirmar a entrega.' };
-    return { ok: true };
-  }
+  if (actor === 'seller') return { ok: true };
   return { ok: false, reason: 'Sem permissão.' };
 }
 
