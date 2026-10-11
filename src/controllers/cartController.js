@@ -56,6 +56,8 @@ const addItem = async (req, res) => {
     const product = await prisma.product.findUnique({ where: { id: productId } });
     if (!product || !product.active) return notFound(res, 'Produto não disponível.');
     if (product.stock < qtyNum) return badRequest(res, `Apenas ${product.stock} unidades disponíveis.`);
+    // Conta única: um vendedor também compra, mas não os seus próprios produtos.
+    if (product.sellerId === req.user.id) return badRequest(res, 'Não podes comprar os teus próprios produtos.');
 
     const existing = await prisma.cartItem.findUnique({
       where: { userId_productId: { userId: req.user.id, productId } }
