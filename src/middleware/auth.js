@@ -72,11 +72,16 @@ const requireRole = (...roles) => (req, res, next) => {
 };
 
 const isAdmin = requireRole('ADMIN');
-const isSeller = requireRole('ADMIN', 'SELLER');
 const isRevendedor = requireRole('ADMIN', 'REVENDEDOR');
-// Conta única: quem vende (SELLER) também pode comprar. A única restrição é
-// não comprar os próprios produtos (cartController.addItem + checkoutService).
-const isBuyer = requireRole('BUYER', 'SELLER');
+// CONTA ÚNICA: qualquer conta autenticada (e activa) pode comprar E vender, sem
+// passo de "ser vendedor" nem aprovação. Estes dois guards ficam como nomes
+// estáveis (as rotas já os usam) mas aceitam todos os papéis; o papel só decide
+// o que é administração (ADMIN) e revenda (REVENDEDOR). A única regra de
+// integridade que se mantém é não comprar os próprios produtos
+// (cartController.addItem + checkoutService).
+const ANY_ACCOUNT = ['ADMIN', 'SELLER', 'BUYER', 'REVENDEDOR'];
+const isSeller = requireRole(...ANY_ACCOUNT);
+const isBuyer = requireRole(...ANY_ACCOUNT);
 const isAuthenticated = authenticate;
 
 // ─── Optional Auth (public routes that enhance if logged in) ─────
