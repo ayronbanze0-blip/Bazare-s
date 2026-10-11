@@ -44,6 +44,7 @@ router.use('/ai', requireFeature('ENABLE_AI'), require('./aiRoutes'));
 router.use('/media', require('./mediaRoutes'));
 router.use('/analytics', require('./analyticsRoutes'));
 router.use('/gamification', require('./gamificationRoutes'));
+router.use('/friends', require('./friendRoutes'));
 router.use('/polls', require('./pollRoutes'));
 router.use('/groups', requireFeature('ENABLE_COMMUNITIES'), require('./communityRoutes'));
 router.use('/admin/feature-flags', require('./featureFlagRoutes'));
