@@ -74,7 +74,9 @@ const requireRole = (...roles) => (req, res, next) => {
 const isAdmin = requireRole('ADMIN');
 const isSeller = requireRole('ADMIN', 'SELLER');
 const isRevendedor = requireRole('ADMIN', 'REVENDEDOR');
-const isBuyer = requireRole('BUYER');
+// Conta única: quem vende (SELLER) também pode comprar. A única restrição é
+// não comprar os próprios produtos (cartController.addItem + checkoutService).
+const isBuyer = requireRole('BUYER', 'SELLER');
 const isAuthenticated = authenticate;
 
 // ─── Optional Auth (public routes that enhance if logged in) ─────
