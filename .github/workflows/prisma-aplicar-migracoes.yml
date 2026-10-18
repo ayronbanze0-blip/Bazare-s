@@ -1,0 +1,58 @@
+name: Prisma — aplicar migrações na base de dados
+
+# Quando crias/editas um ficheiro em prisma/migrations/ (pelo GitHub, no telemóvel) e fazes commit,
+# este workflow aplica-o SOZINHO na base de dados de produção (prisma migrate deploy).
+# Também corre manualmente: Actions -> "Prisma — aplicar migrações na base de dados" -> Run workflow.
+#
+# Secret necessário: PRODUCTION_DATABASE_URL (o mesmo dos workflows de baseline).
+# Usa a ligação DIRECTA (porta 5432, sem pooler/pgbouncer) — o migrate falha pelo pooler (6543).
+#
+# migrate deploy só aplica migrações PENDENTES; nunca apaga dados nem refaz as já aplicadas.
+# Se falhar com P3009 (migração marcada como falhada) ou P3018 (relation already exists), corre
+# o workflow "Prisma — resolver migração falhada" / "marcar baseline" e volta a correr este.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'prisma/migrations/**'
+  workflow_dispatch: {}
+
+# Uma de cada vez, para dois commits seguidos não aplicarem em paralelo.
+concurrency:
+  group: prisma-aplicar-migracoes
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  aplicar:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - run: npm ci --ignore-scripts
+
+      - name: Verificar o segredo
+        run: |
+          [ -n "$DATABASE_URL" ] || { echo "ERRO: falta o secret PRODUCTION_DATABASE_URL (Settings > Secrets and variables > Actions)." >&2; exit 1; }
+          case "$DATABASE_URL" in
+            *:6543*|*pgbouncer=true*) echo "ERRO: esta URL é do pooler (6543/pgbouncer). Usa a ligação directa (porta 5432)." >&2; exit 1;;
+          esac
+
+      - name: Estado antes
+        run: npx prisma migrate status || true
+
+      - name: Aplicar migrações pendentes
+        run: npx prisma migrate deploy
+
+      - name: Estado depois
+        run: npx prisma migrate status
