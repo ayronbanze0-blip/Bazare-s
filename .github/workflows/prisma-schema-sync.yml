@@ -8,7 +8,7 @@ name: Prisma — sincronizar schema (criar e aplicar migração)
 #   4. CONFERE que todas as tabelas do schema existem mesmo na base (avisa se faltar alguma).
 # Não precisas de escrever nada no fim do schema nem de dar nome: o nome sai da mensagem do commit.
 #
-# Secret para aplicar: PRODUCTION_DATABASE_URL (ligação DIRECTA, porta 5432). Sem ele, só gera a migração.
+# Secret para aplicar: PRODUCTION_DATABASE_URL (Supabase "Session pooler", porta 5432 — IPv4; a ligação directa db.xxx.supabase.co é só IPv6 e não funciona nos runners do GitHub). Sem ele, só gera a migração.
 # Operações destrutivas (DROP/TRUNCATE/DELETE) são recusadas — exigem revisão e backup.
 on:
   push:
@@ -107,12 +107,17 @@ jobs:
             exit 0
           fi
           case "$PROD_URL" in
-            *:6543*|*pgbouncer=true*) echo "ERRO: URL do pooler (6543/pgbouncer). Usa a ligação directa (5432)." >&2; exit 1;;
+            *:6543*|*pgbouncer=true*) echo "ERRO: URL do pooler (6543/pgbouncer). Usa o Session pooler da Supabase (porta 5432)." >&2; exit 1;;
           esac
           export DATABASE_URL="$PROD_URL"
           npx prisma migrate status || true
           npx prisma migrate deploy
           npx prisma migrate status
+
+      - name: 3b) Criar o que falta na base (sincronização aditiva, nunca apaga)
+        run: |
+          [ -n "$PROD_URL" ] || exit 0
+          DATABASE_URL="$PROD_URL" node scripts/sync-schema-additive.js
 
       - name: 4) Conferir que as tabelas do schema existem
         run: DATABASE_URL="$PROD_URL" node scripts/check-schema-tables.js
