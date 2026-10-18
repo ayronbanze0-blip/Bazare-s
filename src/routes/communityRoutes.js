@@ -24,6 +24,11 @@ router.get('/:idOrSlug/members', optionalAuth, ctrl.listMembers);
 router.delete('/:idOrSlug/members/:userId', authenticate, ctrl.removeMember);
 router.put('/:idOrSlug/members/:userId/role', authenticate, ctrl.updateMemberRole);
 
+// ─── Pedidos de entrada (comunidades com aprovação) ─────────────────
+router.get('/:idOrSlug/requests', authenticate, ctrl.listRequests);
+router.post('/:idOrSlug/requests/:userId/approve', authenticate, ctrl.approveRequest);
+router.post('/:idOrSlug/requests/:userId/decline', authenticate, ctrl.declineRequest);
+
 // ─── Posts do grupo ─────────────────────────────────────────────────
 router.get('/:idOrSlug/posts', optionalAuth, ctrl.listPosts);
 router.get('/:idOrSlug/posts/:postId', optionalAuth, ctrl.getPost);

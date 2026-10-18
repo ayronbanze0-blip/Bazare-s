@@ -28,6 +28,8 @@ router.get('/search/mentions', authenticate, ctrl.searchMentionable);
 router.get('/blocked', authenticate, blockCtrl.myBlocked);
 // ─── Presença em lote (pontinho "online") — antes de '/:id' pela mesma razão ──
 router.get('/presence', authenticate, ctrl.getPresence);
+// ─── @menção → utilizador (2 segmentos; antes das rotas '/:id/...') ──
+router.get('/username/:username', optionalAuth, ctrl.byUsername);
 
 // ─── Public ───────────────────────────────────────────────────────
 // Deve ficar por último para não capturar /me como :id

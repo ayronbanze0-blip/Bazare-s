@@ -13,6 +13,8 @@ router.get('/', optionalAuth, ctrl.list);
 // Estático de um segmento só — antes de '/:targetType/:targetId', mesma
 // razão do '/blocked' em userRoutes.js (senão ':targetType' apanhava "saved").
 router.get('/saved', authenticate, ctrl.mySaved);
+// Hashtag — 2 segmentos, nunca colide com os '/:targetType/:targetId/...' (3 segmentos).
+router.get('/hashtag/:tag', optionalAuth, ctrl.hashtag);
 router.get('/:targetType/:targetId/engagement', optionalAuth, ctrl.engagement);
 router.post('/:targetType/:targetId/react', authenticate, ctrl.react);
 router.get('/:targetType/:targetId/reactors', optionalAuth, ctrl.reactors);
