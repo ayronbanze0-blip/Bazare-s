@@ -38,11 +38,14 @@ const shapeCommunities = async (communities, userId) => {
   if (!communities.length) return communities;
   const ids = communities.map((c) => c.id);
 
-  const [memberCounts, postCounts, myMemberships] = await Promise.all([
+  const [memberCounts, postCounts, myMemberships, myRequests] = await Promise.all([
     prisma.communityMember.groupBy({ by: ['communityId'], where: { communityId: { in: ids } }, _count: true }),
     prisma.communityPost.groupBy({ by: ['communityId'], where: { communityId: { in: ids } }, _count: true }),
     userId
       ? prisma.communityMember.findMany({ where: { communityId: { in: ids }, userId } })
+      : [],
+    userId
+      ? prisma.communityJoinRequest.findMany({ where: { communityId: { in: ids }, userId, status: 'PENDING' }, select: { communityId: true } })
       : []
   ]);
 
@@ -52,14 +55,40 @@ const shapeCommunities = async (communities, userId) => {
   postCounts.forEach((c) => { postCountMap[c.communityId] = c._count; });
   const myMap = {};
   myMemberships.forEach((m) => { myMap[m.communityId] = m; });
+  const myReqSet = new Set(myRequests.map((r) => r.communityId));
 
-  return communities.map((c) => ({
-    ...c,
-    memberCount: memberCountMap[c.id] || 0,
-    postCount: postCountMap[c.id] || 0,
-    isMember: !!myMap[c.id],
-    isOwner: !!(userId && c.ownerId === userId)
-  }));
+  // Papel do utilizador em cada grupo (o dono é sempre ADMIN) e, só para quem modera,
+  // quantos pedidos de entrada estão pendentes.
+  const roleOf = (c) => {
+    if (!userId) return null;
+    if (c.ownerId === userId) return 'ADMIN';
+    return myMap[c.id]?.role || null;
+  };
+  const modIds = communities.filter((c) => ['ADMIN', 'MODERATOR'].includes(roleOf(c))).map((c) => c.id);
+  const pendingMap = {};
+  if (modIds.length) {
+    const pend = await prisma.communityJoinRequest.groupBy({
+      by: ['communityId'], where: { communityId: { in: modIds }, status: 'PENDING' }, _count: true
+    });
+    pend.forEach((x) => { pendingMap[x.communityId] = x._count; });
+  }
+
+  return communities.map((c) => {
+    const myRole = roleOf(c);
+    const out = {
+      ...c,
+      memberCount: memberCountMap[c.id] || 0,
+      postCount: postCountMap[c.id] || 0,
+      isMember: !!myMap[c.id],
+      isOwner: !!(userId && c.ownerId === userId),
+      joinApproval: !!c.joinApproval,
+      rules: c.rules || null,
+      myRole,
+      myRequest: myReqSet.has(c.id) ? 'PENDING' : null
+    };
+    if (['ADMIN', 'MODERATOR'].includes(myRole)) out.pendingRequestCount = pendingMap[c.id] || 0;
+    return out;
+  });
 };
 
 const shapeCommunity = async (community, userId) => {
@@ -67,4 +96,11 @@ const shapeCommunity = async (community, userId) => {
   return shaped;
 };
 
-module.exports = { getMembership, isMember, isModOrAdmin, isAdmin, shapeCommunities, shapeCommunity };
+// Aceita boolean, 'true'/'false', '1'/'0' (multipart manda tudo como texto).
+const parseBool = (v, fallback = false) => {
+  if (v === undefined || v === null || v === '') return fallback;
+  if (typeof v === 'boolean') return v;
+  return ['true', '1', 'on', 'yes', 'sim'].includes(String(v).toLowerCase());
+};
+
+module.exports = { parseBool, getMembership, isMember, isModOrAdmin, isAdmin, shapeCommunities, shapeCommunity };
