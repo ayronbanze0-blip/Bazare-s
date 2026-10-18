@@ -37,6 +37,11 @@ else
   npx prisma db push
 fi
 
+# Rede de segurança: o histórico do Prisma já deu migrations "aplicadas" sem criar as tabelas.
+# Compara a base REAL com o schema.prisma e cria só o que FALTA (tabelas/colunas/índices/FKs).
+# Nunca apaga nada e nunca bloqueia o arranque. Desligar: SCHEMA_AUTOSYNC=false.
+node scripts/sync-schema-additive.js || echo "[entrypoint] sincronização aditiva falhou (ignorado)."
+
 # Backfill idempotente (não bloqueia o arranque se falhar).
 node scripts/backfill-product-slugs.js || echo "[entrypoint] backfill-product-slugs falhou (ignorado)."
 
