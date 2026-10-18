@@ -153,6 +153,7 @@ model User {
   ownedCommunities      Community[]
   communityMemberships  CommunityMember[]
   communityPosts        CommunityPost[]
+  communityJoinRequests CommunityJoinRequest[]
 
   // Fase 5 — descontos, morada, parcelas, disputas, suporte, histórico de visualizações
   coupons               Coupon[]            @relation("SellerCoupons")
@@ -1181,6 +1182,12 @@ enum CommunityPrivacy {
   PRIVATE
 }
 
+enum CommunityJoinStatus {
+  PENDING
+  APPROVED
+  DECLINED
+}
+
 enum CommunityRole {
   ADMIN
   MODERATOR
@@ -1196,12 +1203,17 @@ model Community {
   coverUrl      String?
   coverPublicId String?
   privacy       CommunityPrivacy @default(PUBLIC)
+  // Regras da comunidade (texto livre, mostradas no separador "Sobre").
+  rules         String?  @db.Text
+  // true => entrar exige aprovação de um administrador/moderador (cria CommunityJoinRequest PENDING).
+  joinApproval  Boolean  @default(false)
   ownerId       String
   owner         User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   createdAt     DateTime @default(now())
 
   members       CommunityMember[]
   posts         CommunityPost[]
+  joinRequests  CommunityJoinRequest[]
 
   @@index([ownerId])
   @@index([privacy])
@@ -1241,6 +1253,7 @@ model CommunityPost {
   // (frontend actual não mostra indicação visual disto ainda).
   pinned       Boolean  @default(false)
   createdAt    DateTime @default(now())
+  editedAt     DateTime?
 
   images       CommunityPostImage[]
   comments     Comment[]
@@ -1248,6 +1261,23 @@ model CommunityPost {
 
   @@index([communityId, pinned])
   @@index([authorId])
+}
+
+// Pedido para entrar numa comunidade com joinApproval=true.
+model CommunityJoinRequest {
+  id          String   @id @default(uuid())
+  communityId String
+  community   Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status      CommunityJoinStatus @default(PENDING)
+  createdAt   DateTime @default(now())
+  respondedAt DateTime?
+  respondedBy String?
+
+  @@unique([communityId, userId])
+  @@index([communityId, status])
+  @@index([userId])
 }
 
 model CommunityPostImage {
