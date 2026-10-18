@@ -19,7 +19,9 @@ echo "[entrypoint] NODE_ENV=${NODE_ENV:-development}"
 
 if [ -d prisma/migrations ] && [ -n "$(ls -A prisma/migrations 2>/dev/null)" ]; then
   echo "[entrypoint] A aplicar migrations pendentes (prisma migrate deploy)..."
-  npx prisma migrate deploy
+  # O migrate precisa da ligação DIRECTA (porta 5432). Se DIRECT_URL existir, usa-a só aqui;
+  # a app continua a usar DATABASE_URL (pooler, se for o caso).
+  DATABASE_URL="${DIRECT_URL:-${DATABASE_URL:-}}" npx prisma migrate deploy
 elif [ "${ALLOW_DB_PUSH:-}" = "true" ]; then
   echo "[entrypoint] AVISO: sem prisma/migrations — a usar 'prisma db push' (SEM --accept-data-loss) por ALLOW_DB_PUSH=true."
   echo "[entrypoint] AVISO: crie a migration baseline e remova ALLOW_DB_PUSH (docs/OPERACOES.md)."
