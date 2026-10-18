@@ -6481,6 +6481,37 @@
         }
       }
     },
+    "/api/users/username/{username}": {
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "GET /api/users/username/:username",
+        "description": "Auth: optional. Role: any.",
+        "parameters": [
+          {
+            "name": "username",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          }
+        }
+      }
+    },
     "/api/users/{id}/view": {
       "get": {
         "tags": [
@@ -8409,6 +8440,37 @@
         }
       }
     },
+    "/api/feed/hashtag/{tag}": {
+      "get": {
+        "tags": [
+          "Social"
+        ],
+        "summary": "GET /api/feed/hashtag/:tag",
+        "description": "Auth: optional. Role: any.",
+        "parameters": [
+          {
+            "name": "tag",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          }
+        }
+      }
+    },
     "/api/feed/{targetType}/{targetId}/engagement": {
       "get": {
         "tags": [
@@ -9527,6 +9589,370 @@
         }
       }
     },
+    "/api/friends": {
+      "get": {
+        "tags": [
+          "friends"
+        ],
+        "summary": "GET /api/friends",
+        "description": "Auth: yes. Role: any.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/friends/summary": {
+      "get": {
+        "tags": [
+          "friends"
+        ],
+        "summary": "GET /api/friends/summary",
+        "description": "Auth: yes. Role: any.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/friends/requests": {
+      "get": {
+        "tags": [
+          "friends"
+        ],
+        "summary": "GET /api/friends/requests",
+        "description": "Auth: yes. Role: any.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/friends/suggestions": {
+      "get": {
+        "tags": [
+          "friends"
+        ],
+        "summary": "GET /api/friends/suggestions",
+        "description": "Auth: yes. Role: any.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/friends/search": {
+      "get": {
+        "tags": [
+          "friends"
+        ],
+        "summary": "GET /api/friends/search",
+        "description": "Auth: yes. Role: any. Rate limit: walletLookupLimiter.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (walletLookupLimiter)"
+          }
+        }
+      }
+    },
+    "/api/friends/mutual/{userId}": {
+      "get": {
+        "tags": [
+          "friends"
+        ],
+        "summary": "GET /api/friends/mutual/:userId",
+        "description": "Auth: yes. Role: any.",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/friends/status/{userId}": {
+      "get": {
+        "tags": [
+          "friends"
+        ],
+        "summary": "GET /api/friends/status/:userId",
+        "description": "Auth: yes. Role: any.",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/friends/request/{userId}": {
+      "post": {
+        "tags": [
+          "friends"
+        ],
+        "summary": "POST /api/friends/request/:userId",
+        "description": "Auth: yes. Role: any. Rate limit: socialWriteLimiter.",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (socialWriteLimiter)"
+          }
+        }
+      }
+    },
+    "/api/friends/{id}/accept": {
+      "post": {
+        "tags": [
+          "friends"
+        ],
+        "summary": "POST /api/friends/:id/accept",
+        "description": "Auth: yes. Role: any. Rate limit: socialWriteLimiter.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (socialWriteLimiter)"
+          }
+        }
+      }
+    },
+    "/api/friends/{id}/decline": {
+      "post": {
+        "tags": [
+          "friends"
+        ],
+        "summary": "POST /api/friends/:id/decline",
+        "description": "Auth: yes. Role: any. Rate limit: socialWriteLimiter.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (socialWriteLimiter)"
+          }
+        }
+      }
+    },
+    "/api/friends/with/{userId}": {
+      "delete": {
+        "tags": [
+          "friends"
+        ],
+        "summary": "DELETE /api/friends/with/:userId",
+        "description": "Auth: yes. Role: any. Rate limit: socialWriteLimiter.",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (socialWriteLimiter)"
+          }
+        }
+      }
+    },
+    "/api/friends/{id}": {
+      "delete": {
+        "tags": [
+          "friends"
+        ],
+        "summary": "DELETE /api/friends/:id",
+        "description": "Auth: yes. Role: any. Rate limit: socialWriteLimiter.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          },
+          "429": {
+            "description": "Limite de pedidos excedido (socialWriteLimiter)"
+          }
+        }
+      }
+    },
     "/api/polls/{pollId}/vote": {
       "post": {
         "tags": [
@@ -9870,6 +10296,121 @@
           "Communities"
         ],
         "summary": "PUT /api/groups/:idOrSlug/members/:userId/role",
+        "description": "Auth: yes. Role: any.",
+        "parameters": [
+          {
+            "name": "idOrSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/groups/{idOrSlug}/requests": {
+      "get": {
+        "tags": [
+          "Communities"
+        ],
+        "summary": "GET /api/groups/:idOrSlug/requests",
+        "description": "Auth: yes. Role: any.",
+        "parameters": [
+          {
+            "name": "idOrSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/groups/{idOrSlug}/requests/{userId}/approve": {
+      "post": {
+        "tags": [
+          "Communities"
+        ],
+        "summary": "POST /api/groups/:idOrSlug/requests/:userId/approve",
+        "description": "Auth: yes. Role: any.",
+        "parameters": [
+          {
+            "name": "idOrSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-role": "any",
+        "responses": {
+          "200": {
+            "description": "Sucesso"
+          },
+          "401": {
+            "description": "Não autenticado"
+          }
+        }
+      }
+    },
+    "/api/groups/{idOrSlug}/requests/{userId}/decline": {
+      "post": {
+        "tags": [
+          "Communities"
+        ],
+        "summary": "POST /api/groups/:idOrSlug/requests/:userId/decline",
         "description": "Auth: yes. Role: any.",
         "parameters": [
           {
