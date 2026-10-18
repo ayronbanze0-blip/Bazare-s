@@ -9,6 +9,7 @@ const logger = require('../utils/logger');
 const { makeStage } = require('../utils/resilience');
 const stage = makeStage('Users');
 const audit = require('../services/auditService');
+const blockSvc = require('../services/blockService');
 const prisma = require('../config/database');
 const { deleteUserData } = require('../services/accountDeletionService');
 
@@ -425,5 +426,33 @@ const getPresence = async (req, res) => {
   }
 };
 
-module.exports = { myStats, updateProfile, updateCover, changePassword, publicProfile, sendThumb, deleteAccount, onboarding, requestVerification, searchMentionable, getPresence };
+// ─── GET /api/users/username/:username ─────────────────────────────
+// Resolve uma @menção: devolve o mínimo público (nome, foto, loja se tiver). 404 se não existir,
+// estiver suspenso ou houver bloqueio entre os dois (não revela que a conta existe).
+const byUsername = async (req, res) => {
+  try {
+    const username = String(req.params.username || '').replace(/^@/, '').trim().toLowerCase();
+    if (!/^[a-z0-9_.]{2,30}$/.test(username)) return notFound(res, 'Utilizador não encontrado.');
+    const user = await prisma.user.findFirst({
+      where: { username, active: true },
+      select: {
+        id: true, name: true, username: true, avatarUrl: true, isPremium: true, verifiedSeller: true,
+        bazar: { select: { id: true, name: true, slug: true, logoUrl: true, active: true } }
+      }
+    });
+    if (!user) return notFound(res, 'Utilizador não encontrado.');
+    if (req.user?.id && req.user.id !== user.id) {
+      const hidden = await blockSvc.getHiddenUserIdsSafe(req.user.id);
+      if (hidden.has(user.id)) return notFound(res, 'Utilizador não encontrado.');
+    }
+    const out = { ...user, bazar: user.bazar && user.bazar.active ? user.bazar : null };
+    return ok(res, { user: out });
+  } catch (err) {
+    logger.error(`[Users.byUsername] ${err.message}`);
+    return serverError(res);
+  }
+};
+
+module.exports = {
+  byUsername, myStats, updateProfile, updateCover, changePassword, publicProfile, sendThumb, deleteAccount, onboarding, requestVerification, searchMentionable, getPresence };
 

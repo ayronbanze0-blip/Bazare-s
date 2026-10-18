@@ -7,20 +7,16 @@ const mentionSvc = require('../services/mentionService');
 const blockSvc = require('../services/blockService');
 const communitySvc = require('../services/communityService');
 const { attachDirectEngagement } = require('../services/feedEngagementService');
+const notificationService = require('../services/notificationService');
 const logger = require('../utils/logger');
 const prisma = require('../config/database');
 
 // ─────────────────────────────────────────────────────────────────
 // Nota de contrato: este controller expõe /groups/* para bater certo
-// com o frontend comunidade.html/comunidades.html/nova-comunidade.html
-// (construído em paralelo, fora desta conversa — ver comentário no
-// schema.prisma). Esse frontend não tem UI de pedidos de adesão
-// pendentes nem de moderadores — só "dono" (ownerId) vs "membro" — por
-// isso o fluxo aqui foi mantido simples de propósito: entrar é sempre
-// imediato (público ou privado), e PRIVATE só significa "não aparece
-// em Descobrir", não "precisa de aprovação". Os campos role
-// ADMIN/MODERATOR em CommunityMember ficam disponíveis para uma
-// futura UI de moderação, sem quebrar nada do que já existe.
+// com o frontend comunidade.html/comunidades.html/nova-comunidade.html.
+// Entrada: pública => imediata; com `joinApproval` => cria um pedido PENDING que o
+// dono/administrador/moderador aprova ou recusa (GET /:id/requests, POST /:id/requests/:userId/approve|decline).
+// PRIVATE só significa "não aparece em Descobrir".
 // ─────────────────────────────────────────────────────────────────
 
 const resolveCommunity = (idOrSlug) =>
@@ -103,6 +99,8 @@ const create = async (req, res) => {
     const description = req.body.description ? sanitize(req.body.description).slice(0, 500) : null;
     const category = req.body.category ? sanitize(req.body.category).slice(0, 60) : null;
     const privacy = req.body.privacy === 'PRIVATE' ? 'PRIVATE' : 'PUBLIC';
+    const rules = req.body.rules ? sanitize(req.body.rules).slice(0, 1500) : null;
+    const joinApproval = communitySvc.parseBool(req.body.joinApproval, false);
 
     const slug = await uniqueSlug(prisma, name, 'community');
 
@@ -114,7 +112,7 @@ const create = async (req, res) => {
 
     const community = await prisma.community.create({
       data: {
-        name, slug, description, category, privacy, coverUrl, coverPublicId,
+        name, slug, description, category, privacy, rules, joinApproval, coverUrl, coverPublicId,
         ownerId: req.user.id,
         members: { create: { userId: req.user.id, role: 'ADMIN' } }
       },
@@ -153,6 +151,8 @@ const update = async (req, res) => {
     if (req.body.description !== undefined) data.description = req.body.description ? sanitize(req.body.description).slice(0, 500) : null;
     if (req.body.category !== undefined) data.category = req.body.category ? sanitize(req.body.category).slice(0, 60) : null;
     if (req.body.privacy !== undefined) data.privacy = req.body.privacy === 'PRIVATE' ? 'PRIVATE' : 'PUBLIC';
+    if (req.body.rules !== undefined) data.rules = req.body.rules ? sanitize(req.body.rules).slice(0, 1500) : null;
+    if (req.body.joinApproval !== undefined) data.joinApproval = communitySvc.parseBool(req.body.joinApproval, false);
 
     if (req.file) {
       const r = await uploadSvc.uploadToCloud(req.file.path, 'bazares/communities/covers');
@@ -212,8 +212,24 @@ const join = async (req, res) => {
     const existing = await communitySvc.getMembership(community.id, req.user.id);
     if (existing) return ok(res, {}, 'Já é membro desta comunidade.');
 
+    // Comunidade com aprovação: cria/reabre o pedido e avisa a administração.
+    if (community.joinApproval) {
+      const reqRow = await prisma.communityJoinRequest.upsert({
+        where: { communityId_userId: { communityId: community.id, userId: req.user.id } },
+        create: { communityId: community.id, userId: req.user.id, status: 'PENDING' },
+        update: { status: 'PENDING', respondedAt: null, respondedBy: null }
+      });
+      notificationService.push(community.ownerId, {
+        type: 'SOCIAL', title: 'Novo pedido para entrar',
+        message: `${req.user.name || 'Alguém'} quer entrar em "${community.name}".`,
+        link: `comunidade.html?id=${community.slug || community.id}`
+      }).catch(() => {});
+      return created(res, { status: 'PENDING', request: { id: reqRow.id, status: 'PENDING' } }, 'Pedido enviado. A administração vai analisá-lo.');
+    }
+
     await prisma.communityMember.create({ data: { communityId: community.id, userId: req.user.id, role: 'MEMBER' } });
-    return created(res, {}, 'Entraste na comunidade.');
+    await prisma.communityJoinRequest.deleteMany({ where: { communityId: community.id, userId: req.user.id } }).catch(() => {});
+    return created(res, { status: 'JOINED' }, 'Entraste na comunidade.');
   } catch (err) {
     logger.error(`[Groups.join] ${err.message}`);
     return serverError(res);
@@ -232,7 +248,13 @@ const leave = async (req, res) => {
     }
 
     const membership = await communitySvc.getMembership(community.id, req.user.id);
-    if (!membership) return ok(res, {}, 'Já não é membro desta comunidade.');
+    if (!membership) {
+      // Sem ser membro: se houver um pedido pendente, "sair" = cancelar o pedido.
+      const cancelled = await prisma.communityJoinRequest.deleteMany({
+        where: { communityId: community.id, userId: req.user.id, status: 'PENDING' }
+      });
+      return ok(res, {}, cancelled.count ? 'Pedido cancelado.' : 'Já não é membro desta comunidade.');
+    }
 
     await prisma.communityMember.delete({ where: { id: membership.id } });
     return ok(res, {}, 'Saiu da comunidade.');
@@ -340,6 +362,9 @@ const updateMemberRole = async (req, res) => {
 // POSTS DO GRUPO
 // ─────────────────────────────────────────────────────────────────
 
+// O frontend lê `isPinned` (ou `pinned`) — devolvemos ambos.
+const withPinFlag = (p) => (p ? { ...p, isPinned: !!p.pinned } : p);
+
 const postInclude = {
   images: { orderBy: { order: 'asc' } },
   author: { select: { id: true, name: true, avatarUrl: true, isPremium: true } },
@@ -372,7 +397,7 @@ const listPosts = async (req, res) => {
     }
 
     const withEngagement = await attachDirectEngagement(posts, req.user?.id, 'GROUP_POST');
-    return ok(res, { posts: withEngagement, meta: paginateMeta(total, page, limit) });
+    return ok(res, { posts: withEngagement.map(withPinFlag), meta: paginateMeta(total, page, limit) });
   } catch (err) {
     logger.error(`[Groups.listPosts] ${err.message}`);
     return serverError(res);
@@ -391,7 +416,7 @@ const getPost = async (req, res) => {
     if (!post) return notFound(res, 'Publicação não encontrada.');
 
     const [withEngagement] = await attachDirectEngagement([post], req.user?.id, 'GROUP_POST');
-    return ok(res, { post: withEngagement });
+    return ok(res, { post: withPinFlag(withEngagement) });
   } catch (err) {
     logger.error(`[Groups.getPost] ${err.message}`);
     return serverError(res);
@@ -446,7 +471,7 @@ const createPost = async (req, res) => {
 
     return created(
       res,
-      { post: { ...full, likeCount: 0, dislikeCount: 0, shareCount: 0, commentCount: 0, myReaction: 0 }, imageUploadErrors: imageUploadErrors.length ? imageUploadErrors : undefined },
+      { post: { ...withPinFlag(full), likeCount: 0, dislikeCount: 0, shareCount: 0, commentCount: 0, myReaction: 0 }, imageUploadErrors: imageUploadErrors.length ? imageUploadErrors : undefined },
       'Publicado na comunidade.'
     );
   } catch (err) {
@@ -467,7 +492,7 @@ const updatePost = async (req, res) => {
     if (!text) return badRequest(res, 'Escreva algo para publicar.');
     if (text.length > 2000) return badRequest(res, 'Máximo de 2000 caracteres.');
 
-    const data = { text };
+    const data = { text, editedAt: new Date() };
     if (req.body.backgroundId !== undefined) {
       if (!req.body.backgroundId) {
         data.backgroundId = null;
@@ -487,7 +512,7 @@ const updatePost = async (req, res) => {
       link: `comunidade.html?id=${req.params.idOrSlug}`
     }).catch(() => {});
 
-    return ok(res, { post: updated }, 'Publicação actualizada.');
+    return ok(res, { post: withPinFlag(updated) }, 'Publicação actualizada.');
   } catch (err) {
     logger.error(`[Groups.updatePost] ${err.message}`);
     return serverError(res);
@@ -546,8 +571,87 @@ const pinPost = async (req, res) => {
   }
 };
 
+// ─────────────────────────────────────────────────────────────────
+// PEDIDOS DE ENTRADA (comunidades com aprovação)
+// ─────────────────────────────────────────────────────────────────
+
+// ─── DONO/ADMIN/MODERADOR: listar pedidos pendentes ────────────────
+const listRequests = async (req, res) => {
+  try {
+    const community = await resolveCommunity(req.params.idOrSlug);
+    if (!community) return notFound(res, 'Comunidade não encontrada.');
+    if (!(await communitySvc.isModOrAdmin(community, req.user.id)) && req.user.role !== 'ADMIN') {
+      return forbidden(res, 'Só a administração da comunidade vê os pedidos de entrada.');
+    }
+    const { page = 1, limit = 30 } = req.query;
+    const { take, skip } = paginate(page, limit);
+    const where = { communityId: community.id, status: 'PENDING' };
+    const [rows, total] = await Promise.all([
+      prisma.communityJoinRequest.findMany({
+        where, take, skip, orderBy: { createdAt: 'asc' },
+        include: { user: { select: { id: true, name: true, avatarUrl: true, isPremium: true } } }
+      }),
+      prisma.communityJoinRequest.count({ where })
+    ]);
+    return ok(res, {
+      requests: rows.map((r) => ({ id: r.id, status: r.status, createdAt: r.createdAt, user: r.user })),
+      meta: paginateMeta(total, page, limit)
+    });
+  } catch (err) {
+    logger.error(`[Groups.listRequests] ${err.message}`);
+    return serverError(res);
+  }
+};
+
+const answerRequest = (approve) => async (req, res) => {
+  try {
+    const community = await resolveCommunity(req.params.idOrSlug);
+    if (!community) return notFound(res, 'Comunidade não encontrada.');
+    if (!(await communitySvc.isModOrAdmin(community, req.user.id)) && req.user.role !== 'ADMIN') {
+      return forbidden(res, 'Só a administração da comunidade pode responder a pedidos.');
+    }
+    const targetId = req.params.userId;
+    const row = await prisma.communityJoinRequest.findUnique({
+      where: { communityId_userId: { communityId: community.id, userId: targetId } }
+    });
+    if (!row || row.status !== 'PENDING') return notFound(res, 'Pedido não encontrado ou já respondido.');
+
+    if (approve) {
+      await prisma.$transaction([
+        prisma.communityMember.upsert({
+          where: { communityId_userId: { communityId: community.id, userId: targetId } },
+          create: { communityId: community.id, userId: targetId, role: 'MEMBER' },
+          update: {}
+        }),
+        prisma.communityJoinRequest.update({
+          where: { id: row.id }, data: { status: 'APPROVED', respondedAt: new Date(), respondedBy: req.user.id }
+        })
+      ]);
+    } else {
+      await prisma.communityJoinRequest.update({
+        where: { id: row.id }, data: { status: 'DECLINED', respondedAt: new Date(), respondedBy: req.user.id }
+      });
+    }
+
+    notificationService.push(targetId, {
+      type: 'SOCIAL',
+      title: approve ? 'Pedido aprovado' : 'Pedido recusado',
+      message: approve ? `Já fazes parte de "${community.name}".` : `O teu pedido para "${community.name}" não foi aceite.`,
+      link: `comunidade.html?id=${community.slug || community.id}`
+    }).catch(() => {});
+
+    return ok(res, { status: approve ? 'APPROVED' : 'DECLINED' }, approve ? 'Pedido aprovado.' : 'Pedido recusado.');
+  } catch (err) {
+    logger.error(`[Groups.answerRequest] ${err.message}`);
+    return serverError(res);
+  }
+};
+const approveRequest = answerRequest(true);
+const declineRequest = answerRequest(false);
+
 module.exports = {
   list, getOne, create, update, remove,
   join, leave, listMembers, removeMember, updateMemberRole,
+  listRequests, approveRequest, declineRequest,
   listPosts, getPost, createPost, updatePost, removePost, pinPost
 };

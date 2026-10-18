@@ -694,5 +694,53 @@ const removeComment = async (req, res) => {
   }
 };
 
-module.exports = { list, react, reactors, share, toggleSave, mySaved, listComments, listReplies, createComment, updateComment, removeComment, likeComment, engagement };
+
+// ─── GET /api/feed/hashtag/:tag ──────────────────────────────────
+// Publicações (Posts e Reels) cujo texto contém #tag (sem distinguir maiúsculas/acentos de caixa).
+// Resposta: { items, posts (alias de items), useCount, meta:{ hasMore, page } } — hashtag.html lê `posts`/`useCount`.
+const hashtag = async (req, res) => {
+  try {
+    const tag = String(req.params.tag || '').replace(/^#/, '').trim();
+    if (!/^[\p{L}\p{N}_]{2,40}$/u.test(tag)) return badRequest(res, 'Hashtag inválida.');
+    const userId = req.user?.id || null;
+    const { page = 1, limit = 20 } = req.query;
+    const { take, skip } = paginate(page, limit);
+
+    const esc = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // # + tag, terminada em fim de texto ou caracter que não seja letra/dígito/_ (evita #moda apanhar #modaTop).
+    const re = new RegExp(`(^|[^\\p{L}\\p{N}_])#${esc}(?![\\p{L}\\p{N}_])`, 'iu');
+    const where = { text: { contains: `#${tag}`, mode: 'insensitive' }, seller: { active: true }, bazar: { active: true } };
+    const bazarSel = { select: { id: true, name: true, slug: true, logoUrl: true } };
+    const sellerSel = { select: { id: true, name: true, avatarUrl: true, isPremium: true } };
+    const CAP = 300; // candidatos por tipo (a contagem é exacta até este tecto)
+
+    const [aRows, rRows] = await Promise.all([
+      prisma.announcement.findMany({ where, orderBy: { createdAt: 'desc' }, take: CAP, include: { images: { orderBy: { order: 'asc' } }, bazar: bazarSel, seller: sellerSel } }),
+      prisma.reel.findMany({ where, orderBy: { createdAt: 'desc' }, take: CAP, include: { images: { orderBy: { order: 'asc' } }, bazar: bazarSel, seller: sellerSel } })
+    ]);
+
+    let pool = [
+      ...aRows.filter((r) => re.test(r.text || '')).map((r) => ({ targetType: 'ANNOUNCEMENT', targetId: r.id, createdAt: r.createdAt, announcement: r, post: r })),
+      ...rRows.filter((r) => re.test(r.text || '')).map((r) => ({ targetType: 'REEL', targetId: r.id, createdAt: r.createdAt, reel: r }))
+    ];
+    if (userId) {
+      const hidden = await blockSvc.getHiddenUserIdsSafe(userId);
+      if (hidden.size) pool = pool.filter((it) => !hidden.has((it.announcement || it.reel).seller?.id));
+    }
+    pool.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    const useCount = pool.length;
+    let items = pool.slice(skip, skip + take);
+    items = await attachEngagement(items, userId).catch(() => items.map((it) => ({ ...it, likeCount: 0, dislikeCount: 0, shareCount: 0, commentCount: 0, myReaction: 0 })));
+    // Mantém `post` como alias de `announcement` mesmo depois do attachEngagement (hashtag.html lê it.post).
+    items = items.map((it) => (it.announcement ? { ...it, post: it.announcement } : it));
+
+    return ok(res, { items, posts: items, useCount, meta: { page: Number(page), hasMore: skip + take < useCount, total: useCount } });
+  } catch (err) {
+    logger.error(`[Feed.hashtag] ${err.message}`);
+    return serverError(res);
+  }
+};
+
+module.exports = { list, hashtag, react, reactors, share, toggleSave, mySaved, listComments, listReplies, createComment, updateComment, removeComment, likeComment, engagement };
 
