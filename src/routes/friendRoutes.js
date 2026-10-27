@@ -12,6 +12,7 @@ router.get('/requests', authenticate, ctrl.requests);                       // ?
 router.get('/suggestions', authenticate, ctrl.suggestions);                 // amigos de amigos + contas com loja
 router.get('/search', authenticate, walletLookupLimiter, ctrl.search);      // ?q= (nome ou @username)
 router.get('/status/:userId', authenticate, ctrl.status);
+router.get('/mutual/:userId', authenticate, ctrl.mutual);               // amigos em comum com outra pessoa
 router.post('/request/:userId', authenticate, socialWriteLimiter, ctrl.request);
 router.post('/:id/accept', authenticate, socialWriteLimiter, ctrl.accept);
 router.post('/:id/decline', authenticate, socialWriteLimiter, ctrl.decline);
