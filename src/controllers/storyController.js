@@ -1,5 +1,7 @@
 'use strict';
 
+const { MAX_STORIES_PER_BAZAR_LIST } = require('../config/uploadLimits');
+
 const { ok, created, notFound, forbidden, serverError, badRequest } = require('../utils/response');
 const { sanitize } = require('../utils/helpers');
 const uploadSvc = require('../services/uploadService');
@@ -26,7 +28,7 @@ const list = async (req, res) => {
     // uma vez — com muitos vendedores activos isto crescia para uma
     // query e payload enormes. Não é paginação "verdadeira" (a barra
     // de stories não pagina como um feed), mas limita o pior caso.
-    const MAX_STORIES_PER_BAZAR = 20;
+    const MAX_STORIES_PER_BAZAR = MAX_STORIES_PER_BAZAR_LIST;
     const MAX_BAZAR_GROUPS = 60;
 
     const stories = await prisma.story.findMany({

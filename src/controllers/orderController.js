@@ -182,36 +182,45 @@ const placeOrder = async (req, res) => {
       }
     }, { timeout: 25000, maxWait: 10000 });
 
-    // Notificações & emails DEPOIS de responder — não devem atrasar a
-    // confirmação da compra. Um SMTP lento (comum, 1-3s por email) não
-    // pode ser o que decide quanto tempo o comprador espera pelo "compra
-    // confirmada". Erros aqui só vão para o log, nunca para o cliente.
-    Promise.all(createdOrders.map(async (order) => {
-      const seller = await prisma.user.findUnique({ where: { id: order.sellerId } });
-      notifSvc.orderReceived(order.sellerId, order.id, order.items.map(i => i.name).join(', '), order.total);
-      // Só envia email se o vendedor não o desligou (emailEnabled + orderNotifications).
-      if (seller?.email && await notifSvc.shouldEmail(order.sellerId, 'orders')) {
-        emailSvc.sendOrderNotificationEmail(seller.email, seller.name, order).catch(() => {});
-      }
-    })).catch((e) => logger.warn(`[Orders.placeOrder] Falha ao notificar vendedor(es): ${e.message}`));
+    // ── Efeitos secundários (notificações, emails, alertas de stock) ──────────────
+    // A encomenda JÁ está gravada e o stock decrementado. Nada daqui para a frente pode
+    // transformar uma compra concluída num 500 (o comprador repetiria o pedido e criaria
+    // encomendas duplicadas) — por isso fica tudo isolado e só regista em log.
+    try {
+      // Notificações & emails sem bloquear a confirmação: um SMTP lento não pode atrasar a compra.
+      Promise.all(createdOrders.map(async (order) => {
+        const seller = await prisma.user.findUnique({ where: { id: order.sellerId } });
+        notifSvc.orderReceived(order.sellerId, order.id, order.items.map(i => i.name).join(', '), order.total);
+        // Só envia email se o vendedor não o desligou (emailEnabled + orderNotifications).
+        if (seller?.email && await notifSvc.shouldEmail(order.sellerId, 'orders')) {
+          emailSvc.sendOrderNotificationEmail(seller.email, seller.name, order).catch(() => {});
+        }
+      })).catch((e) => logger.warn(`[Orders.placeOrder] Falha ao notificar vendedor(es): ${e.message}`));
 
-    // Alertas de stock baixo / esgotado para o vendedor (só quando o stock cruza o limiar).
-    for (const g of Object.values(sellerGroups)) {
-      for (const l of g.lines) {
-        const before = l.product.stock;
-        const after = before - l.qty;
-        if (after <= 0 && before > 0) {
-          notifSvc.push(g.sellerId, {
-            type: 'WARNING', title: 'Produto esgotado',
-            message: `"${l.name}" ficou sem stock.`, link: `/products/${l.productId}`
-          });
-        } else if (after > 0 && after <= LOW_STOCK_THRESHOLD && before > LOW_STOCK_THRESHOLD) {
-          notifSvc.push(g.sellerId, {
-            type: 'WARNING', title: 'Stock baixo',
-            message: `"${l.name}" tem apenas ${after} unidade(s) em stock.`, link: `/products/${l.productId}`
-          });
+      // Alertas de stock baixo / esgotado (só quando o stock cruza o limiar).
+      // O stock "antes" vem dos produtos lidos no checkout (g._internal.products): as linhas
+      // públicas (g.lines) já não trazem o objecto `product`.
+      for (const g of Object.values(sellerGroups)) {
+        const productsById = new Map((g._internal.products || []).map((p) => [p.id, p]));
+        for (const l of g.lines) {
+          const before = productsById.get(l.productId)?.stock;
+          if (typeof before !== 'number') continue;
+          const after = before - l.qty;
+          if (after <= 0 && before > 0) {
+            notifSvc.push(g.sellerId, {
+              type: 'WARNING', title: 'Produto esgotado',
+              message: `"${l.name}" ficou sem stock.`, link: `/products/${l.productId}`
+            });
+          } else if (after > 0 && after <= LOW_STOCK_THRESHOLD && before > LOW_STOCK_THRESHOLD) {
+            notifSvc.push(g.sellerId, {
+              type: 'WARNING', title: 'Stock baixo',
+              message: `"${l.name}" tem apenas ${after} unidade(s) em stock.`, link: `/products/${l.productId}`
+            });
+          }
         }
       }
+    } catch (e) {
+      logger.error(`[Orders.placeOrder] Pós-compra falhou (encomenda JÁ criada): ${e.message}`, { requestId: req.id, stack: e.stack, userId: req.user.id });
     }
 
     logger.info(`[Orders] ${createdOrders.length} order(s) placed by ${req.user.id} (${mode})`);
@@ -219,7 +228,7 @@ const placeOrder = async (req, res) => {
   } catch (err) {
     if (err instanceof StockError) return domainError(res, 400, 'PRODUCT_OUT_OF_STOCK', err.message);
     if (replyKnown(res, err)) return;
-    logger.error(`[Orders.placeOrder] ${err.message}`);
+    logger.error(`[Orders.placeOrder] ${err.message}`, { requestId: req.id, stack: err.stack, code: err.code, name: err.name, userId: req.user && req.user.id });
     return serverError(res);
   }
 };

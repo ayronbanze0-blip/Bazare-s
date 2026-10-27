@@ -423,7 +423,7 @@ const getPost = async (req, res) => {
   }
 };
 
-// ─── MEMBRO: publicar no grupo (texto e/ou até 6 fotos) ────────────
+// ─── MEMBRO: publicar no grupo (texto e/ou até MAX_IMAGES_PER_POST fotos) ────────────
 const createPost = async (req, res) => {
   try {
     const community = await resolveCommunity(req.params.idOrSlug);

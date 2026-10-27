@@ -1,5 +1,7 @@
 'use strict';
 
+const { MAX_IMAGES_PER_POST } = require('../config/uploadLimits');
+
 const { ok, created, notFound, forbidden, serverError, badRequest } = require('../utils/response');
 const { sanitize, paginate, paginateMeta } = require('../utils/helpers');
 const uploadSvc = require('../services/uploadService');
@@ -132,7 +134,7 @@ const create = async (req, res) => {
       });
     }
 
-    // Suporta várias fotos por anúncio (campo multipart "images", até 6).
+    // Suporta várias fotos por anúncio (campo multipart "images", até MAX_IMAGES_PER_POST).
     let imageUploadErrors = [];
     if (req.files && req.files.length > 0) {
       const uploadResults = await uploadSvc.uploadMany(req.files, 'bazares/announcements');
@@ -249,7 +251,7 @@ const update = async (req, res) => {
     if (req.files && req.files.length > 0) {
       const currentCount = keepIds !== null ? keepIds.length : announcement.images.length;
       const total = currentCount + req.files.length;
-      if (total > 6) return badRequest(res, 'Máximo de 6 fotos por anúncio.');
+      if (total > MAX_IMAGES_PER_POST) return badRequest(res, `Máximo de ${MAX_IMAGES_PER_POST} fotos por anúncio.`);
       const uploadResults = await uploadSvc.uploadMany(req.files, 'bazares/announcements');
       const validImages = uploadResults.filter(r => r.ok);
       imageUploadErrors = uploadResults.filter(r => !r.ok).map(r => r.error);

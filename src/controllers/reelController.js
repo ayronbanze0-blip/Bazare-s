@@ -1,5 +1,7 @@
 'use strict';
 
+const { MAX_IMAGES_PER_POST } = require('../config/uploadLimits');
+
 const fs = require('fs');
 const { ok, created, notFound, forbidden, serverError, badRequest } = require('../utils/response');
 const { sanitize, paginate, paginateMeta } = require('../utils/helpers');
@@ -115,7 +117,7 @@ const create = async (req, res) => {
     const imageFiles = req.files?.images || [];
     const imageFile = req.files?.image?.[0];
     if (!jobId && !imageFile && imageFiles.length === 0) return badRequest(res, 'O Reel precisa de um vídeo (editado) ou de uma/várias fotos.');
-    if (imageFiles.length > 10) return badRequest(res, 'Máximo de 10 fotos por Reel.');
+    if (imageFiles.length > MAX_IMAGES_PER_POST) return badRequest(res, `Máximo de ${MAX_IMAGES_PER_POST} fotos por Reel.`);
 
     let productId = null;
     if (req.body.productId) {
@@ -246,7 +248,7 @@ const update = async (req, res) => {
       }
 
       if (newFiles.length) {
-        if (keepIds.length + newFiles.length > 10) return badRequest(res, 'Máximo de 10 fotos por Reel.');
+        if (keepIds.length + newFiles.length > MAX_IMAGES_PER_POST) return badRequest(res, `Máximo de ${MAX_IMAGES_PER_POST} fotos por Reel.`);
         const uploadResults = await uploadSvc.uploadMany(newFiles, 'bazares/reels');
         const validImages = uploadResults.filter(r => r.ok);
         imageUploadErrors = uploadResults.filter(r => !r.ok).map(r => r.error);
@@ -267,7 +269,7 @@ const update = async (req, res) => {
       // uma vez — é sempre uma substituição total (não dá para "manter"
       // a foto legada individualmente, já que ela não vive em ReelImage).
       if (reel.videoUrl) return badRequest(res, 'Este Reel tem vídeo — não é possível trocar por fotos. Apaga e publica de novo.');
-      if (newFiles.length > 10) return badRequest(res, 'Máximo de 10 fotos por Reel.');
+      if (newFiles.length > MAX_IMAGES_PER_POST) return badRequest(res, `Máximo de ${MAX_IMAGES_PER_POST} fotos por Reel.`);
       const uploadResults = await uploadSvc.uploadMany(newFiles, 'bazares/reels');
       const validImages = uploadResults.filter(r => r.ok);
       imageUploadErrors = uploadResults.filter(r => !r.ok).map(r => r.error);
