@@ -1,5 +1,7 @@
 'use strict';
 
+const { MAX_IMAGES_PER_POST } = require('../config/uploadLimits');
+
 const Sentry = require('../config/sentry');
 const logger = require('../utils/logger');
 const { notFound, errorBody } = require('../utils/response');
@@ -52,9 +54,14 @@ const errorHandler = (err, req, res, next) => {
     return send(400, 'FILE_TOO_LARGE', `Ficheiro demasiado grande. Máximo: ${max}.`);
   }
   if (err.code === 'LIMIT_FILE_COUNT') {
-    return send(400, 'TOO_MANY_FILES', 'Demasiados ficheiros para este envio.');
+    return send(400, 'TOO_MANY_FILES', `Demasiados ficheiros: o máximo é ${MAX_IMAGES_PER_POST} fotos por publicação.`);
   }
   if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+    // O multer usa este código quando um campo recebe mais ficheiros do que o seu maxCount
+    // (ex.: "images" com mais de MAX_IMAGES_PER_POST) e também quando o campo nem existe.
+    // O nome do campo vem em err.field — diz o que realmente se passou em vez de uma frase vaga.
+    if (err.field === 'images') return send(400, 'TOO_MANY_FILES', `Demasiadas fotos: o máximo é ${MAX_IMAGES_PER_POST} por publicação.`);
+    if (err.field === 'image' || err.field === 'video') return send(400, 'TOO_MANY_FILES', 'Envie só uma foto ou um vídeo de cada vez neste campo.');
     return send(400, 'UNEXPECTED_FILE', 'Campo de ficheiro inesperado.');
   }
   if (err.message?.includes('Apenas imagens') || err.message?.includes('Apenas vídeos') || err.message?.includes('Apenas áudio')) {
