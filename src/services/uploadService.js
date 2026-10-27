@@ -1,5 +1,7 @@
 'use strict';
 
+const { MAX_IMAGES_PER_POST } = require('../config/uploadLimits');
+
 const cloudinary = require('cloudinary').v2;
 const multer = require('multer');
 const path = require('path');
@@ -71,7 +73,7 @@ const fileFilter = (req, file, cb) => {
 const upload = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 10 * 1024 * 1024, files: 20 } // 10MB per file, max 20
+  limits: { fileSize: 10 * 1024 * 1024, files: MAX_IMAGES_PER_POST } // 10MB por ficheiro
 });
 
 // ─── Multer para vídeo (Histórias em vídeo, Reels) ───────────────
@@ -96,10 +98,14 @@ const uploadVideo = multer({
   limits: { fileSize: 60 * 1024 * 1024, files: 1 } // 60MB, um vídeo por pedido
 });
 
+// `files` é o total de ficheiros por pedido. Estava a 1, mas a rota dos Reels aceita até
+// MAX_IMAGES_PER_POST fotos (campo "images"): qualquer Reel com 2+ fotos era rejeitado pelo
+// próprio multer (LIMIT_FILE_COUNT) antes de chegar ao controlador. Cada rota continua a
+// limitar os seus campos com `maxCount` (história: 1 foto OU 1 vídeo; reel: 1 vídeo OU fotos).
 const uploadMedia = multer({
   storage,
   fileFilter: mediaFileFilter,
-  limits: { fileSize: 60 * 1024 * 1024, files: 1 }
+  limits: { fileSize: 60 * 1024 * 1024, files: MAX_IMAGES_PER_POST }
 });
 
 // ─── Multer para o EDITOR de vídeo (Fase 3) ───────────────────────
