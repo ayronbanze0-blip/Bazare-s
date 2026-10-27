@@ -158,13 +158,20 @@ const sumToday = async (client, walletId, type, now = new Date()) => {
   return r._sum.amount || 0;
 };
 
+// Nº de movimentos de um tipo hoje (hora de Maputo) — o ecrã da carteira usa-o para avaliar o risco de levantamentos repetidos.
+const countToday = async (client, walletId, type, now = new Date()) =>
+  client.walletTransaction.count({
+    where: { walletId, type, status: { in: LIVE_STATUSES }, createdAt: { gte: rules.startOfDayMaputo(now) } }
+  });
+
 const getSummary = async (userId) => {
   const now = new Date();
   const wallet = await walletService.getOrCreateWallet(prisma, userId);
   const limits = rules.getLimits();
 
-  const [withdrawnToday, transferredToday, monthGroups, pendingW, pendingDeps, pendingReqs] = await Promise.all([
+  const [withdrawnToday, withdrawalsToday, transferredToday, monthGroups, pendingW, pendingDeps, pendingReqs] = await Promise.all([
     sumToday(prisma, wallet.id, 'DEBITO_LEVANTAMENTO', now),
+    countToday(prisma, wallet.id, 'DEBITO_LEVANTAMENTO', now),
     sumToday(prisma, wallet.id, 'TRANSFERENCIA_ENVIADA', now),
     prisma.walletTransaction.groupBy({
       by: ['type', 'referenceType'],
@@ -194,6 +201,7 @@ const getSummary = async (userId) => {
     available: Math.max(0, rules.round2(wallet.balance - held)),
     hasPin: Boolean(wallet.pinHash),
     pinLockedMinutes: lockedMin,
+    withdrawalsToday, // nº de levantamentos hoje (Mente.risco.levantamento)
     month: { in: rules.round2(monthIn), out: rules.round2(monthOut) },
     pending: {
       withdrawals: pendingW._count || 0,
