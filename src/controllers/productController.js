@@ -168,7 +168,10 @@ const getOne = async (req, res) => {
         bazar: {
           select: {
             id: true, name: true, slug: true, bannerUrl: true, phone: true, location: true,
-            seller: { select: { verifiedSeller: true, isPremium: true } }
+            // O selo de confiança do ecrã de produto (Mente.confianca.vendedor) precisa de nota, nº de
+            // avaliações, votos e antiguidade — antes só vinham verifiedSeller e isPremium e o selo
+            // caía sempre em "Vendedor novo".
+            seller: { select: { verifiedSeller: true, isPremium: true, rating: true, ratingCount: true, thumbsUp: true, thumbsDown: true, createdAt: true } }
           }
         },
         reviews: {
@@ -191,6 +194,14 @@ const getOne = async (req, res) => {
         where: { userId_productId: { userId: req.user.id, productId: product.id } }
       }), null);
       isFavorite = !!fav;
+    }
+
+    // `sales` = nº de encomendas ENTREGUES do vendedor (Mente.confianca.vendedor lê este campo).
+    // Bazar.totalSales NÃO serve: é o valor em MT, não a quantidade de vendas.
+    if (product.bazar && product.bazar.seller) {
+      product.bazar.seller.sales = await stage('vendas-vendedor', () => prisma.order.count({
+        where: { sellerId: product.sellerId, status: 'ENTREGUE' }
+      }), 0);
     }
 
     const [withPromo] = await attachPromotions([{ ...product, isFavorite }], { viewerId: req.user?.id });

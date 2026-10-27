@@ -52,6 +52,48 @@ const list = async (req, res) => {
   }
 };
 
+// GET /friends/mutual/:userId — amigos que EU e outra pessoa temos em comum.
+// Resposta: { items:[pessoa], count, meta } (amigos.html lê items+count; pessoa.html lê items/count).
+// Privacidade: se existir bloqueio entre nós, devolve lista vazia (não revela nada) e nunca mostra
+// pessoas que eu bloqueei ou que me bloquearam.
+const MUTUAL_SCAN_CAP = 5000; // limite de segurança por pessoa ao cruzar listas de amigos
+const mutual = async (req, res) => {
+  try {
+    const me = req.user.id;
+    const other = String(req.params.userId || '').trim();
+    const { limit, page, skip } = pageParams(req.query);
+    const vazio = () => ok(res, { items: [], count: 0, meta: meta(0, page, limit) });
+    if (!other || other === me) return vazio();
+    if (await blockSvc.isBlockedEither(me, other)) return vazio();
+
+    const friendIdsOf = async (uid) => {
+      const rows = await prisma.friendship.findMany({
+        where: { status: 'ACCEPTED', OR: [{ requesterId: uid }, { addresseeId: uid }] },
+        select: { requesterId: true, addresseeId: true },
+        take: MUTUAL_SCAN_CAP
+      });
+      return rows.map((r) => (r.requesterId === uid ? r.addresseeId : r.requesterId));
+    };
+    const [mine, theirs, hidden] = await Promise.all([
+      friendIdsOf(me), friendIdsOf(other),
+      blockSvc.getHiddenUserIds(me).catch(() => new Set())
+    ]);
+    const theirSet = new Set(theirs);
+    const ids = mine.filter((id) => id !== me && id !== other && theirSet.has(id) && !hidden.has(id));
+    if (!ids.length) return vazio();
+
+    const where = { id: { in: ids }, active: true };
+    const [users, count] = await Promise.all([
+      prisma.user.findMany({ where, select: PERSON_SELECT, orderBy: { name: 'asc' }, take: limit, skip }),
+      prisma.user.count({ where })
+    ]);
+    return ok(res, { items: users.map(person), count, meta: meta(count, page, limit) });
+  } catch (err) {
+    logger.error(`[Friends.mutual] ${err.message}`);
+    return serverError(res);
+  }
+};
+
 // GET /friends/summary — contadores (separadores e distintivo)
 const summary = async (req, res) => {
   try {
@@ -273,4 +315,4 @@ const removeWith = async (req, res) => {
   }
 };
 
-module.exports = { list, summary, requests, status, search, suggestions, request, accept, decline, remove, removeWith };
+module.exports = { list, summary, requests, status, search, suggestions, request, accept, decline, remove, removeWith, mutual };
