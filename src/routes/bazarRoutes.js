@@ -1,5 +1,7 @@
 'use strict';
 
+const { MAX_IMAGES_PER_POST } = require('../config/uploadLimits');
+
 const { publicTrackLimiter } = require('../middleware/rateLimiter');
 const router = require('express').Router();
 const { body } = require('express-validator');
@@ -32,9 +34,9 @@ router.get('/:idOrSlug/follow-status', optionalAuth, ctrl.followStatus);
 router.post('/:idOrSlug/follow', authenticate, ctrl.toggleFollow);
 router.get('/:idOrSlug/announcements', announcementCtrl.list);
 router.get('/:idOrSlug/announcements/:announcementId', authenticate, isSeller, announcementCtrl.getOne);
-// Até 6 fotos por anúncio (campo multipart "images"), como pedido em anuncio.html.
-router.post('/:idOrSlug/announcements', authenticate, isSeller, upload.array('images', 6), announcementCtrl.create);
-router.put('/:idOrSlug/announcements/:announcementId', authenticate, isSeller, upload.array('images', 6), announcementCtrl.update);
+// Até MAX_IMAGES_PER_POST (20) fotos por anúncio (campo multipart "images"), como pedido em anuncio.html.
+router.post('/:idOrSlug/announcements', authenticate, isSeller, upload.array('images', MAX_IMAGES_PER_POST), announcementCtrl.create);
+router.put('/:idOrSlug/announcements/:announcementId', authenticate, isSeller, upload.array('images', MAX_IMAGES_PER_POST), announcementCtrl.update);
 router.delete('/:idOrSlug/announcements/:announcementId', authenticate, isSeller, announcementCtrl.remove);
 
 // Histórias: imagem OU vídeo no mesmo endpoint (campos "image" / "video").
@@ -51,13 +53,13 @@ router.get('/:idOrSlug/reels/:reelId', authenticate, isSeller, reelCtrl.getOne);
 router.post(
   '/:idOrSlug/reels',
   authenticate, isSeller,
-  uploadMedia.fields([{ name: 'video', maxCount: 1 }, { name: 'image', maxCount: 1 }, { name: 'images', maxCount: 10 }]),
+  uploadMedia.fields([{ name: 'video', maxCount: 1 }, { name: 'image', maxCount: 1 }, { name: 'images', maxCount: MAX_IMAGES_PER_POST }]),
   reelCtrl.create
 );
 router.put(
   '/:idOrSlug/reels/:reelId',
   authenticate, isSeller,
-  uploadMedia.fields([{ name: 'image', maxCount: 1 }, { name: 'images', maxCount: 10 }]),
+  uploadMedia.fields([{ name: 'image', maxCount: 1 }, { name: 'images', maxCount: MAX_IMAGES_PER_POST }]),
   reelCtrl.update
 );
 router.delete('/:idOrSlug/reels/:reelId', authenticate, isSeller, reelCtrl.remove);

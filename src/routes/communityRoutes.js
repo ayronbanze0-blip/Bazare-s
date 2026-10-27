@@ -1,5 +1,7 @@
 'use strict';
 
+const { MAX_IMAGES_PER_POST } = require('../config/uploadLimits');
+
 const router = require('express').Router();
 const ctrl = require('../controllers/communityController');
 const { authenticate, optionalAuth } = require('../middleware/auth');
@@ -32,7 +34,7 @@ router.post('/:idOrSlug/requests/:userId/decline', authenticate, ctrl.declineReq
 // ─── Posts do grupo ─────────────────────────────────────────────────
 router.get('/:idOrSlug/posts', optionalAuth, ctrl.listPosts);
 router.get('/:idOrSlug/posts/:postId', optionalAuth, ctrl.getPost);
-router.post('/:idOrSlug/posts', authenticate, upload.array('images', 6), ctrl.createPost);
+router.post('/:idOrSlug/posts', authenticate, upload.array('images', MAX_IMAGES_PER_POST), ctrl.createPost);
 router.put('/:idOrSlug/posts/:postId', authenticate, ctrl.updatePost);
 router.delete('/:idOrSlug/posts/:postId', authenticate, ctrl.removePost);
 router.post('/:idOrSlug/posts/:postId/pin', authenticate, ctrl.pinPost);
