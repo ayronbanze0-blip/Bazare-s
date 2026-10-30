@@ -7,6 +7,7 @@
  * Um passo que falha nunca impede os outros nem derruba o processo.
  */
 const logger = require('../utils/logger');
+const { noOverlap } = require('../utils/noOverlap');
 
 const safe = (label, fn) => async () => {
   try { await fn(); } catch (err) { logger.error(`[commerceJobs:${label}] ${err.message}`); }
@@ -18,8 +19,8 @@ function scheduleCommerceJobs() {
   const promotions = () => require('../services/couponService').expirePromotions();
   const views = () => require('../services/viewService').maintenance();
 
-  const runInstallments = safe('installments', installments);
-  const runHourly = async () => { await safe('promotions', promotions)(); await safe('views', views)(); };
+  const runInstallments = noOverlap(safe('installments', installments));
+  const runHourly = noOverlap(async () => { await safe('promotions', promotions)(); await safe('views', views)(); });
 
   const timers = [
     setTimeout(runInstallments, 45 * 1000),

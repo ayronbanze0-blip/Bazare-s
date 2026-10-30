@@ -12,6 +12,7 @@
  */
 const prisma = require('../config/database');
 const logger = require('../utils/logger');
+const { noOverlap } = require('../utils/noOverlap');
 
 const num = (v, d) => { const n = parseFloat(v); return Number.isFinite(n) && n >= 0 ? n : d; };
 const CANCEL_HOURS = num(process.env.ORDER_AUTO_CANCEL_HOURS, 48);
@@ -60,7 +61,7 @@ async function runOrderJob() {
 }
 
 function scheduleOrderJobs() {
-  const safe = async () => { try { await runOrderJob(); } catch (err) { logger.error(`[orderJobs] ${err.message}`); } };
+  const safe = noOverlap(async () => { try { await runOrderJob(); } catch (err) { logger.error(`[orderJobs] ${err.message}`); } });
   const timers = [setTimeout(safe, 120 * 1000), setInterval(safe, 30 * 60 * 1000)];
   timers.forEach((t) => t.unref && t.unref());
   return timers;
