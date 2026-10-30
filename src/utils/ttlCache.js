@@ -28,11 +28,15 @@ function createTtlCache({ ttlMs = 60000, max = 500, now = Date.now } = {}) {
   };
 
   /** Devolve o valor em cache ou calcula (uma vez) e guarda. Erros NÃO ficam em cache. */
+  // Pedidos simultâneos à MESMA chave partilham o mesmo cálculo (evita "manada" na BD quando a cache expira).
+  const inflight = new Map();
   const wrap = async (key, fn, ttl = ttlMs) => {
     const hit = get(key);
     if (hit !== undefined) return hit;
-    const value = await fn();
-    return set(key, value, ttl);
+    if (inflight.has(key)) return inflight.get(key);
+    const p = (async () => set(key, await fn(), ttl))();
+    inflight.set(key, p);
+    try { return await p; } finally { inflight.delete(key); }
   };
 
   return { get, set, wrap, delete: (key) => store.delete(key), clear: () => store.clear(), size: () => store.size };

@@ -83,4 +83,10 @@ function maskMsisdn(raw) {
   return `${s.slice(0, 5)}${'*'.repeat(s.length - 7)}${s.slice(-2)}`;
 }
 
-module.exports = { redact, stripForResponse, maskMsisdn, REDACTED, SENSITIVE_KEYS };
+/** Esconde valores sensíveis na query string de um URL (para logs de acesso). */
+const redactUrl = (url) => String(url == null ? '' : url).replace(
+  /([?&](?:token|code|secret|password|pass|key|apikey|api_key|signature|sig|refresh|access_token|otp|pin)=)[^&#]*/gi,
+  `$1${REDACTED}`
+);
+
+module.exports = { redact, redactUrl, stripForResponse, maskMsisdn, REDACTED, SENSITIVE_KEYS };
