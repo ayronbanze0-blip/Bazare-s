@@ -5,6 +5,7 @@ const { unauthorized, forbidden } = require('../utils/response');
 const logger = require('../utils/logger');
 const Sentry = require('../config/sentry');
 const prisma = require('../config/database');
+const { createTtlCache } = require('../utils/ttlCache');
 
 // Liga o utilizador autenticado ao evento/transacção Sentry corrente —
 // sem isto, todo erro no backend aparece como "utilizador desconhecido"
@@ -85,12 +86,19 @@ const isBuyer = requireRole(...ANY_ACCOUNT);
 const isAuthenticated = authenticate;
 
 // ─── Optional Auth (public routes that enhance if logged in) ─────
-const optionalAuth = (req, res, next) => {
+// Também confirma o estado ACTUAL da conta (como o `authenticate`), com uma cache curta (15 s) para
+// não pesar na BD em rotas públicas: uma conta suspensa deixa de ser tratada como autenticada e o
+// papel vem da BD, não de um token antigo (ex.: ex-admin com token ainda válido).
+const accountCache = createTtlCache({ ttlMs: 15 * 1000, max: 2000 });
+const optionalAuth = async (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) { req.user = null; return next(); }
   try {
-    req.user = jwt.verify(authHeader.split(' ')[1], process.env.JWT_ACCESS_SECRET, { algorithms: ['HS256'] });
-    tagSentryUser(req);
+    const decoded = jwt.verify(authHeader.split(' ')[1], process.env.JWT_ACCESS_SECRET, { algorithms: ['HS256'] });
+    const acct = await accountCache.wrap(decoded.id, () =>
+      prisma.user.findUnique({ where: { id: decoded.id }, select: { active: true, role: true } }));
+    req.user = acct && acct.active ? { ...decoded, role: acct.role } : null;
+    if (req.user) tagSentryUser(req);
   } catch { req.user = null; }
   next();
 };

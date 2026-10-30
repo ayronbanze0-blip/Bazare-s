@@ -5,18 +5,33 @@ const { tooMany } = require('../utils/response');
 
 const makeHandler = (message) => (req, res) => tooMany(res, message);
 
-// Nota: o 'apiLimiter' é montado em app.js ANTES do router (app.use('/api',
-// apiLimiter) vem antes de app.use('/api', routes)), ou seja, corre antes do
-// middleware 'authenticate' de cada rota — req.user ainda não existe aqui,
-// por isso este limiter tem de continuar a contar por IP. O keyByUserOrIp
-// só faz sentido em limiters aplicados DEPOIS de 'authenticate' na própria
-// rota (ex: orderLimiter abaixo), onde req.user já está definido.
+// Nota: o 'apiLimiter' é montado em app.js ANTES do router, ou seja, corre antes do 'authenticate' de cada
+// rota — req.user ainda não existe aqui, por isso ele próprio verifica o JWT (ver abaixo). O keyByUserOrIp
+// serve para limiters aplicados DEPOIS de 'authenticate' na própria rota (ex: orderLimiter), onde req.user já existe.
 const keyByUserOrIp = (req) => req.user?.id || req.ip;
 
-// ─── General API limiter (por IP — ver nota acima) ────────────────
+// ─── General API limiter ──────────────────────────────────────────
+// Nas redes móveis de Moçambique MUITOS telemóveis partilham o mesmo IP público (CGNAT). Contar só por IP
+// faria utilizadores legítimos bloquearem-se uns aos outros no dia de lançamento. Por isso:
+//   • pedido com JWT VÁLIDO (verificado — uma assinatura HMAC, barata) → contado por utilizador;
+//   • sem token / token inválido → contado por IP (não dá para fugir ao limite com tokens falsos).
+const jwt = require('jsonwebtoken');
+const identify = (req) => {
+  if (req._rlId !== undefined) return req._rlId;
+  req._rlId = null;
+  const h = req.headers.authorization;
+  if (h && h.startsWith('Bearer ') && process.env.JWT_ACCESS_SECRET) {
+    try { req._rlId = jwt.verify(h.slice(7), process.env.JWT_ACCESS_SECRET, { algorithms: ['HS256'] }).id || null; } catch { /* usa IP */ }
+  }
+  return req._rlId;
+};
 const apiLimiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
-  max: parseInt(process.env.RATE_LIMIT_MAX) || 300,
+  // limite por utilizador autenticado (RATE_LIMIT_USER_MAX) vs por IP anónimo (RATE_LIMIT_MAX)
+  limit: (req) => identify(req)
+    ? (parseInt(process.env.RATE_LIMIT_USER_MAX) || 1200)
+    : (parseInt(process.env.RATE_LIMIT_MAX) || 600),
+  keyGenerator: (req) => (identify(req) ? `u:${identify(req)}` : `ip:${req.ip}`),
   standardHeaders: true,
   legacyHeaders: false,
   handler: makeHandler('Demasiados pedidos. Tente novamente mais tarde.')

@@ -32,6 +32,12 @@ const errorHandler = (err, req, res, next) => {
   const send = (status, code, message, extra) =>
     res.status(status).json(errorBody({ req }, code, message, extra));
 
+  // Servidor sobrecarregado (fila de hashing cheia) — 503 com Retry-After, o cliente tenta de novo.
+  if (err.name === 'BusyError') {
+    res.setHeader('Retry-After', '5');
+    return send(503, 'SERVER_BUSY', err.message);
+  }
+
   // CORS rejection
   if (err.message === 'Não autorizado pela política de CORS.') {
     return send(403, 'CORS_FORBIDDEN', err.message);
