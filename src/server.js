@@ -18,6 +18,8 @@ const { scheduleStoryCleanup } = require('./jobs/cleanupExpiredStories');
 const { schedulePremiumDowngrade } = require('./jobs/downgradeExpiredPremium');
 const { scheduleVideoJobRecovery } = require('./jobs/recoverStuckVideoJobs');
 const { scheduleCommerceJobs } = require('./jobs/commerceJobs');
+const { scheduleOrderJobs } = require('./jobs/orderJobs');
+const { scheduleTempSweeper } = require('./jobs/tempSweeper');
 
 const PORT = Number(process.env.PORT) || 3001;
 const prisma = require('./config/database');
@@ -57,6 +59,10 @@ if (
 }
 
 const server = http.createServer(app);
+// O proxy do Render mantém ligações ociosas ~60 s; se o Node fechar antes, o proxy reutiliza uma
+// ligação já fechada e devolve 502 esporádicos. keepAlive > proxy e headersTimeout > keepAlive.
+server.keepAliveTimeout = 65 * 1000;
+server.headersTimeout = 66 * 1000;
 
 // ─── Socket.IO Setup ──────────────────────────────────────────────
 const socketAllowedOrigins = (process.env.FRONTEND_URL || '')
@@ -85,6 +91,8 @@ const io = new Server(server, {
 
 setupSocket(io);
 app.set('io', io); // Allow controllers to access io via req.app.get('io')
+require('./services/realtimeSubscribers').init(io); // eventos do domínio → Socket.IO (order:updated, stock:updated, app:command…)
+require('./services/webhookDispatchService').init(); // webhooks dos utilizadores (+ job de reenvio)
 
 // ─── Initialize services that need Prisma/Socket.IO ──────────────
 notifSvc.init(prisma, io);
@@ -93,6 +101,8 @@ scheduleStoryCleanup(prisma);
 schedulePremiumDowngrade(prisma);
 scheduleVideoJobRecovery(prisma);
 scheduleCommerceJobs(); // parcelas (avisos/débito automático/multas), promoções terminadas, limpeza de visualizações
+scheduleTempSweeper(); // apaga uploads/ficheiros temporários esquecidos (>2 h)
+scheduleOrderJobs(); // cancela PENDENTE sem resposta (48h) e confirma EM_ENTREGA parada (3 dias)
 
 // ─── Database connection check ────────────────────────────────────
 const startServer = async () => {
@@ -113,15 +123,23 @@ const startServer = async () => {
 };
 
 // ─── Graceful Shutdown ─────────────────────────────────────────────
+let shuttingDown = false;
+app.set('isShuttingDown', () => shuttingDown); // /api/health/ready passa a 503 → o balanceador deixa de enviar tráfego
+
 const shutdown = async (signal) => {
+  if (shuttingDown) return; // segundo SIGTERM/SIGINT não reinicia o processo de encerramento
+  shuttingDown = true;
   logger.info(`${signal} recebido. Encerrando graciosamente...`);
-  server.close(async () => {
-    await prisma.$disconnect();
+  // io.close() fecha as ligações Socket.IO E o servidor HTTP; sem isto, as ligações WebSocket
+  // abertas impediam server.close() de terminar e o processo só saía pelo "force exit" (código 1).
+  io.close(async () => {
+    try { await prisma.$disconnect(); } catch (e) { logger.warn(`Falha ao fechar a BD: ${e.message}`); }
     logger.info('Servidor encerrado.');
     process.exit(0);
   });
+  if (typeof server.closeIdleConnections === 'function') server.closeIdleConnections();
   // Force exit after 10s if not closed
-  setTimeout(() => process.exit(1), 10000);
+  setTimeout(() => process.exit(1), 10000).unref();
 };
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
@@ -134,7 +152,9 @@ process.on('unhandledRejection', (reason) => {
 process.on('uncaughtException', (err) => {
   logger.error(`Uncaught Exception: ${err.message}`);
   Sentry.captureException(err);
-  process.exit(1);
+  // Dá até 2 s ao Sentry para enviar o erro antes de sair (sem isto, o evento perdia-se).
+  Promise.resolve(Sentry.flush ? Sentry.flush(2000) : null).catch(() => {}).finally(() => process.exit(1));
+  setTimeout(() => process.exit(1), 3000).unref();
 });
 
 startServer();

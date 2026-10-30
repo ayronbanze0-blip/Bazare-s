@@ -11,6 +11,7 @@ const routes = require('./routes');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 const { apiLimiter } = require('./middleware/rateLimiter');
 const requestId = require('./middleware/requestId');
+const { redactUrl } = require('./utils/redact');
 const logger = require('./utils/logger');
 const Sentry = require('./config/sentry');
 
@@ -100,10 +101,12 @@ app.use(compression());
 
 // ─── Request Logging ─────────────────────────────────────────────
 morgan.token('id', (req) => req.id);
+// Nunca escrever tokens/códigos/segredos que venham na query string para os logs de acesso.
+morgan.token('safe-url', (req) => redactUrl(req.originalUrl || req.url));
 app.use(morgan(
   process.env.NODE_ENV === 'production'
-    ? ':id :method :url :status :res[content-length] - :response-time ms'
-    : ':id :method :url :status :response-time ms',
+    ? ':id :method :safe-url :status :res[content-length] - :response-time ms'
+    : ':id :method :safe-url :status :response-time ms',
   { stream: { write: (msg) => logger.info(msg.trim()) } }
 ));
 
@@ -118,6 +121,13 @@ app.set('trust proxy', 1);
 // proxy destes dois caminhos para aqui via _redirects (ver repo do
 // frontend), para que apareçam sob o domínio público correcto.
 app.use('/', require('./routes/seoRoutes'));
+
+// Respostas da API nunca ficam em cache de browser/proxy por omissão (dados pessoais, saldos, tokens).
+// Um handler que queira cache (ex.: listas públicas) define o seu próprio Cache-Control e prevalece.
+app.use('/api', (req, res, next) => {
+  if (!res.getHeader('Cache-Control')) res.setHeader('Cache-Control', 'no-store');
+  next();
+});
 
 app.use('/api', apiLimiter);
 
