@@ -20,13 +20,16 @@ const bazarValidation = [
   body('category').notEmpty().withMessage('Categoria obrigatória.')
 ];
 
-router.get('/', ctrl.list);
+// Visitantes sem sessão: mesma listagem servida da memória durante 20 s (ver middleware/publicCache.js).
+const anonCache = require('../middleware/publicCache').publicCache({ ttlMs: 20 * 1000 });
+router.get('/', anonCache, ctrl.list);
 router.get('/me', authenticate, isSeller, ctrl.myBazar);
-router.get('/ranking', ctrl.ranking);
+router.get('/ranking', anonCache, ctrl.ranking);
 router.get('/:idOrSlug/products', optionalAuth, browse.bazarProducts);
 router.get('/:idOrSlug/posts', optionalAuth, announcementCtrl.list);   // alias de /announcements (nome do documento)
 router.get('/:idOrSlug/reviews', browse.bazarReviews);
 router.get('/:idOrSlug/followers', browse.bazarFollowers);
+router.get('/:idOrSlug/trust', require('../controllers/trustController').publicTrust);
 router.get('/:idOrSlug/view', optionalAuth, experienceCtrl.bazarView); // experiência: bazar + dono + produtos + posts + reels, 1 pedido
 router.get('/:idOrSlug', optionalAuth, ctrl.getOne);
 router.post('/:idOrSlug/whatsapp-click', publicTrackLimiter, ctrl.trackWhatsappClick);

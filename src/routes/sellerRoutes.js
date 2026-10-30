@@ -8,6 +8,7 @@ const { authenticate, isSeller } = require('../middleware/auth');
 router.use(authenticate, isSeller);
 
 router.get('/dashboard', ctrl.dashboard);
+router.get('/trust', require('../controllers/trustController').ownerTrust);
 // '/products/health' TEM de vir antes de '/products/:id/analytics'
 router.get('/products/health', ctrl.productsHealth);
 router.get('/products/:id/analytics', ctrl.productAnalyticsOwner);

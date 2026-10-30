@@ -35,9 +35,11 @@ const commentValidation = [
 ];
 
 // ─── Public ───────────────────────────────────────────────────────
-router.get('/', optionalAuth, ctrl.list);
-router.get('/featured', optionalAuth, ctrl.featured);
-router.get('/categories-overview', optionalAuth, ctrl.categoriesOverview);
+// Visitantes sem sessão: mesma listagem servida da memória durante 20 s (ver middleware/publicCache.js).
+const anonCache = require('../middleware/publicCache').publicCache({ ttlMs: 20 * 1000 });
+router.get('/', anonCache, optionalAuth, ctrl.list);
+router.get('/featured', anonCache, optionalAuth, ctrl.featured);
+router.get('/categories-overview', anonCache, optionalAuth, ctrl.categoriesOverview);
 
 // ─── Seller (antes de /:id para não ser capturado) ───────────────
 router.get('/mine', authenticate, isSeller, ctrl.myProducts);
