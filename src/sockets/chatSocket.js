@@ -23,20 +23,13 @@ const getBazarBotUserId = async (prisma) => {
   return bazarBotUserIdCache;
 };
 
+const { createLimiter } = require('../utils/slidingLimit');
 const MAX_MESSAGE_LENGTH = 4000;
 const isId = (v) => typeof v === 'string' && v.length > 0 && v.length <= 64;
 
-// Limitador simples por socket+evento (janela fixa). Impede que UMA ligação autenticada
+// Limitador por socket+evento (janela deslizante). Impede que UMA ligação autenticada
 // inunde a BD/sala com eventos (mensagens, typing, joins...).
-const makeLimiter = (max, windowMs) => {
-  let count = 0;
-  let start = Date.now();
-  return () => {
-    const now = Date.now();
-    if (now - start >= windowMs) { start = now; count = 0; }
-    return ++count <= max;
-  };
-};
+const makeLimiter = (max, windowMs) => createLimiter({ max, windowMs }); // janela deslizante (utils/slidingLimit)
 
 // Envolve um handler de evento: (1) o payload é SEMPRE um objecto — um cliente que emita
 // o evento sem argumentos (ou com lixo) fazia `({ chatId }) =>` rebentar de forma síncrona,
