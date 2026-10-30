@@ -2,6 +2,7 @@
 
 const { ok, badRequest, forbidden, notFound, serverError } = require('../utils/response');
 const { paginate, paginateMeta } = require('../utils/helpers');
+const eventBus = require('../services/eventBus');
 const notifSvc = require('../services/notificationService');
 const logger = require('../utils/logger');
 const audit = require('../services/auditService');
@@ -155,6 +156,7 @@ const redeemCode = async (req, res) => {
       return premiumService.activateOrExtend(tx, req.user.id, record.months * 30);
     });
 
+    eventBus.emit(eventBus.EVENTS.PREMIUM_ACTIVATED, { userId: req.user.id, expiresAt: periodEnd });
     logger.info(`[Premium.redeemCode] Código ${record.code} resgatado por ${req.user.email} (+${record.months} mês(es)).`);
     return ok(res, { premiumExpiresAt: periodEnd, months: record.months }, 'Código resgatado! A sua Conta Premium está activa.');
   } catch (err) {
@@ -449,6 +451,7 @@ const adminGrant = async (req, res) => {
       return periodEnd;
     });
 
+    eventBus.emit(eventBus.EVENTS.PREMIUM_ACTIVATED, { userId: target.id, expiresAt: result });
     notifSvc.push(target.id, {
       type: 'SUCCESS', title: 'Conta Premium activada! ⭐',
       message: 'A sua Conta Premium foi activada pela equipa Bazares.',

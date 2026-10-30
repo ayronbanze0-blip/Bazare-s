@@ -11,6 +11,7 @@ const zumboPay = require('../services/zumboPayService');
 const { friendlyGatewayMessage } = require('../services/gatewayErrors');
 const premiumService = require('../services/premiumService');
 const webhookEvents = require('../services/webhookEventService');
+const eventBus = require('../services/eventBus');
 const ledgerService = require('../services/ledgerService');
 const latePayment = require('../services/latePayment');
 const walletFlow = require('../services/walletFlowService');
@@ -101,6 +102,7 @@ const payCommission = async (req, res) => {
         });
       });
 
+      eventBus.emit(eventBus.EVENTS.COMMISSION_PAID, { sellerId: req.user.id, bazarId: bazar.id, amount, method: 'WALLET' });
       notifSvc.push(req.user.id, {
         type: 'SUCCESS', title: 'Contribuição paga',
         message: `Pagamento de ${amount.toLocaleString('pt-MZ')} MT efectuado com sucesso via saldo da wallet.`,
@@ -343,6 +345,7 @@ const handleLateCommission = async (payment, reference, event) => {
       });
 
       if (credited) {
+        eventBus.emit(eventBus.EVENTS.COMMISSION_PAID, { sellerId: payment.sellerId, bazarId: payment.bazarId, amount: payment.amount, method: 'ZUMBOPAY' });
         audit.record(null, 'PAYMENT_LATE_AUTO_CREDITED', {
           entity: 'CommissionPayment', entityId: payment.id, userId: null,
           newValue: { amount: payment.amount, reference, previousStatus: payment.status }
@@ -380,6 +383,7 @@ const handleLatePremium = async (subscription, reference, event) => {
       return end;
     });
     if (periodEnd) {
+      eventBus.emit(eventBus.EVENTS.PREMIUM_ACTIVATED, { userId: subscription.userId, expiresAt: periodEnd });
       audit.record(null, 'PAYMENT_LATE_AUTO_CREDITED', {
         entity: 'PremiumSubscription', entityId: subscription.id, userId: null,
         newValue: { amount: subscription.amount, reference, previousStatus: subscription.status }
@@ -473,6 +477,7 @@ const zumboPayWebhook = async (req, res) => {
         });
 
         if (periodEnd) {
+          eventBus.emit(eventBus.EVENTS.PREMIUM_ACTIVATED, { userId: subscription.userId, expiresAt: periodEnd });
           notifSvc.push(subscription.userId, {
             type: 'SUCCESS', title: 'Conta Premium activada! ⭐',
             message: `Pagamento de ${subscription.amount.toLocaleString('pt-MZ')} MT confirmado. Premium válido até ${periodEnd.toLocaleDateString('pt-MZ')}.`,
@@ -559,6 +564,7 @@ const zumboPayWebhook = async (req, res) => {
       });
 
       if (claimed) {
+        eventBus.emit(eventBus.EVENTS.COMMISSION_PAID, { sellerId: payment.sellerId, bazarId: payment.bazarId, amount: payment.amount, method: 'ZUMBOPAY' });
         notifSvc.push(payment.sellerId, {
           type: 'SUCCESS', title: 'Contribuição paga',
           message: `Pagamento de ${payment.amount.toLocaleString('pt-MZ')} MT confirmado via M-Pesa/e-Mola.`,

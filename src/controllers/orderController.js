@@ -478,7 +478,7 @@ const updateStatus = async (req, res) => {
           await tx.product.update({
             where: { id: item.productId },
             data: { stock: { increment: item.qty } }
-          }).catch(() => {}); // Product might have been deleted
+          }).catch((e) => logger.warn(`[Orders] stock não devolvido (produto ${item.productId}, encomenda ${order.id}): ${e.code || e.message}`)); // normalmente: produto apagado (P2025)
         }
         // `cancelCount` mede cancelamentos FEITOS PELO comprador — antes subia também quando era
         // o vendedor (ou o admin) a cancelar, penalizando o comprador por uma decisão alheia.

@@ -1,6 +1,6 @@
 'use strict';
 
-const bcrypt = require('bcryptjs');
+const bcrypt = require('../utils/passwordHasher'); // bcrypt fora da thread principal (ver o ficheiro)
 const { ok, badRequest, notFound, serverError } = require('../utils/response');
 const { sanitize } = require('../utils/helpers');
 const { uploadAvatar, uploadBazarBanner } = require('../services/uploadService');

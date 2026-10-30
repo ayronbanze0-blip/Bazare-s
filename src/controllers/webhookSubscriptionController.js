@@ -1,10 +1,22 @@
 'use strict';
 
 const crypto = require('crypto');
-const { ok, created, badRequest, notFound, validationError, serverError } = require('../utils/response');
+const { ok, created, badRequest, notFound, validationError, serverError, tooMany } = require('../utils/response');
 const prisma = require('../config/database');
 const logger = require('../utils/logger');
 const { isPublicHttpsUrl } = require('../utils/safeUrl');
+
+const { createLimiter } = require('../utils/slidingLimit');
+
+// Testes de webhook: máx. 5 em 10 min por utilizador (cada um faz um pedido HTTP externo).
+const testLimiters = new Map();
+const allowTest = (userId) => {
+  if (!testLimiters.has(userId)) {
+    if (testLimiters.size > 5000) testLimiters.clear(); // protecção simples contra crescimento
+    testLimiters.set(userId, createLimiter({ max: 5, windowMs: 10 * 60 * 1000 }));
+  }
+  return testLimiters.get(userId)();
+};
 
 const VALID_EVENTS = ['ORDER_STATUS_CHANGED', 'COMMISSION_PAID', 'PREMIUM_ACTIVATED'];
 
@@ -108,4 +120,18 @@ const deliveries = async (req, res) => {
   }
 };
 
-module.exports = { list, create, update, remove, deliveries, VALID_EVENTS };
+// ─── POST /api/webhooks/:id/test — envia um ping assinado e devolve o resultado ───
+const test = async (req, res) => {
+  try {
+    const sub = await prisma.webhookSubscription.findFirst({ where: { id: req.params.id, userId: req.user.id } });
+    if (!sub) return notFound(res, 'Subscrição não encontrada.');
+    if (!allowTest(req.user.id)) return tooMany(res, 'Demasiados testes. Tenta de novo dentro de alguns minutos.');
+    const result = await require('../services/webhookDispatchService').sendTest(sub);
+    return ok(res, { result });
+  } catch (err) {
+    logger.error(`[Webhooks.test] ${err.message}`);
+    return serverError(res);
+  }
+};
+
+module.exports = { list, create, update, remove, deliveries, test, VALID_EVENTS };

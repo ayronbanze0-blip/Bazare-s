@@ -48,10 +48,12 @@ const list = async (req, res) => {
     // Limpa "destaques do dia" (Premium) expirados — barato (índice em
     // `featured`, normalmente 0 linhas afectadas) e garante que o selo
     // "Destaque" nunca fica pendurado depois das 24h combinadas.
-    await prisma.product.updateMany({
-      where: { featured: true, featuredUntil: { lt: new Date() } },
-      data: { featured: false, featuredUntil: null }
-    });
+    if (shouldCount('featured-cleanup', 'all', 'all', 60 * 1000)) { // no máximo 1x/min (antes: 1 escrita por pedido)
+      await prisma.product.updateMany({
+        where: { featured: true, featuredUntil: { lt: new Date() } },
+        data: { featured: false, featuredUntil: null }
+      });
+    }
 
     const where = {
       active: true,
@@ -670,10 +672,12 @@ const featured = async (req, res) => {
   try {
     // Limpa "destaques do dia" (Premium) já expirados antes de listar,
     // para que nunca apareça um produto pinado há mais de 24h.
-    await prisma.product.updateMany({
-      where: { featured: true, featuredUntil: { lt: new Date() } },
-      data: { featured: false, featuredUntil: null }
-    });
+    if (shouldCount('featured-cleanup', 'all', 'all', 60 * 1000)) { // no máximo 1x/min (antes: 1 escrita por pedido)
+      await prisma.product.updateMany({
+        where: { featured: true, featuredUntil: { lt: new Date() } },
+        data: { featured: false, featuredUntil: null }
+      });
+    }
     const products = await prisma.product.findMany({
       where: { featured: true, active: true, bazar: { active: true } },
       take: 12,

@@ -1,6 +1,6 @@
 'use strict';
 
-const bcrypt = require('bcryptjs');
+const bcrypt = require('../utils/passwordHasher'); // bcrypt fora da thread principal (ver o ficheiro)
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { validationResult } = require('express-validator');
