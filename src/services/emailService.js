@@ -338,18 +338,30 @@ const sendViaSendGrid = async ({ to, subject, html }) => {
   return res.headers.get('x-message-id');
 };
 
+// SMTP (nodemailer) — último recurso, só se não houver Resend nem SendGrid e o host permitir SMTP.
+const sendViaSmtp = async ({ to, subject, html }) => {
+  const { getTransporter } = require('../config/mail');
+  const info = await getTransporter().sendMail({
+    from: `"${SENDER_NAME}" <${process.env.EMAIL_FROM_ADDRESS || process.env.SMTP_USER}>`,
+    to, replyTo: SUPPORT_EMAIL, subject, html, text: htmlToText(html),
+    attachments: getInlineAttachments(html).map(a => ({ filename: a.filename, content: a.content, encoding: 'base64', contentType: a.contentType, cid: a.contentId }))
+  });
+  return info.messageId;
+};
+
 const sendEmail = async ({ to, subject, html }) => {
-  const useResend = !!process.env.RESEND_API_KEY;
-  if (!useResend && !process.env.SENDGRID_API_KEY) {
-    logger.warn(`[Email] Sem RESEND_API_KEY (nem SENDGRID_API_KEY) — email para ${to} NÃO foi enviado.`);
-    return { ok: false, error: 'RESEND_API_KEY não configurada' };
+  const provider = process.env.RESEND_API_KEY ? 'Resend'
+    : process.env.SENDGRID_API_KEY ? 'SendGrid'
+    : require('../config/mail').isConfigured() ? 'SMTP' : null;
+  if (!provider) {
+    logger.warn(`[Email] Sem RESEND_API_KEY, SENDGRID_API_KEY nem SMTP_* — email para ${to} NÃO foi enviado.`);
+    return { ok: false, error: 'Nenhum fornecedor de email configurado' };
   }
 
   try {
-    logger.info(`[Email] A enviar para ${to} via ${useResend ? 'Resend' : 'SendGrid'}...`);
-    const messageId = useResend
-      ? await sendViaResend({ to, subject, html })
-      : await sendViaSendGrid({ to, subject, html });
+    logger.info(`[Email] A enviar para ${to} via ${provider}...`);
+    const send = { Resend: sendViaResend, SendGrid: sendViaSendGrid, SMTP: sendViaSmtp }[provider];
+    const messageId = await send({ to, subject, html });
     logger.info(`[Email] Sucesso! ID: ${messageId}`);
     return { ok: true, messageId };
   } catch (err) {

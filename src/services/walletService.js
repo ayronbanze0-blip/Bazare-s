@@ -49,8 +49,11 @@ const getBalance = async (prisma, userId) => {
  * Credita uma wallet. Deve ser chamado com `tx` (cliente dentro de uma
  * transacção Prisma). Cria a wallet on-the-fly se ainda não existir.
  */
-const credit = async (tx, { userId, amount, type, description, referenceType = null, referenceId = null, status = 'CONCLUIDA' }) => {
-  if (!amount || amount <= 0) throw new Error('Valor de crédito inválido.');
+const credit = async (tx, { userId, amount: rawAmount, type, description, referenceType = null, referenceId = null, status = 'CONCLUIDA' }) => {
+  // Ponto único por onde passa TODO o dinheiro que entra: rejeita NaN/Infinity/texto e fixa 2 casas decimais
+  // (um valor como 10.005 ou Infinity nunca chega à coluna Float do saldo).
+  const amount = round2(rawAmount);
+  if (!Number.isFinite(Number(rawAmount)) || !amount || amount <= 0) throw new Error('Valor de crédito inválido.');
 
   let wallet = await tx.wallet.findUnique({ where: { userId } });
   if (!wallet) wallet = await tx.wallet.create({ data: { userId, balance: 0 } });
@@ -107,8 +110,9 @@ const heldAmount = async (db, userId, walletId, balance) => {
  * Debita uma wallet. Lança InsufficientFundsError se o saldo for
  * insuficiente. Deve ser chamado com `tx` dentro de uma transacção.
  */
-const debit = async (tx, { userId, amount, type, description, referenceType = null, referenceId = null, status = 'CONCLUIDA' }) => {
-  if (!amount || amount <= 0) throw new Error('Valor de débito inválido.');
+const debit = async (tx, { userId, amount: rawAmount, type, description, referenceType = null, referenceId = null, status = 'CONCLUIDA' }) => {
+  const amount = round2(rawAmount); // ver nota em credit()
+  if (!Number.isFinite(Number(rawAmount)) || !amount || amount <= 0) throw new Error('Valor de débito inválido.');
 
   let wallet = await tx.wallet.findUnique({ where: { userId } });
   if (!wallet) wallet = await tx.wallet.create({ data: { userId, balance: 0 } });

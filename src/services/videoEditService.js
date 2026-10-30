@@ -142,7 +142,7 @@ function buildVideoFilterChain({ rotation, aspect, brightness, contrast, saturat
  * @param {number} [p.speed=1] - 0.5..2
  * @param {string|null} [p.aspect] - "9:16" | "1:1" | "4:5" | "16:9" | null (proporção original)
  */
-async function processJob(jobId, p) {
+async function processJobNow(jobId, p) {
   const {
     inputPath,
     audioUrl, musicStart = 0, musicEnd = 0,
@@ -360,6 +360,27 @@ function compressAudioForLibrary(inputPath) {
       .on('end', () => resolve(outPath))
       .save(outPath);
   });
+}
+
+// Só N edições de vídeo de cada vez (VIDEO_MAX_CONCURRENT, default 1); as outras ficam PENDING em fila.
+// Fila cheia → o job falha com mensagem clara em vez de acumular e rebentar a memória.
+const { createGate, GateFullError } = require('../utils/concurrencyGate');
+const videoGate = createGate({
+  max: Math.max(1, parseInt(process.env.VIDEO_MAX_CONCURRENT, 10) || 1),
+  maxQueue: Math.max(1, parseInt(process.env.VIDEO_MAX_QUEUE, 10) || 20)
+});
+async function processJob(jobId, p) {
+  try {
+    return await videoGate.run(() => processJobNow(jobId, p));
+  } catch (err) {
+    if (!(err instanceof GateFullError)) throw err;
+    logger.warn(`[VideoEdit] fila cheia — job ${jobId} recusado.`);
+    await prisma.videoJob.update({
+      where: { id: jobId },
+      data: { status: 'FAILED', errorMessage: 'O servidor está ocupado com outros vídeos. Tente novamente dentro de alguns minutos.' }
+    }).catch(() => {});
+    [p && p.inputPath].filter(Boolean).forEach((f) => fs.unlink(f, () => {}));
+  }
 }
 
 module.exports = { validateInput, processJob, compressAudioForLibrary, MAX_OUTPUT_DURATION_SEC, MAX_INPUT_DURATION_SEC };

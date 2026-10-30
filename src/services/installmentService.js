@@ -369,7 +369,7 @@ async function runInstallmentJob({ now = new Date() } = {}) {
 
   // 5) Reembolsos pendentes: tenta de novo (o vendedor pode já ter carregado a carteira)
   const pendingRefunds = await prisma.installmentPlan.findMany({ where: { refundPendingAmount: { gt: 0 } }, select: { id: true }, take: 100 });
-  for (const p of pendingRefunds) await refundPlan(p.id, { reason: 'reembolso pendente' }).catch(() => {});
+  for (const p of pendingRefunds) await refundPlan(p.id, { reason: 'reembolso pendente' }).catch((e) => logger.warn(`[Installments.job] reembolso pendente ${p.id} falhou: ${e.message}`));
 
   if (Object.values(stats).some((v) => v > 0)) logger.info(`[Installments.job] ${JSON.stringify(stats)}`);
   return stats;

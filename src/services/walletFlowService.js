@@ -14,7 +14,7 @@
  */
 
 const crypto = require('crypto');
-const bcrypt = require('bcryptjs');
+const bcrypt = require('../utils/passwordHasher'); // bcrypt fora da thread principal (ver o ficheiro)
 const prisma = require('../config/database');
 const logger = require('../utils/logger');
 const walletService = require('./walletService');
