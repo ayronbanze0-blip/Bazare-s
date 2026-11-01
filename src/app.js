@@ -82,7 +82,13 @@ app.use(cors({
   // a chamada real (aparece como "falha de conexão" no frontend, mesmo
   // com o backend saudável) — foi exactamente isto que causou o bug
   // reportado na fusão do frontend.
-  allowedHeaders: ['Content-Type', 'Authorization', 'sentry-trace', 'baggage']
+  // SEM lista fixa de cabeçalhos: o `cors` devolve exactamente os que o browser pediu no preflight
+  // (Access-Control-Request-Headers). Com a lista fixa, qualquer cabeçalho novo do frontend
+  // (Idempotency-Key, X-Request-Id, X-Requested-With…) fazia o browser cortar o pedido ANTES de
+  // chegar ao servidor — a app mostrava "Sem ligação ao servidor" e o Render não registava nada.
+  // A origem continua validada acima e a autenticação é por Bearer token, por isso não perde segurança.
+  exposedHeaders: ['X-Request-Id'],
+  maxAge: 600
 }));
 
 // ─── Webhooks (ANTES do express.json — precisam do corpo em bruto) ─
