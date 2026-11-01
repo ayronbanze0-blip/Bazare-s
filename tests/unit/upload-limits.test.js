@@ -76,3 +76,13 @@ test('errorHandler: fotos a mais dizem o limite (20) em vez de "campo inesperado
   const d = chamar({ code: 'LIMIT_UNEXPECTED_FILE', field: 'outro', message: 'Unexpected field' });
   assert.strictEqual(cod(d), 'UNEXPECTED_FILE');
 });
+
+test('errorHandler (multer 2): pedido multipart truncado/malformado é 400, não 500', () => {
+  const a = chamar({ message: 'Unexpected end of form' });
+  assert.strictEqual(a.code, 400); assert.strictEqual(cod(a), 'INVALID_MULTIPART');
+  const b = chamar({ message: 'Malformed part header' });
+  assert.strictEqual(b.code, 400); assert.strictEqual(cod(b), 'INVALID_MULTIPART');
+  // os códigos específicos do multer continuam a ter prioridade
+  const c = chamar({ name: 'MulterError', code: 'LIMIT_FILE_SIZE', message: 'File too large' });
+  assert.strictEqual(cod(c), 'FILE_TOO_LARGE');
+});
