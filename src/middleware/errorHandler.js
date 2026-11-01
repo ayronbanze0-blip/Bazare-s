@@ -70,6 +70,11 @@ const errorHandler = (err, req, res, next) => {
     if (err.field === 'image' || err.field === 'video') return send(400, 'TOO_MANY_FILES', 'Envie só uma foto ou um vídeo de cada vez neste campo.');
     return send(400, 'UNEXPECTED_FILE', 'Campo de ficheiro inesperado.');
   }
+  // multer 2.x: pedidos multipart malformados/truncados passam a chegar aqui como erros normais
+  // (na 1.x podiam rebentar o processo — CVE-2025-47944/47935/48997/7338). Têm de ser 4xx, não 500.
+  if (err.name === 'MulterError' || /^(Unexpected end of form|Malformed part header|Malformed urlencoded form|Multipart: Boundary not found|Missing Content-Type|Unexpected end of multipart data)/i.test(err.message || '')) {
+    return send(400, 'INVALID_MULTIPART', 'Pedido de envio de ficheiros inválido ou interrompido. Tenta novamente.');
+  }
   if (err.message?.includes('Apenas imagens') || err.message?.includes('Apenas vídeos') || err.message?.includes('Apenas áudio')) {
     return send(400, 'INVALID_FILE_TYPE', err.message);
   }
