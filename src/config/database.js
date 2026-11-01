@@ -13,8 +13,8 @@ const prisma = new PrismaClient({
 });
 
 // Ledger append-only: nenhum código pode editar/apagar movimentos da wallet.
-// Prisma 5: middleware `$use`. Prisma 6+ REMOVEU `$use` — antes, com a actualização, esta protecção
-// desligava-se em silêncio (o `if` simplesmente não corria). Agora cai para uma extensão de cliente
+// Prisma 5 e 6.0-6.13: middleware `$use`. A partir do Prisma 6.14 o `$use` foi REMOVIDO — por isso, com
+// o Prisma 6.19 deste projecto, é SEMPRE o ramo `$extends` que protege o ledger (o `if` do `$use` nem corre). Agora cai para uma extensão de cliente
 // (`$extends`), que funciona em 5, 6 e 7 e também dentro de `$transaction`.
 let client = prisma;
 if (typeof prisma.$use === 'function') {
