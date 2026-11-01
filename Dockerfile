@@ -1,7 +1,11 @@
-# Node 22 (LTS). Node 24 só depois de subir o Prisma para uma versão que o suporte
-# oficialmente (o Prisma 5.x suporta até Node 22). Debian "bookworm" fixado de propósito:
-# o Prisma 5 detecta o OpenSSL 3.0 do bookworm; imagens mais novas (trixie) podem falhar.
-FROM node:22-bookworm-slim
+# Versão do Node escolhida por variável de ambiente (ARG). No Render, uma variável de ambiente
+# chamada NODE_VERSION é passada ao build automaticamente como build-arg.
+#   Passo A (agora):  NODE_VERSION não definida  -> Node 22  (com Prisma 6 + multer 2)
+#   Passo B (depois): NODE_VERSION=24            -> Node 24  (sem mexer em mais nada)
+# Prisma 6.19+ corre em Node 22 e 24. Debian "bookworm" fixado de propósito: traz o OpenSSL 3.0
+# que o Prisma detecta sem problemas; imagens mais novas (trixie) podem falhar.
+ARG NODE_VERSION=22
+FROM node:${NODE_VERSION}-bookworm-slim
 
 WORKDIR /app
 
