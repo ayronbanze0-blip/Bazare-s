@@ -37,6 +37,7 @@ const stubs = {
   '../services/blockService': { blockedAmong: async () => [] },
   '../services/checkoutService': { buildCheckout: async () => checkout, publicQuote: (c) => ({ paymentMode: c.paymentMode }) },
   '../services/couponService': {}, '../services/installmentService': {}, '../services/walletFlowService': {},
+  '../services/escrowService': { publicOrder: (o) => o },
   '../utils/logger': { error: (m) => logged.push(['error', m]), warn() {}, info() {} }
 };
 const orig = Module._load;
