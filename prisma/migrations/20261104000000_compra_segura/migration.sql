@@ -1,1 +1,17 @@
+-- COMPRA SEGURA COM CÓDIGO (dinheiro retido): campos novos em "Order" e "OrderDispute".
+-- Só ADICIONA colunas/índices (nullable ou com DEFAULT) — não toca em dados existentes.
+ALTER TABLE "Order" ADD COLUMN IF NOT EXISTS "acceptedAt" TIMESTAMP(3);
+ALTER TABLE "Order" ADD COLUMN IF NOT EXISTS "payDeadline" TIMESTAMP(3);
+ALTER TABLE "Order" ADD COLUMN IF NOT EXISTS "paidAt" TIMESTAMP(3);
+ALTER TABLE "Order" ADD COLUMN IF NOT EXISTS "deliveryDeadline" TIMESTAMP(3);
+ALTER TABLE "Order" ADD COLUMN IF NOT EXISTS "escrowState" TEXT;
+ALTER TABLE "Order" ADD COLUMN IF NOT EXISTS "escrowAmount" DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE "Order" ADD COLUMN IF NOT EXISTS "releasedAt" TIMESTAMP(3);
+ALTER TABLE "Order" ADD COLUMN IF NOT EXISTS "closedKind" TEXT;
+ALTER TABLE "Order" ADD COLUMN IF NOT EXISTS "codeNonce" TEXT;
+ALTER TABLE "Order" ADD COLUMN IF NOT EXISTS "codeAttempts" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "Order" ADD COLUMN IF NOT EXISTS "codeLockedUntil" TIMESTAMP(3);
+ALTER TABLE "Order" ADD COLUMN IF NOT EXISTS "payIdempotencyKey" TEXT;
+CREATE INDEX IF NOT EXISTS "Order_escrowState_idx" ON "Order"("escrowState");
 
+ALTER TABLE "OrderDispute" ADD COLUMN IF NOT EXISTS "openedById" TEXT;
