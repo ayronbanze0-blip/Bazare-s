@@ -16,7 +16,7 @@ const premiumService = require('./premiumService');
 const { blockedAmong } = require('./blockService');
 const { AppError, bad, forbiddenErr } = require('../utils/appError');
 
-const PAYMENT_MODES = ['ENTREGA', 'CARTEIRA', 'PARCELAS'];
+const PAYMENT_MODES = ['ENTREGA', 'CARTEIRA', 'PARCELAS', 'SEGURA'];
 const c2m = R.fromCents;
 
 /**
@@ -25,7 +25,7 @@ const c2m = R.fromCents;
  * @param {{productId:string, qty:number}[]} p.items   já normalizados (normalizeOrderItems)
  * @param {string} [p.couponCode]
  * @param {string|Object<string,string>} [p.deliveryZones]  id da zona (carrinho de 1 vendedor) ou { [sellerId]: zoneId }
- * @param {'ENTREGA'|'CARTEIRA'|'PARCELAS'} [p.paymentMode]
+ * @param {'ENTREGA'|'CARTEIRA'|'PARCELAS'|'SEGURA'} [p.paymentMode]  (SEGURA = compra segura com código: nada é cobrado no pedido)
  * @param {number} [p.installments]  nº de parcelas (PARCELAS)
  */
 async function buildCheckout({ buyerId, items, couponCode, deliveryZones, paymentMode = 'ENTREGA', installments, now = new Date() }) {
@@ -219,7 +219,7 @@ async function paymentOptions(buyerId, items) {
     walletBalance: wallet ? wallet.balance : 0,
     hasPin: Boolean(wallet && wallet.pinHash),
     modes: {
-      ENTREGA: true, CARTEIRA: true,
+      ENTREGA: true, CARTEIRA: true, SEGURA: true,
       PARCELAS: !blockedReason && sellers.every((s) => s.installments)
     },
     installmentsBlockedReason: blockedReason,

@@ -195,8 +195,14 @@ const getSummary = async (userId) => {
   const lockedMin = rules.pinLockRemainingMin(wallet.pinLockedUntil, now);
   // Vendas pagas pela carteira só ficam disponíveis quando a encomenda é entregue.
   const held = await walletService.heldAmount(prisma, userId, wallet.id, wallet.balance);
+  // Compra segura: dinheiro que o utilizador pagou e está retido (já saiu do saldo) e o que vai receber quando
+  // o comprador der o código (ainda NÃO está no saldo). Falha isolada: nunca impede o resumo da carteira.
+  const escrow = await require('./escrowService').walletTotals(userId).catch(() => ({ held: 0, heldCount: 0, toRelease: 0, toReleaseCount: 0, inDispute: 0 }));
   return {
+    withdrawFeePct: withdrawFeePct(),
+    withdrawOperatorFeePct: operatorFeePct(),
     balance: wallet.balance,
+    escrow,
     held,
     available: Math.max(0, rules.round2(wallet.balance - held)),
     hasPin: Boolean(wallet.pinHash),
@@ -549,8 +555,18 @@ const adminRejectDeposit = async (adminId, id, reason) => {
 // ═════════════════════════════════════════════════════════════════
 // Levantamentos
 // ═════════════════════════════════════════════════════════════════
+// Taxa da Bazares sobre o levantamento (3% por omissão). Debita-se o valor TODO da carteira; o utilizador recebe
+// valor − taxa no M-Pesa/e-Mola. A taxa só entra na conta da plataforma quando o levantamento é PAGO
+// (cancelado/rejeitado devolve o valor inteiro, sem taxa).
+const withdrawFeePct = () => { const n = parseFloat(process.env.WITHDRAW_FEE_PCT); return Number.isFinite(n) && n >= 0 && n <= 100 ? n : 3; };
+const withdrawFee = (amount) => Math.round(amount * withdrawFeePct()) / 100;
+// Taxa da operadora (M-Pesa/e-Mola) — também descontada ao utilizador e sempre mostrada antes de pedir.
+const operatorFeePct = () => { const n = parseFloat(process.env.WITHDRAW_OPERATOR_FEE_PCT); return Number.isFinite(n) && n >= 0 && n <= 100 ? n : 1.5; };
+const operatorFee = (amount) => Math.round(amount * operatorFeePct()) / 100;
+const netOf = (w) => Math.round((w.amount - (w.fee || 0) - (w.operatorFee || 0)) * 100) / 100; // dinheiro real que chega ao utilizador
+
 const publicWithdrawal = (w) => ({
-  id: w.id, amount: w.amount, method: w.method, status: w.status,
+  id: w.id, amount: w.amount, fee: w.fee || 0, operatorFee: w.operatorFee || 0, netAmount: netOf(w), method: w.method, status: w.status,
   destination: rules.maskPhone(w.destination), rejectReason: w.rejectReason,
   createdAt: w.createdAt, reviewedAt: w.reviewedAt
 });
@@ -598,7 +614,7 @@ const requestWithdrawal = async (user, { amount, destination, method, pin, idemp
       }
 
       const w = await tx.withdrawalRequest.create({
-        data: { userId: user.id, amount: a.value, method: detected, destination: normalized, status: 'PENDENTE', idempotencyKey: idempotencyKey || null }
+        data: { userId: user.id, amount: a.value, fee: withdrawFee(a.value), operatorFee: operatorFee(a.value), method: detected, destination: normalized, status: 'PENDENTE', idempotencyKey: idempotencyKey || null }
       });
       await walletService.debit(tx, {
         userId: user.id, amount: a.value, type: 'DEBITO_LEVANTAMENTO', status: 'PENDENTE',
@@ -642,6 +658,7 @@ const adminPayWithdrawal = async (adminId, id, notes) => {
   const w = await prisma.withdrawalRequest.findUnique({ where: { id } });
   if (!w) throw new WalletFlowError('Levantamento não encontrado.', 404, 'NOT_FOUND');
   if (w.userId === adminId) throw new WalletFlowError('Não podes processar o teu próprio levantamento.', 403, 'FORBIDDEN');
+  const feeAdmin = w.fee > 0 ? await walletService.getPlatformAdmin(prisma) : null;
   await prisma.$transaction(async (tx) => {
     const claim = await tx.withdrawalRequest.updateMany({
       where: { id, status: 'PENDENTE' },
@@ -652,12 +669,20 @@ const adminPayWithdrawal = async (adminId, id, notes) => {
       where: { referenceType: 'WITHDRAWAL', referenceId: id, type: 'DEBITO_LEVANTAMENTO' },
       data: { status: 'CONCLUIDA' }
     });
+    // Comissão da Bazares: entra na carteira da plataforma no mesmo instante em que o levantamento é pago.
+    if (feeAdmin && w.fee > 0) {
+      await walletService.credit(tx, {
+        userId: feeAdmin.id, amount: w.fee, type: 'CREDITO_COMISSAO',
+        description: `Taxa de levantamento (${withdrawFeePct()}%)`, referenceType: 'WITHDRAWAL_FEE', referenceId: id
+      });
+    }
   });
+  const net = netOf(w);
   notifSvc.push(w.userId, {
     type: 'SUCCESS', title: 'Levantamento pago',
-    message: `${fmt(w.amount)} MT foram enviados para ${rules.maskPhone(w.destination)}.`, link: '/wallet'
+    message: `${fmt(net)} MT foram enviados para ${rules.maskPhone(w.destination)} (levantamento ${fmt(w.amount)} MT, taxa da Bazares ${fmt(w.fee || 0)} MT, taxa da operadora ${fmt(w.operatorFee || 0)} MT).`, link: '/wallet'
   });
-  return { userId: w.userId, amount: w.amount };
+  return { userId: w.userId, amount: w.amount, fee: w.fee || 0, operatorFee: w.operatorFee || 0, netAmount: net };
 };
 
 const adminRejectWithdrawal = async (adminId, id, reason) => {
@@ -899,7 +924,8 @@ const adminList = async (model, { status, page = 1, limit = 30 }) => {
     }),
     prisma[model].count({ where })
   ]);
-  return { items, meta: { total, page: pageN, limit: take, pages: Math.ceil(total / take) } };
+  const withNet = model === 'withdrawalRequest' ? items.map((w) => ({ ...w, netAmount: netOf(w) })) : items; // netAmount = o que o admin tem de enviar
+  return { items: withNet, meta: { total, page: pageN, limit: take, pages: Math.ceil(total / take) } };
 };
 
 const adminOverview = async () => {

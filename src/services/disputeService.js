@@ -11,6 +11,7 @@ const prisma = require('../config/database');
 const logger = require('../utils/logger');
 const notifSvc = require('./notificationService');
 const installmentSvc = require('./installmentService');
+const escrowSvc = require('./escrowService');
 const V = require('../utils/validate');
 const { AppError, bad, notFoundErr, forbiddenErr, conflictErr } = require('../utils/appError');
 
@@ -48,6 +49,14 @@ const openDispute = async (buyerId, orderId, body) => {
   const evidenceUrls = V.urls(body.evidenceUrls, 'evidenceUrls', { max: 5 });
 
   const order = await prisma.order.findUnique({ where: { id: orderId } });
+  // Compra segura com dinheiro retido: comprador OU vendedor abrem; o dinheiro fica congelado até um admin decidir.
+  if (order && order.paymentMode === 'SEGURA' && order.escrowState && (order.buyerId === buyerId || order.sellerId === buyerId)) {
+    if (order.escrowState === 'LIBERTADO' || order.escrowState === 'REEMBOLSADO') {
+      if (order.buyerId !== buyerId) throw notFoundErr('Encomenda não encontrada.'); // pós-libertação: segue o fluxo normal do comprador
+    } else {
+      return escrowSvc.openDispute(buyerId, order, body);
+    }
+  }
   if (!order || order.buyerId !== buyerId) throw notFoundErr('Encomenda não encontrada.');
   const blockReason = whyCannotOpen(order, reason);
   if (blockReason) throw bad(blockReason, 'DISPUTE_NOT_ALLOWED');
@@ -95,6 +104,11 @@ const resolveDispute = async (admin, disputeId, body) => {
   if (!d) throw notFoundErr('Disputa não encontrada.');
   if (!OPEN_STATES.includes(d.status)) throw conflictErr('Esta disputa já foi encerrada.', 'DISPUTE_CLOSED');
   const { order } = d;
+
+  // Compra segura: o dinheiro está congelado na plataforma (não está com o vendedor) — decisão própria.
+  if (order.paymentMode === 'SEGURA' && order.escrowState === 'CONGELADO') {
+    return escrowSvc.resolveFrozen(admin, d, order, decision, resolution, body);
+  }
 
   if (decision === 'REJECT') {
     const claim = await prisma.orderDispute.updateMany({ where: { id: disputeId, status: { in: OPEN_STATES } }, data: { status: 'RESOLVED_REJECTED', resolution, resolvedById: admin.id, resolvedAt: new Date() } });
