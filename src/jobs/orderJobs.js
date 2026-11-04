@@ -20,9 +20,9 @@ const CONFIRM_DAYS = num(process.env.ORDER_AUTO_CONFIRM_DAYS, 3);
 const BATCH = 50;
 
 // Chama o handler Express dentro do processo, como se fosse o próprio utilizador.
-const callUpdateStatus = (userId, orderId, body) => new Promise((resolve) => {
+const callUpdateStatus = (userId, orderId, body, extra = {}) => new Promise((resolve) => {
   const handler = require('../controllers/orderController').updateStatus;
-  const req = { user: { id: userId, role: 'SELLER' }, params: { id: orderId }, query: {}, body, headers: {}, ip: 'system', id: 'order-job' };
+  const req = { user: { id: userId, role: 'SELLER' }, params: { id: orderId }, query: {}, body, headers: {}, ip: 'system', id: 'order-job', ...extra };
   const out = { code: 200 };
   const res = {
     status(c) { out.code = c; return res; },
@@ -32,7 +32,32 @@ const callUpdateStatus = (userId, orderId, body) => new Promise((resolve) => {
   Promise.resolve(handler(req, res)).catch(() => resolve({ ok: false, code: 500 }));
 });
 
+// ─── Compra segura: prazos (ver escrowService) ────────────────────────────────
+//  - PENDENTE e o vendedor não respondeu em ESCROW_ACCEPT_HOURS (24 h)        → expira
+//  - ACEITE e o comprador não pagou até payDeadline (aceite + 24 h)            → expira
+//  - Pago e RETIDO e o encontro não aconteceu até deliveryDeadline             → expira e o dinheiro volta ao comprador
+// (encomendas com dinheiro CONGELADO por disputa nunca expiram — só o admin decide.)
+async function runEscrowJob() {
+  const now = new Date();
+  const cfg = require('../services/escrowService').config;
+  const cases = [];
+  if (cfg.ACCEPT_HOURS() > 0) {
+    cases.push({ why: 'O vendedor não respondeu a tempo.', where: { paymentMode: 'SEGURA', status: 'PENDENTE', createdAt: { lt: new Date(now.getTime() - cfg.ACCEPT_HOURS() * 3600 * 1000) } } });
+  }
+  cases.push({ why: 'O pedido não foi pago a tempo.', where: { paymentMode: 'SEGURA', status: 'ACEITE', escrowState: null, payDeadline: { lt: now } } });
+  cases.push({ why: 'O encontro não aconteceu a tempo: o dinheiro foi devolvido ao comprador.', where: { paymentMode: 'SEGURA', status: 'ACEITE', escrowState: 'RETIDO', deliveryDeadline: { lt: now } } });
+  for (const c of cases) {
+    const rows = await prisma.order.findMany({ where: c.where, select: { id: true, sellerId: true }, take: BATCH, orderBy: { createdAt: 'asc' } });
+    for (const o of rows) {
+      const r = await callUpdateStatus(o.sellerId, o.id, { status: 'CANCELADA', cancelReason: `Expirou: ${c.why}` }, { _escrowClosedKind: 'EXPIRADO' });
+      if (!r.ok) logger.warn(`[orderJobs] expirar compra segura falhou (${o.id}, ${r.code})`);
+    }
+    if (rows.length) logger.info(`[orderJobs] ${rows.length} compra(s) segura(s) expirada(s): ${c.why}`);
+  }
+}
+
 async function runOrderJob() {
+  try { await runEscrowJob(); } catch (err) { logger.error(`[orderJobs] compra segura: ${err.message}`); }
   if (CANCEL_HOURS > 0) {
     const before = new Date(Date.now() - CANCEL_HOURS * 3600 * 1000);
     const stale = await prisma.order.findMany({
@@ -67,4 +92,4 @@ function scheduleOrderJobs() {
   return timers;
 }
 
-module.exports = { scheduleOrderJobs, runOrderJob };
+module.exports = { scheduleOrderJobs, runOrderJob, runEscrowJob };
