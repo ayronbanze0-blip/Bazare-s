@@ -893,6 +893,22 @@ model Order {
   cancelledAt DateTime?
   cancelReason String?
 
+  // ─── Compra Segura com Código (paymentMode = 'SEGURA') ───
+  // O comprador paga dentro da app, o dinheiro fica RETIDO e só vai para o vendedor quando este
+  // introduz o código de 6 dígitos que o comprador lhe mostra na troca cara a cara.
+  acceptedAt        DateTime?   // vendedor aceitou o pedido
+  payDeadline       DateTime?   // até quando o comprador pode pagar (aceite + 24 h)
+  paidAt            DateTime?   // dinheiro retido
+  deliveryDeadline  DateTime?   // se o encontro não acontecer até aqui, o dinheiro volta ao comprador
+  escrowState       String?     // RETIDO | CONGELADO (disputa) | LIBERTADO | REEMBOLSADO — null = ainda sem dinheiro retido
+  escrowAmount      Float       @default(0)
+  releasedAt        DateTime?
+  closedKind        String?     // RECUSADO | EXPIRADO | CANCELADO — porque terminou em CANCELADA
+  codeNonce         String?     // o código NUNCA é guardado: deriva-se com HMAC(segredo, orderId + nonce)
+  codeAttempts      Int         @default(0)
+  codeLockedUntil   DateTime?
+  payIdempotencyKey String?
+
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
 
@@ -908,6 +924,7 @@ model Order {
   @@index([sellerId])
   @@index([bazarId])
   @@index([status])
+  @@index([escrowState])
 }
 
 model OrderItem {
@@ -1409,6 +1426,8 @@ model WithdrawalRequest {
   rejectReason String?
   notes        String?
   idempotencyKey String?
+  operatorFee  Float             @default(0)   // taxa da operadora (M-Pesa/e-Mola, WITHDRAW_OPERATOR_FEE_PCT, 1,5%) — descontada ao utilizador, paga fora da app
+  fee          Float             @default(0)   // taxa da Bazares (WITHDRAW_FEE_PCT, 3%) — só é cobrada quando o levantamento é PAGO
   createdAt    DateTime          @default(now())
 
   @@unique([userId, idempotencyKey])
@@ -2057,6 +2076,7 @@ model OrderDispute {
   resolution     String?       @db.Text
   refundAmount   Float         @default(0)
   restock        Boolean       @default(false)
+  openedById     String?       // quem abriu (Compra Segura: comprador OU vendedor); null = comprador (disputas antigas)
   resolvedById   String?
   resolvedAt     DateTime?
   createdAt      DateTime      @default(now())
