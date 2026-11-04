@@ -17,6 +17,7 @@ const checkoutSvc = require('../services/checkoutService');
 const couponSvc = require('../services/couponService');
 const installmentSvc = require('../services/installmentService');
 const walletFlow = require('../services/walletFlowService');
+const escrow = require('../services/escrowService');
 const { envEnabled } = require('../config/features');
 const { replyKnown } = require('../utils/appError');
 
@@ -90,7 +91,8 @@ const placeOrder = async (req, res) => {
     const mode = checkout.paymentMode;
 
     // Pagar com a carteira: funcionalidade ligada + PIN correcto + saldo para o que se paga AGORA.
-    if (mode !== 'ENTREGA') {
+    // (SEGURA não cobra nada no pedido: o pagamento só acontece depois de o vendedor aceitar — POST /orders/:id/pay.)
+    if (mode === 'CARTEIRA' || mode === 'PARCELAS') {
       if (!(await paymentsEnabled())) return domainError(res, 503, 'FEATURE_DISABLED', 'Pagamentos com a carteira temporariamente indisponíveis.');
       await walletFlow.verifyPin(req.user.id, typeof req.body.pin === 'string' ? req.body.pin : '');
       const wallet = await prisma.wallet.findUnique({ where: { userId: req.user.id }, select: { balance: true } });
@@ -106,7 +108,8 @@ const placeOrder = async (req, res) => {
 
     await prisma.$transaction(async (tx) => {
       for (const g of checkout.groups) {
-        const paymentLabel = mode === 'CARTEIRA' ? 'Carteira Bazares'
+        const paymentLabel = mode === 'SEGURA' ? 'Compra segura (dinheiro retido até à entrega)'
+          : mode === 'CARTEIRA' ? 'Carteira Bazares'
           : mode === 'PARCELAS' ? `Parcelado em ${g.installments.count}x (Carteira Bazares)`
             : (payment ? sanitize(payment) : 'Pagamento na entrega');
 
@@ -168,7 +171,7 @@ const placeOrder = async (req, res) => {
           if (result.count === 0) throw new StockError(`Stock insuficiente para: ${l.name}`);
         }
 
-        if (mode !== 'ENTREGA') {
+        if (mode === 'CARTEIRA' || mode === 'PARCELAS') {
           await installmentSvc.createPlanTx(tx, {
             order, mode, autoPay,
             count: g.installments ? g.installments.count : 0,
@@ -224,7 +227,7 @@ const placeOrder = async (req, res) => {
     }
 
     logger.info(`[Orders] ${createdOrders.length} order(s) placed by ${req.user.id} (${mode})`);
-    return created(res, { orders: createdOrders, checkout: checkoutSvc.publicQuote(checkout) }, 'Encomenda realizada com sucesso.');
+    return created(res, { orders: createdOrders.map(escrow.publicOrder), checkout: checkoutSvc.publicQuote(checkout) }, mode === 'SEGURA' ? 'Pedido enviado ao vendedor. Só pagas depois de ele aceitar.' : 'Encomenda realizada com sucesso.');
   } catch (err) {
     if (err instanceof StockError) return domainError(res, 400, 'PRODUCT_OUT_OF_STOCK', err.message);
     if (replyKnown(res, err)) return;
@@ -257,7 +260,7 @@ const myOrders = async (req, res) => {
       prisma.order.count({ where })
     ]);
 
-    return ok(res, { orders, meta: paginateMeta(total, page, limit) });
+    return ok(res, { orders: orders.map(escrow.publicOrder), meta: paginateMeta(total, page, limit) });
   } catch (err) {
     logger.error(`[Orders.myOrders] ${err.message}`);
     return serverError(res);
@@ -288,7 +291,7 @@ const sellerOrders = async (req, res) => {
       prisma.order.count({ where })
     ]);
 
-    return ok(res, { orders, meta: paginateMeta(total, page, limit) });
+    return ok(res, { orders: orders.map(escrow.publicOrder), meta: paginateMeta(total, page, limit) });
   } catch (err) {
     logger.error(`[Orders.sellerOrders] ${err.message}`);
     return serverError(res);
@@ -318,7 +321,7 @@ const getOne = async (req, res) => {
       return forbidden(res);
     }
 
-    return ok(res, { order });
+    return ok(res, { order: escrow.publicOrder(order) });
   } catch (err) {
     logger.error(`[Orders.getOne] ${err.message}`);
     return serverError(res);
@@ -360,7 +363,7 @@ const updateStatus = async (req, res) => {
 
     // Já está no estado pedido (duplo clique em "Cancelar", ou repetição automática do pedido depois
     // de uma ligação lenta): o resultado desejado já existe — responde com sucesso em vez de erro.
-    if (order.status === status) return ok(res, { order });
+    if (order.status === status) return ok(res, { order: escrow.publicOrder(order) });
 
     // A partir daqui, TODOS os atores (incluindo admin) são validados pela
     // mesma máquina de estados — corrige o "admin bypass" que permitia
@@ -372,6 +375,8 @@ const updateStatus = async (req, res) => {
     if (!canTransition(order.status, status)) {
       return badRequest(res, `Não é possível mudar de "${order.status}" para "${status}".`);
     }
+    // Compra segura: a entrega só se conclui com o código; aceitar passa por /accept; em disputa nada muda.
+    escrow.guardLegacyTransition(order, status);
 
     // Quem pode fazer o quê (ver utils/orderStateMachine.js):
     //  - comprador: cancelar ANTES de sair para entrega, ou confirmar a entrega;
@@ -402,9 +407,14 @@ const updateStatus = async (req, res) => {
     }
     const cleanReason = cancelReason ? sanitize(cancelReason).slice(0, 300) : null;
 
+    // Compra segura: porque terminou (RECUSADO | EXPIRADO | CANCELADO). `req._escrowClosedKind` só é posto por código
+    // do servidor (reject / jobs) — nunca vem do corpo do pedido.
+    const closedKind = status === 'CANCELADA' && order.paymentMode === 'SEGURA' ? (req._escrowClosedKind || 'CANCELADO') : null;
     const updateData = {
       status,
-      ...(status === 'CANCELADA' && { cancelledAt: new Date(), cancelReason: cleanReason }),
+      ...(status === 'CANCELADA' && { cancelledAt: new Date(), cancelReason: cleanReason, ...(closedKind && { closedKind }) }),
+      // Dinheiro retido volta ao comprador no mesmo instante em que a encomenda é cancelada.
+      ...(status === 'CANCELADA' && order.escrowState === 'RETIDO' && { escrowState: 'REEMBOLSADO' }),
       ...(status === 'ENTREGUE' && { deliveredAt: new Date() })
     };
 
@@ -416,12 +426,17 @@ const updateStatus = async (req, res) => {
     // (stock restaurado 2x) ou entrega processada 2x.
     let updated;
     let cancelledPlan = null;
+    let escrowRefunded = 0;
     await prisma.$transaction(async (tx) => {
       const claim = await tx.order.updateMany({
-        where: { id: order.id, status: order.status },
+        // escrowState na condição: se uma disputa congelou o dinheiro entretanto, o cancelamento falha em vez de reembolsar às cegas.
+        where: { id: order.id, status: order.status, escrowState: order.escrowState },
         data: updateData
       });
       if (claim.count === 0) throw new InvalidTransitionError();
+      if (status === 'CANCELADA' && order.escrowState === 'RETIDO') {
+        escrowRefunded = await escrow.refundTx(tx, order, { note: closedKind === 'EXPIRADO' ? 'prazo terminou' : 'encomenda cancelada' });
+      }
 
       // Cronologia (ecrã de acompanhamento da encomenda) — na MESMA transacção do claim
       await tx.orderStatusHistory.create({
@@ -482,7 +497,7 @@ const updateStatus = async (req, res) => {
         }
         // `cancelCount` mede cancelamentos FEITOS PELO comprador — antes subia também quando era
         // o vendedor (ou o admin) a cancelar, penalizando o comprador por uma decisão alheia.
-        if (actor === 'buyer') {
+        if (actor === 'buyer' && !(order.paymentMode === 'SEGURA' && order.escrowState === 'RETIDO')) { // desistir no local de uma compra segura não penaliza
           await tx.user.update({
             where: { id: order.buyerId },
             data: { cancelCount: { increment: 1 } }
@@ -496,6 +511,14 @@ const updateStatus = async (req, res) => {
     // Reembolso do que o comprador já pagou com a carteira (idempotente; fica pendente se o vendedor não tiver saldo)
     if (cancelledPlan && cancelledPlan.planId && cancelledPlan.refundable > 0) {
       await installmentSvc.refundPlan(cancelledPlan.planId, { reason: 'encomenda cancelada' }).catch((e) => logger.error(`[Orders.updateStatus] refund: ${e.message}`));
+    }
+
+    if (escrowRefunded > 0) {
+      notifSvc.push(order.buyerId, {
+        type: 'SUCCESS', category: 'orders', title: 'Reembolso na carteira',
+        message: `Os ${escrowRefunded.toLocaleString('pt-MZ')} MT da encomenda #${order.id.slice(-8)} voltaram à tua carteira.`,
+        link: 'wallet.html'
+      });
     }
 
     // Notificações
@@ -530,9 +553,10 @@ const updateStatus = async (req, res) => {
     });
 
     logger.info(`[Orders] Status updated: ${order.id} → ${status} by ${req.user.id}`);
-    return ok(res, { order: updated }, `Encomenda ${status.toLowerCase()}.`);
+    return ok(res, { order: escrow.publicOrder(updated) }, `Encomenda ${status.toLowerCase()}.`);
   } catch (err) {
     if (err instanceof InvalidTransitionError) return badRequest(res, err.message);
+    if (replyKnown(res, err)) return;
     logger.error(`[Orders.updateStatus] ${err.message}`);
     return serverError(res);
   }
@@ -642,7 +666,54 @@ const submitReview = async (req, res) => {
   }
 };
 
-module.exports = { placeOrder, myOrders, sellerOrders, getOne, updateStatus, submitReview };
+// ─── COMPRA SEGURA COM CÓDIGO ─────────────────────────────────────
+// Regras no serviço escrowService (um só sítio); aqui só HTTP. Erros de negócio → resposta limpa.
+const secure = (label, fn) => async (req, res) => {
+  try { return await fn(req, res); } catch (err) {
+    if (replyKnown(res, err)) return;
+    logger.error(`[Orders.${label}] ${err.message}`, { requestId: req.id, stack: err.stack, userId: req.user && req.user.id });
+    return serverError(res);
+  }
+};
+
+const accept = secure('accept', async (req, res) => {
+  const out = await escrow.accept(req.user.id, req.params.id);
+  return ok(res, { order: out.order }, out.already ? 'Pedido já estava aceite.' : 'Pedido aceite. O comprador foi avisado.');
+});
+
+// Recusar = cancelar como vendedor com motivo; reutiliza updateStatus (stock, cupão, histórico, notificações).
+const reject = (req, res) => {
+  const reason = typeof (req.body && req.body.reason) === 'string' ? req.body.reason.trim() : '';
+  req.body = { status: 'CANCELADA', cancelReason: reason ? `Recusado pelo vendedor: ${reason}` : 'Recusado pelo vendedor.' };
+  req._escrowClosedKind = 'RECUSADO';
+  return secure('reject', async () => {
+    const order = await prisma.order.findUnique({ where: { id: req.params.id }, select: { sellerId: true, paymentMode: true, status: true } });
+    if (!order || order.sellerId !== req.user.id) return notFound(res, 'Encomenda não encontrada.');
+    if (order.paymentMode !== 'SEGURA') return badRequest(res, 'Esta encomenda não é uma compra segura.');
+    if (order.status !== 'PENDENTE' && order.status !== 'ACEITE') return badRequest(res, 'Este pedido já não pode ser recusado.');
+    return updateStatus(req, res);
+  })(req, res);
+};
+
+const pay = secure('pay', async (req, res) => {
+  const idem = (req.headers && req.headers['idempotency-key']) || (req.body && req.body.idempotencyKey);
+  const out = await escrow.pay(req.user.id, req.params.id, { pin: req.body && req.body.pin, idempotencyKey: idem });
+  res.set('Cache-Control', 'no-store');
+  return ok(res, { order: out.order, deliveryCode: out.deliveryCode, already: !!out.already }, out.already ? 'Este pedido já estava pago.' : 'Pago. O dinheiro fica retido até à entrega.');
+});
+
+const deliveryCode = secure('deliveryCode', async (req, res) => {
+  const out = await escrow.getDeliveryCode(req.user.id, req.params.id);
+  res.set('Cache-Control', 'no-store'); // o código nunca fica em cache
+  return ok(res, out);
+});
+
+const release = secure('release', async (req, res) => {
+  const out = await escrow.release(req.user.id, req.params.id, req.body && req.body.code);
+  return ok(res, { order: out.order, released: out.released, already: !!out.already }, out.already ? 'O dinheiro já tinha sido libertado.' : 'Código certo. Dinheiro libertado para a tua carteira.');
+});
+
+module.exports = { placeOrder, myOrders, sellerOrders, getOne, updateStatus, submitReview, accept, reject, pay, deliveryCode, release };
 
 
 
