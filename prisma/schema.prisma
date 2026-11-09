@@ -1061,6 +1061,10 @@ model Notification {
   title     String
   message   String           @db.Text
   link      String?
+  // Quem fez a acção (seguiu, comentou, pediu amizade…) e o produto em causa — só ids, sem FK
+  // (a notificação sobrevive à eliminação do autor/produto); a API junta nome/foto ao listar.
+  actorId   String?
+  productId String?
   read      Boolean          @default(false)
   readAt    DateTime?
   createdAt DateTime         @default(now())
