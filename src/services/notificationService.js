@@ -63,7 +63,29 @@ const shouldEmail = async (userId, category) => {
  *             tipo/título/link (ex.: 10 mensagens do mesmo chat = 1 notificação com a última)
  * Respeita as preferências (in-app / push) e evita duplicados de SOCIAL (10 min).
  */
-const push = async (userId, { type = 'INFO', title, message, link = null, category, collapse = false }) => {
+// ─── Notificações com foto ───────────────────────────────────────────
+// Junta a cada notificação o autor ({id,name,username,avatarUrl}) e o produto ({id,title,images:[{url}]}),
+// com UMA query por tabela (nunca uma por notificação). Falha em silêncio: sem isto a lista continua a funcionar.
+const decorate = async (list) => {
+  const arr = Array.isArray(list) ? list : [list];
+  if (!prismaClient || !arr.length) return list;
+  try {
+    const aIds = [...new Set(arr.map((n) => n && n.actorId).filter(Boolean))];
+    const pIds = [...new Set(arr.map((n) => n && n.productId).filter(Boolean))];
+    const [users, products] = await Promise.all([
+      aIds.length ? prismaClient.user.findMany({ where: { id: { in: aIds } }, select: { id: true, name: true, username: true, avatarUrl: true } }) : [],
+      pIds.length ? prismaClient.product.findMany({ where: { id: { in: pIds } }, select: { id: true, name: true, slug: true, images: { orderBy: { order: 'asc' }, take: 1, select: { url: true } } } }) : []
+    ]);
+    const U = new Map(users.map((u) => [u.id, u])), P = new Map(products.map((p) => [p.id, { ...p, title: p.name }]));
+    const out = arr.map((n) => (n ? { ...n, actor: U.get(n.actorId) || null, product: P.get(n.productId) || null } : n));
+    return Array.isArray(list) ? out : out[0];
+  } catch (err) {
+    logger.warn(`[Notif] decorate falhou: ${err.message}`);
+    return list;
+  }
+};
+
+const push = async (userId, { type = 'INFO', title, message, link = null, category, collapse = false, actorId = null, productId = null }) => {
   if (!prismaClient) { logger.warn('[Notif] Prisma not initialized'); return null; }
   try {
     const cat = category || policy.categoryFor(type);
@@ -87,17 +109,22 @@ const push = async (userId, { type = 'INFO', title, message, link = null, catego
       }
     }
     if (!notif) {
-      notif = await prismaClient.notification.create({ data: { userId, type, title, message, link } });
+      notif = await prismaClient.notification.create({ data: { userId, type, title, message, link, actorId, productId } });
     }
 
     // Emit real-time via Socket.IO
     if (ioClient) {
+      const rich = await decorate({ ...notif, actorId: notif.actorId || actorId, productId: notif.productId || productId });
       ioClient.to(`user:${userId}`).emit('notification', {
         id: notif.id,
         type: notif.type,
         title: notif.title,
         message: notif.message,
         link: notif.link,
+        actorId: rich.actorId || null,
+        productId: rich.productId || null,
+        actor: rich.actor || null,
+        product: rich.product || null,
         read: false,
         createdAt: notif.createdAt
       });
@@ -118,8 +145,9 @@ const push = async (userId, { type = 'INFO', title, message, link = null, catego
 /**
  * Common notification helpers
  */
-const orderReceived = (sellerId, orderId, productName, total) =>
+const orderReceived = (sellerId, orderId, productName, total, productId = null) =>
   push(sellerId, {
+    productId,
     type: 'ORDER',
     title: 'Nova encomenda recebida',
     message: `${productName} — ${total.toLocaleString('pt-MZ')} MT`,
@@ -128,16 +156,18 @@ const orderReceived = (sellerId, orderId, productName, total) =>
     link: `order-detail.html?id=${orderId}`
   });
 
-const orderStatusChanged = (buyerId, orderId, status) =>
+const orderStatusChanged = (buyerId, orderId, status, productId = null) =>
   push(buyerId, {
+    productId,
     type: 'ORDER',
     title: `Encomenda ${status.toLowerCase()}`,
     message: `A sua encomenda #${orderId.slice(-8)} foi ${status.toLowerCase()}.`,
     link: `order-detail.html?id=${orderId}`
   });
 
-const newMessage = (toId, fromName, preview, chatId = null) =>
+const newMessage = (toId, fromName, preview, chatId = null, fromId = null) =>
   push(toId, {
+    actorId: fromId,
     type: 'CHAT',
     title: `Mensagem de ${fromName}`,
     message: preview.slice(0, 80),
@@ -178,7 +208,7 @@ const accountVerified = (userId) =>
  * cada notificação individual também não deve travar as outras se
  * uma falhar (ex.: token push inválido de um utilizador).
  */
-const newProductFromFollowed = async (bazarId, sellerName, productName) => {
+const newProductFromFollowed = async (bazarId, sellerName, productName, productId = null, sellerId = null) => {
   if (!prismaClient) return;
   try {
     const followers = await prismaClient.follow.findMany({
@@ -193,6 +223,7 @@ const newProductFromFollowed = async (bazarId, sellerName, productName) => {
         category: 'social',
         title: `${sellerName} publicou um novo produto`,
         message: productName,
+        productId, actorId: sellerId,
         link: `bazar.html?id=${bazarId}`
       }).catch(() => {})
     ));
@@ -217,6 +248,7 @@ const backInStock = async (productId, productName) => {
     await warmPrefs(favs.map((f) => f.userId));
     await Promise.all(favs.map((f) => push(f.userId, {
       type: 'INFO', category: 'orders',
+      productId,
       title: 'Produto de volta ao stock',
       message: `"${productName}" já está novamente disponível.`,
       link: `product.html?id=${productId}`
@@ -250,6 +282,7 @@ const newFollower = (sellerId, followerName, bazarId, followerId) => {
   if (followerId && !shouldCount('notif-follow', followerId, bazarId, 10 * 60 * 1000)) return;
   return push(sellerId, {
     type: 'SOCIAL',
+    actorId: followerId || null,
     title: 'Novo seguidor',
     message: `${followerName} começou a seguir o teu bazar.`,
     link: `bazar.html?id=${bazarId}`
@@ -261,6 +294,7 @@ const friendRequest = (addresseeId, requesterName, requesterId) => {
   if (requesterId && !shouldCount('notif-friend-req', requesterId, addresseeId, 10 * 60 * 1000)) return;
   return push(addresseeId, {
     type: 'SOCIAL',
+    actorId: requesterId || null,
     title: 'Pedido de amizade',
     message: `${requesterName} quer ser teu amigo.`,
     link: 'amigos.html?tab=pedidos'
@@ -270,37 +304,45 @@ const friendRequest = (addresseeId, requesterName, requesterId) => {
 const friendAccepted = (requesterId, accepterName, accepterId) =>
   push(requesterId, {
     type: 'SOCIAL',
+    actorId: accepterId || null,
     title: 'Pedido aceite',
     message: `${accepterName} aceitou o teu pedido de amizade.`,
     link: 'amigos.html'
   });
 
-const commentOnContent = (ownerId, commenterName, snippet, link) =>
+const commentOnContent = (ownerId, commenterName, snippet, link, extra = {}) =>
   push(ownerId, {
     type: 'SOCIAL',
     title: `${commenterName} comentou`,
     message: snippet.slice(0, 80),
-    link
+    link,
+    actorId: extra.actorId || null,
+    productId: extra.productId || null
   });
 
-const commentReply = (parentAuthorId, replierName, snippet, link) =>
+const commentReply = (parentAuthorId, replierName, snippet, link, extra = {}) =>
   push(parentAuthorId, {
     type: 'SOCIAL',
     title: `${replierName} respondeu ao teu comentário`,
     message: snippet.slice(0, 80),
-    link
+    link,
+    actorId: extra.actorId || null,
+    productId: extra.productId || null
   });
 
-const commentLiked = (authorId, likerName, snippet, link) =>
+const commentLiked = (authorId, likerName, snippet, link, extra = {}) =>
   push(authorId, {
     type: 'SOCIAL',
     title: `${likerName} gostou do teu comentário`,
     message: snippet.slice(0, 80),
-    link
+    link,
+    actorId: extra.actorId || null,
+    productId: extra.productId || null
   });
 
-const mentioned = (userId, authorName, link) =>
+const mentioned = (userId, authorName, link, authorId = null) =>
   push(userId, {
+    actorId: authorId,
     type: 'SOCIAL',
     title: `${authorName} mencionou-te`,
     message: `${authorName} mencionou-te numa publicação.`,
@@ -308,7 +350,7 @@ const mentioned = (userId, authorName, link) =>
   });
 
 module.exports = {
-  init, push, warmPrefs, invalidatePrefs, shouldEmail, orderReceived, orderStatusChanged,
+  init, push, decorate, warmPrefs, invalidatePrefs, shouldEmail, orderReceived, orderStatusChanged,
   newMessage, feeAlert, accountSuspended, accountVerified, broadcastToRole,
   newProductFromFollowed, backInStock, newFollower, friendRequest, friendAccepted, commentOnContent, commentReply, commentLiked,
   mentioned

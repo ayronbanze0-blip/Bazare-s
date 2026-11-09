@@ -144,7 +144,7 @@ const notifyCommentLiked = async (commentId, likerId) => {
   const link = comment.productId ? `product.html?id=${comment.product?.slug || comment.productId}`
     : comment.announcementId ? `home.html?announcement=${comment.announcementId}`
     : `reels.html?reel=${comment.reelId}`;
-  await notifSvc.commentLiked(comment.userId, liker?.name || 'Alguém', comment.text, link);
+  await notifSvc.commentLiked(comment.userId, liker?.name || 'Alguém', comment.text, link, { actorId: likerId, productId: comment.productId || null });
 };
 
 module.exports = { listThreaded, listReplies, toggleLike, USER_SELECT };

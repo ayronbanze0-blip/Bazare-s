@@ -99,7 +99,7 @@ async function syncMentions({ text, authorId, authorName, commentId = null, anno
         await prisma.mention.create({
           data: { mentionedUserId: u.id, authorId, commentId, announcementId, communityPostId }
         });
-        notifSvc.mentioned(u.id, authorName || 'Alguém', link).catch(() => {});
+        notifSvc.mentioned(u.id, authorName || 'Alguém', link, authorId).catch(() => {});
       } catch (err) {
         // corrida rara (duplo submit) cai no @@unique — não é erro fatal
         if (err.code !== 'P2002') logger.error(`[Mentions] create falhou: ${err.message}`);
