@@ -191,7 +191,7 @@ const setupSocket = (io) => {
             }
           })();
         } else {
-          notifSvc.newMessage(recipientId, socket.user.name, text, chatId);
+          notifSvc.newMessage(recipientId, socket.user.name, text, chatId, socket.user.id);
         }
       } catch (err) {
         logger.error(`[Socket message:send] ${err.message}`);
