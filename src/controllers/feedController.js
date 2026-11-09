@@ -569,11 +569,11 @@ const createComment = async (req, res) => {
       : targetType === 'GROUP_POST' ? `comunidade.html?id=${exists.community?.slug || exists.communityId}`
       : `reels.html?reel=${targetId}`;
     if (parentAuthorId && parentAuthorId !== req.user.id) {
-      notifSvc.commentReply(parentAuthorId, req.user.name, req.body.text, link).catch(() => {});
+      notifSvc.commentReply(parentAuthorId, req.user.name, req.body.text, link, { actorId: req.user.id }).catch(() => {});
     } else if (!parentAuthorId) {
       const ownerId = targetType === 'GROUP_POST' ? exists.authorId : exists.bazar?.sellerId;
       if (ownerId && ownerId !== req.user.id) {
-        notifSvc.commentOnContent(ownerId, req.user.name, req.body.text, link).catch(() => {});
+        notifSvc.commentOnContent(ownerId, req.user.name, req.body.text, link, { actorId: req.user.id }).catch(() => {});
       }
     }
 

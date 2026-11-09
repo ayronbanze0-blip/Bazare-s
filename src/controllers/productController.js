@@ -310,7 +310,7 @@ const create = async (req, res) => {
 
     // Avisa quem segue este bazar — fire-and-forget: nunca deve
     // atrasar nem falhar a resposta de criação do produto.
-    notificationSvc.newProductFromFollowed(bazar.id, req.user.name, product.name)
+    notificationSvc.newProductFromFollowed(bazar.id, req.user.name, product.name, product.id, req.user.id)
       .catch((e) => logger.error(`[Products.create] Notificação de seguidores falhou: ${e.message}`));
 
     const message = imageUploadErrors.length > 0

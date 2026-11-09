@@ -25,7 +25,7 @@ const list = async (req, res) => {
       });
       const { items, hasNext, nextCursor } = cursorResult(rows, limit);
       const unreadCount = await prisma.notification.count({ where: { userId: req.user.id, read: false } });
-      return ok(res, { notifications: items, unreadCount, meta: { limit: Number(limit) || 30, hasNext, nextCursor } });
+      return ok(res, { notifications: await notifSvc.decorate(items), unreadCount, meta: { limit: Number(limit) || 30, hasNext, nextCursor } });
     }
 
     const { take, skip } = paginate(page, limit);
@@ -35,7 +35,7 @@ const list = async (req, res) => {
       prisma.notification.count({ where: { userId: req.user.id, read: false } })
     ]);
 
-    return ok(res, { notifications, unreadCount, meta: paginateMeta(total, page, limit) });
+    return ok(res, { notifications: await notifSvc.decorate(notifications), unreadCount, meta: paginateMeta(total, page, limit) });
   } catch (err) {
     logger.error(`[Notifications.list] ${err.message}`);
     return serverError(res);

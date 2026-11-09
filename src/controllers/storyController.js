@@ -223,7 +223,7 @@ const reply = async (req, res) => {
       io.to(`chat:${chat.id}`).emit('message:new', message);
       io.to(`user:${story.sellerId}`).emit('chat:unread', { chatId: chat.id });
     }
-    notifSvc.newMessage(story.sellerId, req.user.name, `respondeu à sua história`, chat.id);
+    notifSvc.newMessage(story.sellerId, req.user.name, `respondeu à sua história`, chat.id, req.user.id);
 
     return created(res, { chatId: chat.id, message }, 'Resposta enviada.');
   } catch (err) {

@@ -326,7 +326,7 @@ const sendMessage = async (req, res) => {
       })();
       }
     } else if (recipientId !== botId) {
-      notifSvc.newMessage(recipientId, req.user.name, text || '📷 Imagem', chatId);
+      notifSvc.newMessage(recipientId, req.user.name, text || '📷 Imagem', chatId, req.user.id);
     }
 
     return created(res, { message }, 'Mensagem enviada.');

@@ -62,9 +62,9 @@ const create = async (req, res) => {
 
     const link = `product.html?id=${product.slug || product.id}`;
     if (parentAuthorId && parentAuthorId !== req.user.id) {
-      notifSvc.commentReply(parentAuthorId, req.user.name, req.body.text, link).catch(() => {});
+      notifSvc.commentReply(parentAuthorId, req.user.name, req.body.text, link, { actorId: req.user.id, productId: product.id }).catch(() => {});
     } else if (!parentAuthorId && product.bazar?.sellerId && product.bazar.sellerId !== req.user.id) {
-      notifSvc.commentOnContent(product.bazar.sellerId, req.user.name, req.body.text, link).catch(() => {});
+      notifSvc.commentOnContent(product.bazar.sellerId, req.user.name, req.body.text, link, { actorId: req.user.id, productId: product.id }).catch(() => {});
     }
 
     mentionSvc.syncMentions({

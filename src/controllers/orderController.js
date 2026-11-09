@@ -193,7 +193,7 @@ const placeOrder = async (req, res) => {
       // Notificações & emails sem bloquear a confirmação: um SMTP lento não pode atrasar a compra.
       Promise.all(createdOrders.map(async (order) => {
         const seller = await prisma.user.findUnique({ where: { id: order.sellerId } });
-        notifSvc.orderReceived(order.sellerId, order.id, order.items.map(i => i.name).join(', '), order.total);
+        notifSvc.orderReceived(order.sellerId, order.id, order.items.map(i => i.name).join(', '), order.total, (order.items[0] && order.items[0].productId) || null);
         // Só envia email se o vendedor não o desligou (emailEnabled + orderNotifications).
         if (seller?.email && await notifSvc.shouldEmail(order.sellerId, 'orders')) {
           emailSvc.sendOrderNotificationEmail(seller.email, seller.name, order).catch(() => {});
@@ -531,7 +531,7 @@ const updateStatus = async (req, res) => {
       });
     } else {
       const targetId = actor === 'buyer' ? order.sellerId : order.buyerId;
-      notifSvc.orderStatusChanged(targetId, order.id, status);
+      notifSvc.orderStatusChanged(targetId, order.id, status, (order.items && order.items[0] && order.items[0].productId) || null);
     }
 
     // Email ao comprador (só se não o desligou)
